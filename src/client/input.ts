@@ -1,0 +1,29 @@
+export enum InputBits {
+  Left = 1 << 0,
+  Right = 1 << 1,
+  Jump = 1 << 2,
+}
+
+export interface InputState {
+  left: boolean;
+  right: boolean;
+  jump: boolean;
+}
+
+export function encodeInput(state: InputState): Uint8Array {
+  let bits = 0;
+  if (state.left) {
+    bits |= InputBits.Left;
+  }
+  if (state.right) {
+    bits |= InputBits.Right;
+  }
+  if (state.jump) {
+    bits |= InputBits.Jump;
+  }
+  return new Uint8Array([bits]);
+}
+
+export function decodeInputBits(input: Uint8Array | undefined): number {
+  return input?.[0] ?? 0;
+}
