@@ -116,6 +116,21 @@ export class SignalingClient {
     this.socket.send(JSON.stringify(message));
   }
 
+  sendSignal(
+    roomId: string,
+    fromPeerId: string,
+    toPeerId: string,
+    signal: SignalMessage,
+  ): void {
+    this.send({
+      type: 'signal',
+      roomId,
+      fromPeerId,
+      toPeerId,
+      signal,
+    });
+  }
+
   onMessage(handler: (message: ServerToClientMessage) => void): () => void {
     this.messageHandlers.add(handler);
     return () => {

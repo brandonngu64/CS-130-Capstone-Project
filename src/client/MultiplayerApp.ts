@@ -558,6 +558,11 @@ export class MultiplayerApp {
         iceServers: [
           { urls: 'stun:stun.cloudflare.com:3478' },
           { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+          },
         ],
       },
       connectionTimeout: 20000,
@@ -569,15 +574,29 @@ export class MultiplayerApp {
           return;
         }
 
-        this.signaling.send({
-          type: 'signal',
-          roomId: this.roomId,
-          fromPeerId: this.peerId,
-          toPeerId: targetPeerId,
+        this.signaling.sendSignal(
+          this.roomId,
+          this.peerId,
+          targetPeerId,
           signal,
-        });
+        );
       },
     });
+
+    this.transport.onConnect = (peerId: string) => {
+      this.setStatus(`WebRTC peer connected: ${peerId}`);
+    };
+
+    this.transport.onDisconnect = (peerId: string) => {
+      this.setStatus(`WebRTC peer disconnected: ${peerId}`);
+    };
+
+    this.transport.onError = (peerId, error) => {
+      this.setStatus(
+        `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${error.message}`,
+        'error',
+      );
+    };
 
     this.session = createSession({
       game,
@@ -816,6 +835,9 @@ export class MultiplayerApp {
   }
 
   private defaultSignalUrl(): string {
+    const envUrl = import.meta.env.VITE_SIGNALING_URL as string | undefined;
+    if (envUrl) return envUrl;
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${window.location.hostname}:3000`;
   }
