@@ -10,6 +10,23 @@ const httpServer = createServer((_, response) => {
     response.end('CS130 signaling server is running.\n');
 });
 const websocketServer = new WebSocketServer({ server: httpServer });
+const reportServerError = (error) => {
+    const err = error;
+    if (err.code === 'EACCES') {
+        console.error(`Failed to start signaling server on ${host}:${port}: permission denied. ` +
+            'Check that the port is not already in use and that you have permission to bind it.');
+        process.exit(1);
+    }
+    if (err.code === 'EADDRINUSE') {
+        console.error(`Failed to start signaling server on ${host}:${port}: address already in use. ` +
+            'Stop the process currently using the port or choose a different SIGNALING_PORT.');
+        process.exit(1);
+    }
+    console.error('Signaling server error:', err);
+    process.exit(1);
+};
+httpServer.on('error', reportServerError);
+websocketServer.on('error', reportServerError);
 websocketServer.on('connection', (socket) => {
     socket.on('message', (rawData) => {
         const message = parseClientMessage(rawData);
