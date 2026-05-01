@@ -8,10 +8,10 @@ export const FLOOR_Y = 0;
 
 export const PLAYER_HALF_WIDTH = 0.45;
 export const PLAYER_HALF_HEIGHT = 0.9;
-export const PLAYER_SPAWN_Y = FLOOR_Y + PLAYER_HALF_HEIGHT + 0.05;
+export const PLAYER_SPAWN_Y = 6;
 
 export const MOVE_SPEED = 7;
-export const JUMP_SPEED = 11;
+export const JUMP_SPEED = 14;
 export const GRAVITY_Y = -28;
 
 export const PLAYER_COLOR_PALETTE = [

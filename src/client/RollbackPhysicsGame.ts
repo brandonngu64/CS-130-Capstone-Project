@@ -32,7 +32,7 @@ type PlayerBodyRecord = {
   color: number;
 };
 
-const SPAWN_SLOTS = [-6, -2, 2, 6];
+const SPAWN_SLOTS = [-10, -4, 4, 10];
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly world: RAPIER.World;
@@ -226,6 +226,31 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
     );
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
+
+    // Static platforms: Center top, left bottom, right bottom
+    const p0 = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y + 4.5),
+    );
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(2, 0.25).setFriction(1),
+      p0,
+    );
+
+    const p1 = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(-6, FLOOR_Y + 2.5),
+    );
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(1.5, 0.25).setFriction(1),
+      p1,
+    );
+
+    const p2 = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(6, FLOOR_Y + 2.5),
+    );
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(1.5, 0.25).setFriction(1),
+      p2,
+    );
   }
 
   private syncPlayers(sortedIds: string[]): void {
@@ -256,7 +281,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         .setTranslation(spawnX, PLAYER_SPAWN_Y)
         .lockRotations()
         .setLinearDamping(0)
-        .setAngularDamping(0),
+        .setAngularDamping(0)
+        .setCcdEnabled(true),
     );
 
     this.world.createCollider(
@@ -297,12 +323,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private isGrounded(body: RAPIER.RigidBody): boolean {
-    const position = body.translation();
     const verticalSpeed = Math.abs(body.linvel().y);
+    const position = body.translation();
+    
+    // Quick floor check
+    if (position.y <= FLOOR_Y + PLAYER_HALF_HEIGHT + 0.06 && verticalSpeed < 0.2) {
+      return true;
+    }
 
-    return (
-      position.y <= FLOOR_Y + PLAYER_HALF_HEIGHT + 0.06 && verticalSpeed < 0.2
+    if (verticalSpeed > 0.2) return false;
+
+    // Raycast slightly below player to check for platforms
+    const ray = new RAPIER.Ray(
+      { x: position.x, y: position.y - PLAYER_HALF_HEIGHT - 0.01 },
+      { x: 0, y: -1 }
     );
+    const hit = this.world.castRay(ray, 0.15, true);
+    return hit !== null;
   }
 
   private enforceHorizontalBounds(): void {

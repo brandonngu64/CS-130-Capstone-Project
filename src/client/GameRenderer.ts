@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { ARENA_HALF_WIDTH, FLOOR_Y } from './constants';
 import type { RenderState } from './RollbackPhysicsGame';
 
-const BASE_VIEW_BOTTOM = -2;
-const BASE_VIEW_TOP = 10;
+const BASE_VIEW_BOTTOM = -5;
+const BASE_VIEW_TOP = 7;
 const MIN_VIEW_WIDTH = ARENA_HALF_WIDTH * 2 + 4;
 
 export class GameRenderer {
@@ -21,8 +21,8 @@ export class GameRenderer {
     this.scene.background = new THREE.Color(0x131924);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
-    this.camera.position.set(0, 4.5, 12);
-    this.camera.lookAt(0, 3, 0);
+    this.camera.position.set(0, 4, 12);
+    this.camera.lookAt(0, 4, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -127,6 +127,25 @@ export class GameRenderer {
     );
     backdrop.position.set(0, 6, -1.2);
     this.scene.add(backdrop);
+
+    // Platform meshes
+    const platformMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3a4f5f,
+      roughness: 0.8,
+      metalness: 0.2,
+    });
+
+    const p0Mesh = new THREE.Mesh(new THREE.BoxGeometry(4, 0.5, 1), platformMaterial);
+    p0Mesh.position.set(0, FLOOR_Y + 4.5, -0.4);
+    this.scene.add(p0Mesh);
+
+    const p1Mesh = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 1), platformMaterial);
+    p1Mesh.position.set(-6, FLOOR_Y + 2.5, -0.4);
+    this.scene.add(p1Mesh);
+
+    const p2Mesh = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 1), platformMaterial);
+    p2Mesh.position.set(6, FLOOR_Y + 2.5, -0.4);
+    this.scene.add(p2Mesh);
   }
 
   private createPlayerMesh(
