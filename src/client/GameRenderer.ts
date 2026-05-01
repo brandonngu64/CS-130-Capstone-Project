@@ -26,8 +26,8 @@ export class GameRenderer {
     this.scene.background = new THREE.Color(0x131924);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
-    this.camera.position.set(0, 4, 12);
-    this.camera.lookAt(0, 4, 0);
+    this.camera.position.set(0, 3, 12);
+    this.camera.lookAt(0, 3, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
