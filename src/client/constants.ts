@@ -11,7 +11,7 @@ export const PLAYER_HALF_HEIGHT = 0.9;
 export const PLAYER_SPAWN_Y = FLOOR_Y + PLAYER_HALF_HEIGHT + 0.05;
 
 export const MOVE_SPEED = 7;
-export const JUMP_SPEED = 11;
+export const JUMP_SPEED = 15;
 export const GRAVITY_Y = -28;
 
 export const PLAYER_COLOR_PALETTE = [
@@ -22,3 +22,19 @@ export const PLAYER_COLOR_PALETTE = [
   0x8ab17d,
   0xe9c46a,
 ];
+
+export interface PlatformDefinition {
+  centerX: number;
+  centerY: number;
+  halfWidth: number;
+  halfHeight: number;
+}
+
+// Battlefield-style layout: two lower side platforms and a higher center platform.
+export const PLATFORMS: readonly PlatformDefinition[] = [
+  { centerX: -5, centerY: 2.6, halfWidth: 1.8, halfHeight: 0.18 },
+  { centerX: 5, centerY: 2.6, halfWidth: 1.8, halfHeight: 0.18 },
+  { centerX: 0, centerY: 5.0, halfWidth: 1.8, halfHeight: 0.18 },
+];
+
+export const PLATFORM_COLOR = 0x6c7a89;

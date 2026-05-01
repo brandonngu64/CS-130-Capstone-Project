@@ -7,6 +7,7 @@ import {
   GRAVITY_Y,
   JUMP_SPEED,
   MOVE_SPEED,
+  PLATFORMS,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
@@ -226,6 +227,21 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
     );
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
+
+    for (const platform of PLATFORMS) {
+      const body = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(
+          platform.centerX,
+          platform.centerY,
+        ),
+      );
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(platform.halfWidth, platform.halfHeight)
+          .setFriction(1)
+          .setRestitution(0),
+        body,
+      );
+    }
   }
 
   private syncPlayers(sortedIds: string[]): void {
@@ -297,12 +313,34 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private isGrounded(body: RAPIER.RigidBody): boolean {
-    const position = body.translation();
-    const verticalSpeed = Math.abs(body.linvel().y);
+    if (body.linvel().y > 0.2) {
+      return false;
+    }
 
-    return (
-      position.y <= FLOOR_Y + PLAYER_HALF_HEIGHT + 0.06 && verticalSpeed < 0.2
-    );
+    const position = body.translation();
+    const feetY = position.y - PLAYER_HALF_HEIGHT;
+
+    if (feetY <= FLOOR_Y + 0.06) {
+      return true;
+    }
+
+    // Cast a short ray straight down from just below each foot to detect
+    // platforms underneath the player.
+    const rayOrigins = [
+      { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
+      { x: position.x, y: feetY - 0.01 },
+      { x: position.x + PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
+    ];
+
+    for (const origin of rayOrigins) {
+      const ray = new RAPIER.Ray(origin, { x: 0, y: -1 });
+      const hit = this.world.castRay(ray, 0.1, true);
+      if (hit !== null) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private enforceHorizontalBounds(): void {

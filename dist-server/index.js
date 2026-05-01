@@ -71,11 +71,19 @@ httpServer.listen(port, host, () => {
     console.log(`\nSignaling server listening on ws://${host}:${port}`);
     console.log('Host-relayed star rooms enabled (max 4 players).\n');
 });
-process.on('SIGINT', () => {
+const shutdown = () => {
     console.log('\nShutting down signaling server...');
-    websocketServer.close();
-    httpServer.close(() => process.exit(0));
-});
+    websocketServer.clients.forEach((client) => {
+        if (client.readyState === client.OPEN || client.readyState === client.CLOSING) {
+            client.close(1001, 'Server shutting down');
+        }
+    });
+    websocketServer.close(() => {
+        httpServer.close(() => process.exit(0));
+    });
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 function hostRoom(socket, message) {
     if (!isValidIdentifier(message.roomId) || !isValidIdentifier(message.peerId)) {
         send(socket, {

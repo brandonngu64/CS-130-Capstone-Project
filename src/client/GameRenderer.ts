@@ -1,5 +1,10 @@
 import * as THREE from 'three';
-import { ARENA_HALF_WIDTH, FLOOR_Y } from './constants';
+import {
+  ARENA_HALF_WIDTH,
+  FLOOR_Y,
+  PLATFORM_COLOR,
+  PLATFORMS,
+} from './constants';
 import type { RenderState } from './RollbackPhysicsGame';
 
 const BASE_VIEW_BOTTOM = -2;
@@ -21,8 +26,8 @@ export class GameRenderer {
     this.scene.background = new THREE.Color(0x131924);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
-    this.camera.position.set(0, 4.5, 12);
-    this.camera.lookAt(0, 3, 0);
+    this.camera.position.set(0, 4, 12);
+    this.camera.lookAt(0, 4, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -127,6 +132,27 @@ export class GameRenderer {
     );
     backdrop.position.set(0, 6, -1.2);
     this.scene.add(backdrop);
+
+    const platformMaterial = new THREE.MeshStandardMaterial({
+      color: PLATFORM_COLOR,
+      roughness: 0.6,
+      metalness: 0.15,
+    });
+
+    // Match the player's z range (centered at 0.35, depth 0.7) so the camera
+    // tilt doesn't cause the player to visually clip into the platform top.
+    for (const platform of PLATFORMS) {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          platform.halfWidth * 2,
+          platform.halfHeight * 2,
+          0.7,
+        ),
+        platformMaterial,
+      );
+      mesh.position.set(platform.centerX, platform.centerY, 0.35);
+      this.scene.add(mesh);
+    }
   }
 
   private createPlayerMesh(
