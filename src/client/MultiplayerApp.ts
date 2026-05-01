@@ -11,11 +11,11 @@ import {
 } from 'rollback-netcode';
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
+import { MainMenu, type StatusTone } from './MainMenu';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
+import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { encodeInput } from './input';
-
-type StatusTone = 'normal' | 'error';
 
 type DebugCounters = {
   rollbackCount: number;
@@ -104,17 +104,13 @@ export class MultiplayerApp {
   private readonly renderer: GameRenderer;
 
   private readonly peerId: string;
+  private readonly mainMenu: MainMenu;
+  private readonly settingsMenu: SettingsMenu;
+
+  private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
-  private readonly statusText: HTMLElement;
-  private readonly peerIdValue: HTMLElement;
-  private readonly shareUrlInput: HTMLInputElement;
-  private readonly roomInput: HTMLInputElement;
-  private readonly hostInput: HTMLInputElement;
-  private readonly signalInput: HTMLInputElement;
-  private readonly hostButton: HTMLButtonElement;
-  private readonly joinButton: HTMLButtonElement;
-  private readonly copyButton: HTMLButtonElement;
   private readonly leaveButton: HTMLButtonElement;
+  private readonly settingsToggleButton: HTMLButtonElement;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -132,6 +128,8 @@ export class MultiplayerApp {
 
   private roomId: string | null = null;
   private hostPeerId: string | null = null;
+  private currentShareUrl = '';
+  private settingsOpen = false;
 
   private readonly inputState: InputState = {
     left: false,
@@ -181,6 +179,10 @@ export class MultiplayerApp {
     ) {
       this.inputState.jump = true;
     }
+
+    if (event.code === 'Escape' && this.isInRoom()) {
+      this.toggleSettings();
+    }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -208,17 +210,16 @@ export class MultiplayerApp {
     const viewport = requireElement<HTMLElement>(this.root, '#viewport');
     this.renderer = new GameRenderer(viewport);
 
+    this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
-    this.statusText = requireElement<HTMLElement>(this.root, '#statusText');
-    this.peerIdValue = requireElement<HTMLElement>(this.root, '#peerIdValue');
-    this.shareUrlInput = requireElement<HTMLInputElement>(this.root, '#shareUrl');
-    this.roomInput = requireElement<HTMLInputElement>(this.root, '#roomInput');
-    this.hostInput = requireElement<HTMLInputElement>(this.root, '#hostInput');
-    this.signalInput = requireElement<HTMLInputElement>(this.root, '#signalInput');
-    this.hostButton = requireElement<HTMLButtonElement>(this.root, '#hostButton');
-    this.joinButton = requireElement<HTMLButtonElement>(this.root, '#joinButton');
-    this.copyButton = requireElement<HTMLButtonElement>(this.root, '#copyButton');
-    this.leaveButton = requireElement<HTMLButtonElement>(this.root, '#leaveButton');
+    this.leaveButton = requireElement<HTMLButtonElement>(
+      this.root,
+      '#leaveButton',
+    );
+    this.settingsToggleButton = requireElement<HTMLButtonElement>(
+      this.root,
+      '#settingsToggleButton',
+    );
 
     this.tickValue = requireElement<HTMLElement>(this.root, '#tickValue');
     this.confirmedTickValue = requireElement<HTMLElement>(
@@ -244,26 +245,46 @@ export class MultiplayerApp {
     );
     this.rttValue = requireElement<HTMLElement>(this.root, '#rttValue');
 
-    this.peerIdValue.textContent = this.peerId;
-    this.signalInput.value = this.defaultSignalUrl();
+    this.mainMenu = new MainMenu(viewport, {
+      onHost: () => {
+        void this.handleHostRoom();
+      },
+      onJoin: () => {
+        void this.handleJoinRoom();
+      },
+      onCopyShareUrl: () => {
+        void this.copyShareLink();
+      },
+    });
 
-    this.hostButton.addEventListener('click', () => {
-      void this.handleHostRoom();
+    this.settingsMenu = new SettingsMenu(viewport, {
+      onLeave: () => {
+        this.leaveRoom();
+      },
+      onCopyShareUrl: () => {
+        void this.copyShareLink();
+      },
+      onClose: () => {
+        this.settingsOpen = false;
+        this.updateUiState();
+      },
     });
-    this.joinButton.addEventListener('click', () => {
-      void this.handleJoinRoom();
-    });
-    this.copyButton.addEventListener('click', () => {
-      void this.copyShareLink();
-    });
+
+    this.mainMenu.setPeerId(this.peerId);
+    this.mainMenu.setSignalUrl(this.defaultSignalUrl());
+    this.settingsMenu.setPeerId(this.peerId);
+
     this.leaveButton.addEventListener('click', () => {
       this.leaveRoom();
+    });
+    this.settingsToggleButton.addEventListener('click', () => {
+      this.toggleSettings();
     });
 
     window.addEventListener('keydown', this.onKeyDown, { passive: false });
     window.addEventListener('keyup', this.onKeyUp);
 
-    this.updateButtons();
+    this.updateUiState();
     this.refreshDebugValues();
     this.setStatus('Initializing Rapier runtime...');
   }
@@ -287,13 +308,13 @@ export class MultiplayerApp {
     const signalUrl = currentUrl.searchParams.get('signal');
 
     if (roomId) {
-      this.roomInput.value = roomId;
+      this.mainMenu.setRoomId(roomId);
     }
     if (hostPeer) {
-      this.hostInput.value = hostPeer;
+      this.mainMenu.setHostPeerId(hostPeer);
     }
     if (signalUrl) {
-      this.signalInput.value = signalUrl;
+      this.mainMenu.setSignalUrl(signalUrl);
     }
 
     if (roomId && hostPeer) {
@@ -312,6 +333,8 @@ export class MultiplayerApp {
     window.removeEventListener('keyup', this.onKeyUp);
 
     this.cleanupNetworking();
+    this.mainMenu.destroy();
+    this.settingsMenu.destroy();
     this.renderer.dispose();
 
     if (this.game) {
@@ -371,7 +394,7 @@ export class MultiplayerApp {
     }
 
     this.connecting = true;
-    this.updateButtons();
+    this.updateUiState();
 
     try {
       await this.prepareNetworking();
@@ -401,12 +424,11 @@ export class MultiplayerApp {
         throw new Error(response.message);
       }
 
-      this.roomInput.value = createdRoomId;
-      this.hostInput.value = this.peerId;
-      this.setShareUrl(createdRoomId, this.peerId);
-
+      this.setRoomState(createdRoomId, this.peerId);
       this.session.start();
-      this.setStatus(`Hosting room ${createdRoomId}. Share the join URL.`);
+      this.setStatus(
+        `Hosting room ${createdRoomId}. Open Settings or share the URL to invite players.`,
+      );
     } catch (error) {
       this.setStatus(
         `Unable to host room: ${
@@ -417,7 +439,7 @@ export class MultiplayerApp {
       this.cleanupNetworking();
     } finally {
       this.connecting = false;
-      this.updateButtons();
+      this.updateUiState();
     }
   }
 
@@ -426,16 +448,16 @@ export class MultiplayerApp {
       return;
     }
 
-    const roomId = this.roomInput.value.trim();
-    const hostPeerId = this.hostInput.value.trim();
+    const roomId = this.mainMenu.getRoomId();
+    const hostPeerId = this.mainMenu.getHostPeerId();
 
-    if (!roomId || !hostPeerId) {
-      this.setStatus('Room ID and host peer ID are required to join.', 'error');
+    if (!roomId) {
+      this.setStatus('Room ID is required to join.', 'error');
       return;
     }
 
     this.connecting = true;
-    this.updateButtons();
+    this.updateUiState();
 
     try {
       await this.prepareNetworking();
@@ -468,11 +490,9 @@ export class MultiplayerApp {
       }
 
       const resolvedHostPeer = response.hostPeerId || hostPeerId;
-      this.hostPeerId = resolvedHostPeer;
-      this.hostInput.value = resolvedHostPeer;
+      this.setRoomState(roomId, resolvedHostPeer);
 
       await this.session.joinRoom(roomId, resolvedHostPeer);
-      this.setShareUrl(roomId, resolvedHostPeer);
       this.setStatus(
         `Joined room ${roomId}. Waiting for host to relay and start the session.`,
       );
@@ -486,12 +506,12 @@ export class MultiplayerApp {
       this.cleanupNetworking();
     } finally {
       this.connecting = false;
-      this.updateButtons();
+      this.updateUiState();
     }
   }
 
   private async copyShareLink(): Promise<void> {
-    const url = this.shareUrlInput.value.trim();
+    const url = this.currentShareUrl;
     if (!url) {
       return;
     }
@@ -500,12 +520,12 @@ export class MultiplayerApp {
       await navigator.clipboard.writeText(url);
       this.setStatus('Room URL copied to clipboard.');
     } catch {
-      this.shareUrlInput.select();
-      this.setStatus('Clipboard blocked. URL selected for manual copy.', 'error');
+      this.setStatus('Clipboard blocked. Please copy the URL manually.', 'error');
     }
   }
 
   private leaveRoom(): void {
+    this.settingsOpen = false;
     this.cleanupNetworking();
 
     const currentUrl = new URL(window.location.href);
@@ -513,9 +533,13 @@ export class MultiplayerApp {
     currentUrl.searchParams.delete('host');
     history.replaceState({}, '', currentUrl.toString());
 
-    this.shareUrlInput.value = '';
-    this.roomInput.value = '';
-    this.hostInput.value = '';
+    this.currentShareUrl = '';
+    this.mainMenu.setShareUrl('');
+    this.mainMenu.setRoomId('');
+    this.mainMenu.setHostPeerId('');
+    this.settingsMenu.setShareUrl('');
+    this.settingsMenu.setRoomId('');
+    this.settingsMenu.setHostPeerId('');
 
     this.setStatus('Left room. Host or join another session.');
     this.statusBadge.textContent = sessionStateLabel(SessionState.Disconnected);
@@ -526,7 +550,7 @@ export class MultiplayerApp {
     this.debugCounters.errorCount = 0;
 
     this.game?.reset();
-    this.updateButtons();
+    this.updateUiState();
     this.refreshDebugValues();
   }
 
@@ -541,7 +565,9 @@ export class MultiplayerApp {
     game.reset();
 
     this.signaling = new SignalingClient();
-    await this.signaling.connect(this.signalInput.value.trim() || this.defaultSignalUrl());
+    await this.signaling.connect(
+      this.mainMenu.getSignalUrl() || this.defaultSignalUrl(),
+    );
 
     this.unsubscribeSignalMessages = this.signaling.onMessage((message) => {
       void this.handleSignalingMessage(message);
@@ -615,6 +641,7 @@ export class MultiplayerApp {
 
     this.session.on('stateChange', (nextState) => {
       this.statusBadge.textContent = sessionStateLabel(nextState);
+      this.updateUiState();
     });
 
     this.session.on('playerJoined', (player) => {
@@ -732,7 +759,8 @@ export class MultiplayerApp {
 
       case 'room_joined':
         this.hostPeerId = message.hostPeerId;
-        this.hostInput.value = message.hostPeerId;
+        this.mainMenu.setHostPeerId(message.hostPeerId);
+        this.settingsMenu.setHostPeerId(message.hostPeerId);
         break;
 
       case 'room_hosted':
@@ -772,20 +800,36 @@ export class MultiplayerApp {
     });
   }
 
-  private setShareUrl(roomId: string, hostPeerId: string): void {
+  private setRoomState(roomId: string, hostPeerId: string): void {
+    this.roomId = roomId;
+    this.hostPeerId = hostPeerId;
+
+    this.mainMenu.setRoomId(roomId);
+    this.mainMenu.setHostPeerId(hostPeerId);
+    this.settingsMenu.setRoomId(roomId);
+    this.settingsMenu.setHostPeerId(hostPeerId);
+
+    this.publishShareUrl(roomId, hostPeerId);
+  }
+
+  private publishShareUrl(roomId: string, hostPeerId: string): void {
     const current = new URL(window.location.href);
     current.searchParams.set('room', roomId);
     current.searchParams.set('host', hostPeerId);
 
-    const signalUrl = this.signalInput.value.trim();
+    const signalUrl = this.mainMenu.getSignalUrl();
     if (signalUrl && signalUrl !== this.defaultSignalUrl()) {
       current.searchParams.set('signal', signalUrl);
     } else {
       current.searchParams.delete('signal');
     }
 
-    history.replaceState({}, '', current.toString());
-    this.shareUrlInput.value = current.toString();
+    const url = current.toString();
+    history.replaceState({}, '', url);
+
+    this.currentShareUrl = url;
+    this.mainMenu.setShareUrl(url);
+    this.settingsMenu.setShareUrl(url);
   }
 
   private refreshDebugValues(): void {
@@ -820,18 +864,47 @@ export class MultiplayerApp {
   }
 
   private setStatus(message: string, tone: StatusTone = 'normal'): void {
-    this.statusText.textContent = message;
-    this.statusText.dataset.tone = tone;
+    this.mainMenu.setStatus(message, tone);
+    this.settingsMenu.setStatus(message, tone);
   }
 
-  private updateButtons(): void {
-    const inRoom =
-      this.session !== null && this.session.state !== SessionState.Disconnected;
+  private isInRoom(): boolean {
+    return (
+      this.session !== null && this.session.state !== SessionState.Disconnected
+    );
+  }
 
-    this.hostButton.disabled = this.connecting || inRoom;
-    this.joinButton.disabled = this.connecting || inRoom;
-    this.leaveButton.disabled = this.connecting || !inRoom;
-    this.copyButton.disabled = !this.shareUrlInput.value;
+  private toggleSettings(): void {
+    if (!this.isInRoom() && !this.connecting) {
+      return;
+    }
+    this.settingsOpen = !this.settingsOpen;
+    this.updateUiState();
+  }
+
+  private updateUiState(): void {
+    const inRoom = this.isInRoom();
+    const inActiveSession = inRoom || this.connecting;
+
+    if (inActiveSession) {
+      this.mainMenu.hide();
+    } else {
+      this.mainMenu.show();
+    }
+
+    this.mainMenu.setBusy(this.connecting);
+
+    this.gameHud.dataset.visible = inActiveSession ? 'true' : 'false';
+    this.leaveButton.disabled = !inRoom || this.connecting;
+
+    if (this.settingsOpen && inActiveSession) {
+      this.settingsMenu.show();
+    } else {
+      this.settingsMenu.hide();
+      if (!inActiveSession) {
+        this.settingsOpen = false;
+      }
+    }
   }
 
   private defaultSignalUrl(): string {
@@ -845,52 +918,17 @@ export class MultiplayerApp {
   private renderAppTemplate(): string {
     return `
       <div class="app-shell">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">CS130 Multiplayer Baseline</p>
-            <h1>Rollback Jump Arena</h1>
-          </div>
-          <div class="state-pill">
-            <span>Session</span>
-            <strong id="statusBadge">Disconnected</strong>
-          </div>
-        </header>
-
-        <section class="panel controls-panel">
-          <div class="controls-grid">
-            <label>
-              <span>Peer ID</span>
-              <output id="peerIdValue"></output>
-            </label>
-            <label>
-              <span>Signaling URL</span>
-              <input id="signalInput" type="text" />
-            </label>
-            <label>
-              <span>Room ID</span>
-              <input id="roomInput" type="text" placeholder="room-xxxx" />
-            </label>
-            <label>
-              <span>Host Peer ID</span>
-              <input id="hostInput" type="text" placeholder="peer-xxxx" />
-            </label>
-          </div>
-
-          <div class="actions-row">
-            <button id="hostButton" class="action-primary" type="button">Host Room</button>
-            <button id="joinButton" class="action-secondary" type="button">Join Room</button>
-            <button id="leaveButton" class="action-ghost" type="button">Leave</button>
-          </div>
-
-          <label class="share-field">
-            <span>Shared Room URL</span>
-            <div>
-              <input id="shareUrl" type="text" readonly />
-              <button id="copyButton" type="button">Copy</button>
+        <section id="viewport" class="panel viewport-panel">
+          <div id="gameHud" class="game-hud" data-visible="false">
+            <div class="state-pill">
+              <span>Session</span>
+              <strong id="statusBadge">Disconnected</strong>
             </div>
-          </label>
-
-          <p id="statusText" data-tone="normal">Preparing game...</p>
+            <div class="game-hud-actions">
+              <button id="settingsToggleButton" class="action-ghost" type="button">Settings</button>
+              <button id="leaveButton" class="action-ghost" type="button">Leave</button>
+            </div>
+          </div>
         </section>
 
         <section class="panel debug-panel">
@@ -905,10 +943,7 @@ export class MultiplayerApp {
             <article><span>Players</span><strong id="playerCountValue">0</strong></article>
             <article><span>RTT</span><strong id="rttValue">-</strong></article>
           </div>
-          <p class="controls-hint">Controls: A/D or Arrow keys to move, W/Up/Space to jump.</p>
         </section>
-
-        <section id="viewport" class="panel viewport-panel"></section>
       </div>
     `;
   }
