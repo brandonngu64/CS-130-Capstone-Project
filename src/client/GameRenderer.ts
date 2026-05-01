@@ -1,5 +1,10 @@
 import * as THREE from 'three';
-import { ARENA_HALF_WIDTH, FLOOR_Y } from './constants';
+import {
+  ARENA_HALF_WIDTH,
+  FLOOR_Y,
+  PLATFORM_COLOR,
+  PLATFORMS,
+} from './constants';
 import type { RenderState } from './RollbackPhysicsGame';
 
 const BASE_VIEW_BOTTOM = -5;
@@ -21,8 +26,13 @@ export class GameRenderer {
     this.scene.background = new THREE.Color(0x131924);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
+<<<<<<< HEAD
     this.camera.position.set(0, 4, 12);
     this.camera.lookAt(0, 4, 0);
+=======
+    this.camera.position.set(0, 3, 12);
+    this.camera.lookAt(0, 3, 0);
+>>>>>>> origin/will-dev
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -128,24 +138,26 @@ export class GameRenderer {
     backdrop.position.set(0, 6, -1.2);
     this.scene.add(backdrop);
 
-    // Platform meshes
     const platformMaterial = new THREE.MeshStandardMaterial({
-      color: 0x3a4f5f,
-      roughness: 0.8,
-      metalness: 0.2,
+      color: PLATFORM_COLOR,
+      roughness: 0.6,
+      metalness: 0.15,
     });
 
-    const p0Mesh = new THREE.Mesh(new THREE.BoxGeometry(4, 0.5, 1), platformMaterial);
-    p0Mesh.position.set(0, FLOOR_Y + 4.5, -0.4);
-    this.scene.add(p0Mesh);
-
-    const p1Mesh = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 1), platformMaterial);
-    p1Mesh.position.set(-6, FLOOR_Y + 2.5, -0.4);
-    this.scene.add(p1Mesh);
-
-    const p2Mesh = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 1), platformMaterial);
-    p2Mesh.position.set(6, FLOOR_Y + 2.5, -0.4);
-    this.scene.add(p2Mesh);
+    // Match the player's z range (centered at 0.35, depth 0.7) so the camera
+    // tilt doesn't cause the player to visually clip into the platform top.
+    for (const platform of PLATFORMS) {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          platform.halfWidth * 2,
+          platform.halfHeight * 2,
+          0.7,
+        ),
+        platformMaterial,
+      );
+      mesh.position.set(platform.centerX, platform.centerY, 0.35);
+      this.scene.add(mesh);
+    }
   }
 
   private createPlayerMesh(

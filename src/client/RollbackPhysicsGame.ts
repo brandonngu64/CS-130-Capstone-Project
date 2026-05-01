@@ -7,6 +7,7 @@ import {
   GRAVITY_Y,
   JUMP_SPEED,
   MOVE_SPEED,
+  PLATFORMS,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
@@ -227,30 +228,20 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     );
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
 
-    // Static platforms: Center top, left bottom, right bottom
-    const p0 = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y + 4.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(2, 0.25).setFriction(1),
-      p0,
-    );
-
-    const p1 = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-6, FLOOR_Y + 2.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(1.5, 0.25).setFriction(1),
-      p1,
-    );
-
-    const p2 = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(6, FLOOR_Y + 2.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(1.5, 0.25).setFriction(1),
-      p2,
-    );
+    for (const platform of PLATFORMS) {
+      const body = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(
+          platform.centerX,
+          platform.centerY,
+        ),
+      );
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(platform.halfWidth, platform.halfHeight)
+          .setFriction(1)
+          .setRestitution(0),
+        body,
+      );
+    }
   }
 
   private syncPlayers(sortedIds: string[]): void {
@@ -323,6 +314,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private isGrounded(body: RAPIER.RigidBody): boolean {
+<<<<<<< HEAD
     const verticalSpeed = Math.abs(body.linvel().y);
     const position = body.translation();
     
@@ -340,6 +332,36 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     );
     const hit = this.world.castRay(ray, 0.15, true);
     return hit !== null;
+=======
+    if (body.linvel().y > 0.2) {
+      return false;
+    }
+
+    const position = body.translation();
+    const feetY = position.y - PLAYER_HALF_HEIGHT;
+
+    if (feetY <= FLOOR_Y + 0.06) {
+      return true;
+    }
+
+    // Cast a short ray straight down from just below each foot to detect
+    // platforms underneath the player.
+    const rayOrigins = [
+      { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
+      { x: position.x, y: feetY - 0.01 },
+      { x: position.x + PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
+    ];
+
+    for (const origin of rayOrigins) {
+      const ray = new RAPIER.Ray(origin, { x: 0, y: -1 });
+      const hit = this.world.castRay(ray, 0.1, true);
+      if (hit !== null) {
+        return true;
+      }
+    }
+
+    return false;
+>>>>>>> origin/will-dev
   }
 
   private enforceHorizontalBounds(): void {
