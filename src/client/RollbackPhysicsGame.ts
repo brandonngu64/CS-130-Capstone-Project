@@ -314,25 +314,6 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private isGrounded(body: RAPIER.RigidBody): boolean {
-<<<<<<< HEAD
-    const verticalSpeed = Math.abs(body.linvel().y);
-    const position = body.translation();
-    
-    // Quick floor check
-    if (position.y <= FLOOR_Y + PLAYER_HALF_HEIGHT + 0.06 && verticalSpeed < 0.2) {
-      return true;
-    }
-
-    if (verticalSpeed > 0.2) return false;
-
-    // Raycast slightly below player to check for platforms
-    const ray = new RAPIER.Ray(
-      { x: position.x, y: position.y - PLAYER_HALF_HEIGHT - 0.01 },
-      { x: 0, y: -1 }
-    );
-    const hit = this.world.castRay(ray, 0.15, true);
-    return hit !== null;
-=======
     if (body.linvel().y > 0.2) {
       return false;
     }
@@ -361,7 +342,6 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
 
     return false;
->>>>>>> origin/will-dev
   }
 
   private enforceHorizontalBounds(): void {
