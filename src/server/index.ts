@@ -1,6 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import path from 'node:path';
+import { createServer } from 'node:http';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 
 type SignalMessage =
@@ -87,20 +85,13 @@ const socketToPeer = new Map<WebSocket, string>();
 
 const port = Number(process.env.SIGNALING_PORT ?? process.env.PORT ?? '3000');
 const host = process.env.HOST ?? '0.0.0.0';
-const staticRoot = path.resolve(process.cwd(), 'dist');
-const websocketPath = '/ws';
 
-const httpServer = createServer((request, response) => {
-  void handleHttpRequest(request, response).catch((error) => {
-    console.error('HTTP server error:', error);
-    if (!response.headersSent) {
-      response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-    }
-    response.end('Internal server error.\n');
-  });
+const httpServer = createServer((_, response) => {
+  response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+  response.end('CS130 signaling server is running.\n');
 });
 
-const websocketServer = new WebSocketServer({ noServer: true });
+const websocketServer = new WebSocketServer({ server: httpServer });
 
 const reportServerError = (error: Error): void => {
   const err = error as NodeJS.ErrnoException;
@@ -126,22 +117,6 @@ const reportServerError = (error: Error): void => {
 
 httpServer.on('error', reportServerError);
 websocketServer.on('error', reportServerError);
-
-httpServer.on('upgrade', (request, socket, head) => {
-  const requestUrl = new URL(
-    request.url ?? '/',
-    `http://${request.headers.host ?? 'localhost'}`,
-  );
-
-  if (requestUrl.pathname !== websocketPath) {
-    socket.destroy();
-    return;
-  }
-
-  websocketServer.handleUpgrade(request, socket, head, (client) => {
-    websocketServer.emit('connection', client, request);
-  });
-});
 
 websocketServer.on('connection', (socket) => {
   socket.on('message', (rawData) => {
@@ -207,123 +182,6 @@ const shutdown = (): void => {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
-
-async function handleHttpRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
-  const requestUrl = new URL(
-    request.url ?? '/',
-    `http://${request.headers.host ?? 'localhost'}`,
-  );
-  const pathname = path.posix.normalize(requestUrl.pathname);
-
-  if (pathname === websocketPath) {
-    response.writeHead(426, { 'content-type': 'text/plain; charset=utf-8' });
-    response.end('WebSocket endpoint. Use a WebSocket client.\n');
-    return;
-  }
-
-  const served = await serveStaticRequest(pathname, response);
-  if (served) {
-    return;
-  }
-
-  response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-  response.end('CS130 signaling server is running.\n');
-}
-
-async function serveStaticRequest(
-  pathname: string,
-  response: ServerResponse,
-): Promise<boolean> {
-  const indexPath = path.join(staticRoot, 'index.html');
-
-  if (path.extname(pathname)) {
-    const assetPath = resolveStaticPath(pathname);
-    if (!assetPath || !(await fileExists(assetPath))) {
-      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      response.end('Not found\n');
-      return true;
-    }
-
-    await sendFile(assetPath, response);
-    return true;
-  }
-
-  if (await fileExists(indexPath)) {
-    await sendFile(indexPath, response);
-    return true;
-  }
-
-  return false;
-}
-
-function resolveStaticPath(pathname: string): string | null {
-  const relativePath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
-  const candidate = path.resolve(staticRoot, relativePath);
-  const relative = path.relative(staticRoot, candidate);
-
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    return null;
-  }
-
-  return candidate;
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const fileStat = await stat(filePath);
-    return fileStat.isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function sendFile(
-  filePath: string,
-  response: ServerResponse,
-): Promise<void> {
-  const body = await readFile(filePath);
-  response.writeHead(200, {
-    'content-type': contentTypeForPath(filePath),
-    'content-length': body.length,
-  });
-  response.end(body);
-}
-
-function contentTypeForPath(filePath: string): string {
-  switch (path.extname(filePath).toLowerCase()) {
-    case '.html':
-      return 'text/html; charset=utf-8';
-    case '.css':
-      return 'text/css; charset=utf-8';
-    case '.js':
-    case '.mjs':
-      return 'text/javascript; charset=utf-8';
-    case '.json':
-      return 'application/json; charset=utf-8';
-    case '.svg':
-      return 'image/svg+xml';
-    case '.ico':
-      return 'image/x-icon';
-    case '.png':
-      return 'image/png';
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg';
-    case '.gif':
-      return 'image/gif';
-    case '.webp':
-      return 'image/webp';
-    case '.woff':
-      return 'font/woff';
-    case '.woff2':
-      return 'font/woff2';
-    default:
-      return 'application/octet-stream';
-  }
-}
 
 function hostRoom(
   socket: WebSocket,
