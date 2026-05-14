@@ -1249,7 +1249,7 @@ export class MultiplayerApp {
     if (envUrl) return envUrl;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.hostname}:3000`;
+    return `${protocol}//${window.location.host}/ws`;
   }
 
   private renderAppTemplate(): string {
