@@ -118,6 +118,7 @@ Notes:
 - WebRTC across restrictive NATs may require TURN servers in addition to STUN.
 - Short network drops no longer tear down a room immediately. The client persists its peer id locally, retries signaling reconnects, and the server keeps rooms alive for a 15 second grace window before finalizing a disconnect.
 - If the host reloads the shared room URL, the app now tries to reattach to the existing room instead of joining it as a guest.
+- If a guest closes the tab or loses the browser abruptly, the host now drops that player from the rollback session immediately so the remaining players keep ticking.
 
 ## AWS Deployment
 
@@ -240,3 +241,20 @@ sudo systemctl status cs130
 ## Determinism Notes
 
 Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependent game logic in gameplay state updates. Rollback snapshots serialize full player physical state and input edge state for resimulation consistency.
+
+# Deployment on AWS
+
+- `sudo apt update`
+- `sudo apt install nodejs npm -y`
+- importing repo via ssh key on remote:
+  `git clone git@github.com:username/repository-name.git`
+
+  - `git clone git@github.com:brandonngu64/CS-130-Capstone-Project.git`
+
+  ### Git Command Notes CLI
+- `git branch -a` show all branches
+- `git switch <BRANCH NAME>`
+
+### Launching
+
+- On AWS run

@@ -5,6 +5,7 @@ import {
   WebRTCTransport,
   createSession,
   type InputPredictor,
+  type PlayerId,
   type Session,
   type SignalMessage,
   type TickResult,
@@ -758,14 +759,6 @@ export class MultiplayerApp {
       },
     });
 
-    this.transport.onConnect = (peerId: string) => {
-      this.setStatus(`WebRTC peer connected: ${peerId}`);
-    };
-
-    this.transport.onDisconnect = (peerId: string) => {
-      this.setStatus(`WebRTC peer disconnected: ${peerId}`);
-    };
-
     this.transport.onError = (peerId, error) => {
       this.setStatus(
         `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${error.message}`,
@@ -782,7 +775,7 @@ export class MultiplayerApp {
         maxPlayers: MAX_PLAYERS,
         topology: Topology.Star,
         hashInterval: TICK_RATE,
-          disconnectTimeout: ROOM_DISCONNECT_GRACE_MS,
+        disconnectTimeout: ROOM_DISCONNECT_GRACE_MS,
         snapshotHistorySize: TICK_RATE * 4,
         maxSpeculationTicks: TICK_RATE * 2,
         debug: false,
@@ -799,7 +792,11 @@ export class MultiplayerApp {
     });
 
     this.session.on('playerLeft', (player) => {
-      this.setStatus(`Player left: ${player.id}`);
+      this.setStatus(`Player left cleanly: ${player.id}`);
+    });
+
+    this.session.on('playerDropped', (playerId) => {
+      this.setStatus(`Player disconnected abruptly and was removed: ${playerId}`);
     });
 
     this.session.on('gameStart', () => {
@@ -821,6 +818,35 @@ export class MultiplayerApp {
         'error',
       );
     });
+
+    const sessionOnConnect = this.transport.onConnect;
+    const sessionOnDisconnect = this.transport.onDisconnect;
+
+    this.transport.onConnect = (peerId: string) => {
+      sessionOnConnect?.(peerId);
+      this.setStatus(`WebRTC peer connected: ${peerId}`);
+    };
+
+    this.transport.onDisconnect = (peerId: string) => {
+      const isHostDroppingPeer =
+        this.session?.isHost &&
+        this.session.state !== SessionState.Disconnected &&
+        peerId !== this.peerId;
+
+      if (isHostDroppingPeer) {
+        try {
+          const hostSession = this.session;
+          if (hostSession) {
+            hostSession.dropPlayer(peerId as PlayerId);
+          }
+        } catch {
+          sessionOnDisconnect?.(peerId);
+        }
+        return;
+      }
+
+      sessionOnDisconnect?.(peerId);
+    };
 
     this.setStatus('Connected to signaling server.');
     this.statusBadge.textContent = sessionStateLabel(this.session.state);
