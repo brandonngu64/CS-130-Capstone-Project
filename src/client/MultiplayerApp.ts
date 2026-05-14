@@ -5,6 +5,7 @@ import {
   WebRTCTransport,
   createSession,
   type InputPredictor,
+  type PlayerId,
   type Session,
   type SignalMessage,
   type TickResult,
@@ -30,6 +31,25 @@ type InputState = {
   jump: boolean;
 };
 
+type RecoveryMode = 'host' | 'join';
+
+type RecoveryState = {
+  roomId: string;
+  hostPeerId: string;
+  mode: RecoveryMode;
+  signalUrl: string;
+};
+
+const PEER_ID_STORAGE_KEY = 'cs130-peer-id';
+const ROOM_DISCONNECT_GRACE_MS = 3500;
+const WEBSOCKET_KEEPALIVE_INTERVAL_MS = 1000;
+const WEBSOCKET_KEEPALIVE_TIMEOUT_MS = 3500;
+const WEBSOCKET_CONNECTION_TIMEOUT_MS = 10000;
+const SIGNALING_RECONNECT_BASE_DELAY_MS = 1000;
+const SIGNALING_RECONNECT_MAX_DELAY_MS = 4000;
+const SIGNALING_RECONNECT_MAX_ATTEMPTS = 5;
+const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
+
 function requireElement<T extends HTMLElement>(
   parent: ParentNode,
   selector: string,
@@ -39,6 +59,68 @@ function requireElement<T extends HTMLElement>(
     throw new Error(`Missing required element: ${selector}`);
   }
   return element;
+}
+
+function readStoredPeerId(): string | null {
+  try {
+    const stored = globalThis.localStorage?.getItem(PEER_ID_STORAGE_KEY);
+    return stored && stored.trim().length > 0 ? stored.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePeerId(peerId: string): void {
+  try {
+    globalThis.localStorage?.setItem(PEER_ID_STORAGE_KEY, peerId);
+  } catch {
+    // Ignore storage failures and continue with the in-memory peer id.
+  }
+}
+
+function readStoredRecoveryState(): RecoveryState | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(ROOM_RECOVERY_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<RecoveryState>;
+    if (
+      parsed.mode !== 'host' &&
+      parsed.mode !== 'join' ||
+      typeof parsed.roomId !== 'string' ||
+      typeof parsed.hostPeerId !== 'string' ||
+      typeof parsed.signalUrl !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      mode: parsed.mode,
+      roomId: parsed.roomId,
+      hostPeerId: parsed.hostPeerId,
+      signalUrl: parsed.signalUrl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function storeRecoveryState(state: RecoveryState): void {
+  try {
+    globalThis.localStorage?.setItem(ROOM_RECOVERY_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage failures and keep recovery state in memory only.
+  }
+}
+
+function clearStoredRecoveryState(): void {
+  try {
+    globalThis.localStorage?.removeItem(ROOM_RECOVERY_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 function sessionStateLabel(state: SessionState): string {
@@ -59,25 +141,32 @@ function sessionStateLabel(state: SessionState): string {
 }
 
 function makePeerId(): string {
-  const cryptoApi = globalThis.crypto;
-
-  if (cryptoApi?.randomUUID) {
-    return `peer-${cryptoApi.randomUUID().slice(0, 8)}`;
+  const storedPeerId = readStoredPeerId();
+  if (storedPeerId) {
+    return storedPeerId;
   }
 
-  if (cryptoApi?.getRandomValues) {
+  const cryptoApi = globalThis.crypto;
+  let peerId = '';
+
+  if (cryptoApi?.randomUUID) {
+    peerId = `peer-${cryptoApi.randomUUID().slice(0, 8)}`;
+  } else if (cryptoApi?.getRandomValues) {
     const bytes = new Uint8Array(4);
     cryptoApi.getRandomValues(bytes);
     const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0'))
       .join('')
       .slice(0, 8);
-    return `peer-${hex}`;
+    peerId = `peer-${hex}`;
+  } else {
+    const fallback = Math.floor(Math.random() * 0xffffffff)
+      .toString(16)
+      .padStart(8, '0');
+    peerId = `peer-${fallback}`;
   }
 
-  const fallback = Math.floor(Math.random() * 0xffffffff)
-    .toString(16)
-    .padStart(8, '0');
-  return `peer-${fallback}`;
+  storePeerId(peerId);
+  return peerId;
 }
 
 class RepeatLastInputPredictor implements InputPredictor<Uint8Array> {
@@ -143,6 +232,12 @@ export class MultiplayerApp {
     desyncCount: 0,
     errorCount: 0,
   };
+
+  private recoveryState: RecoveryState | null = null;
+  private reconnectTimerId: number | null = null;
+  private reconnectAttempt = 0;
+  private reconnectingSignaling = false;
+  private isCleaningUp = false;
 
   private unsubscribeSignalMessages: (() => void) | null = null;
   private unsubscribeSignalClose: (() => void) | null = null;
@@ -303,9 +398,21 @@ export class MultiplayerApp {
     this.animationFrameId = requestAnimationFrame(this.onFrame);
 
     const currentUrl = new URL(window.location.href);
-    const roomId = currentUrl.searchParams.get('room');
-    const hostPeer = currentUrl.searchParams.get('host');
-    const signalUrl = currentUrl.searchParams.get('signal');
+    const storedRecovery = readStoredRecoveryState();
+
+    let roomId = currentUrl.searchParams.get('room');
+    let hostPeer = currentUrl.searchParams.get('host');
+    let signalUrl = currentUrl.searchParams.get('signal');
+
+    if (!roomId && storedRecovery) {
+      roomId = storedRecovery.roomId;
+      hostPeer = storedRecovery.hostPeerId;
+      signalUrl = storedRecovery.signalUrl;
+    }
+
+    if (roomId && !hostPeer && storedRecovery?.roomId === roomId) {
+      hostPeer = storedRecovery.hostPeerId;
+    }
 
     if (roomId) {
       this.mainMenu.setRoomId(roomId);
@@ -318,8 +425,13 @@ export class MultiplayerApp {
     }
 
     if (roomId && hostPeer) {
-      this.setStatus('Detected room URL. Attempting to join...');
-      await this.handleJoinRoom();
+      if (hostPeer === this.peerId) {
+        this.setStatus('Detected host room URL. Attempting recovery...');
+        await this.handleHostRoom(roomId);
+      } else {
+        this.setStatus('Detected room URL. Attempting to join...');
+        await this.handleJoinRoom();
+      }
     }
   }
 
@@ -388,7 +500,7 @@ export class MultiplayerApp {
     }
   }
 
-  private async handleHostRoom(): Promise<void> {
+  private async handleHostRoom(preferredRoomId?: string): Promise<void> {
     if (this.connecting) {
       return;
     }
@@ -403,31 +515,48 @@ export class MultiplayerApp {
       }
 
       const createdRoomId = await this.session.createRoom();
-      this.roomId = createdRoomId;
+      const roomId = preferredRoomId || createdRoomId;
+
+      if (preferredRoomId && preferredRoomId !== createdRoomId) {
+        (this.session as unknown as { _roomId: string | null })._roomId = roomId;
+      }
+
+      this.roomId = roomId;
       this.hostPeerId = this.peerId;
+
+      const responsePromise = this.waitForSignalMessage(
+        (message) =>
+          (message.type === 'room_hosted' && message.roomId === roomId) ||
+          message.type === 'room_error',
+        7000,
+      );
 
       this.signaling.send({
         type: 'host_room',
-        roomId: createdRoomId,
+        roomId,
         peerId: this.peerId,
         maxPlayers: MAX_PLAYERS,
       });
 
-      const response = await this.waitForSignalMessage(
-        (message) =>
-          (message.type === 'room_hosted' && message.roomId === createdRoomId) ||
-          message.type === 'room_error',
-        7000,
-      );
+      const response = await responsePromise;
 
       if (response.type === 'room_error') {
         throw new Error(response.message);
       }
 
-      this.setRoomState(createdRoomId, this.peerId);
+      this.setRoomState(roomId, this.peerId);
+      this.recoveryState = {
+        mode: 'host',
+        roomId,
+        hostPeerId: this.peerId,
+        signalUrl: this.getCurrentSignalUrl(),
+      };
+      storeRecoveryState(this.recoveryState);
       this.session.start();
       this.setStatus(
-        `Hosting room ${createdRoomId}. Open Settings or share the URL to invite players.`,
+        preferredRoomId
+          ? `Recovered host room ${roomId}.`
+          : `Hosting room ${roomId}. Open Settings or share the URL to invite players.`,
       );
     } catch (error) {
       this.setStatus(
@@ -468,18 +597,20 @@ export class MultiplayerApp {
       this.roomId = roomId;
       this.hostPeerId = hostPeerId;
 
+      const responsePromise = this.waitForSignalMessage(
+        (message) =>
+          (message.type === 'room_joined' && message.roomId === roomId) ||
+          message.type === 'room_error',
+        9000,
+      );
+
       this.signaling.send({
         type: 'join_room',
         roomId,
         peerId: this.peerId,
       });
 
-      const response = await this.waitForSignalMessage(
-        (message) =>
-          (message.type === 'room_joined' && message.roomId === roomId) ||
-          message.type === 'room_error',
-        9000,
-      );
+      const response = await responsePromise;
 
       if (response.type === 'room_error') {
         throw new Error(response.message);
@@ -491,6 +622,13 @@ export class MultiplayerApp {
 
       const resolvedHostPeer = response.hostPeerId || hostPeerId;
       this.setRoomState(roomId, resolvedHostPeer);
+      this.recoveryState = {
+        mode: 'join',
+        roomId,
+        hostPeerId: resolvedHostPeer,
+        signalUrl: this.getCurrentSignalUrl(),
+      };
+      storeRecoveryState(this.recoveryState);
 
       await this.session.joinRoom(roomId, resolvedHostPeer);
       this.setStatus(
@@ -526,7 +664,7 @@ export class MultiplayerApp {
 
   private leaveRoom(): void {
     this.settingsOpen = false;
-    this.cleanupNetworking();
+    this.cleanupNetworking({ sendLeave: true });
 
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.delete('room');
@@ -565,15 +703,27 @@ export class MultiplayerApp {
     game.reset();
 
     this.signaling = new SignalingClient();
-    await this.signaling.connect(
-      this.mainMenu.getSignalUrl() || this.defaultSignalUrl(),
-    );
+    const signalUrl = this.getCurrentSignalUrl();
+    await this.signaling.connect(signalUrl);
 
     this.unsubscribeSignalMessages = this.signaling.onMessage((message) => {
       void this.handleSignalingMessage(message);
     });
 
     this.unsubscribeSignalClose = this.signaling.onClose(() => {
+      if (this.isCleaningUp || this.reconnectingSignaling || this.connecting) {
+        return;
+      }
+
+      if (this.recoveryState) {
+        this.setStatus(
+          'Disconnected from signaling server. Attempting room recovery...',
+          'error',
+        );
+        void this.scheduleSignalingRecovery();
+        return;
+      }
+
       if (this.session?.state !== SessionState.Disconnected) {
         this.setStatus('Disconnected from signaling server.', 'error');
       }
@@ -591,7 +741,11 @@ export class MultiplayerApp {
           },
         ],
       },
-      connectionTimeout: 20000,
+      maxReconnectAttempts: 5,
+      reconnectDelay: 1000,
+      keepaliveInterval: WEBSOCKET_KEEPALIVE_INTERVAL_MS,
+      keepaliveTimeout: WEBSOCKET_KEEPALIVE_TIMEOUT_MS,
+      connectionTimeout: WEBSOCKET_CONNECTION_TIMEOUT_MS,
     });
 
     this.transport.setSignalingCallbacks({
@@ -609,14 +763,6 @@ export class MultiplayerApp {
       },
     });
 
-    this.transport.onConnect = (peerId: string) => {
-      this.setStatus(`WebRTC peer connected: ${peerId}`);
-    };
-
-    this.transport.onDisconnect = (peerId: string) => {
-      this.setStatus(`WebRTC peer disconnected: ${peerId}`);
-    };
-
     this.transport.onError = (peerId, error) => {
       this.setStatus(
         `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${error.message}`,
@@ -633,6 +779,7 @@ export class MultiplayerApp {
         maxPlayers: MAX_PLAYERS,
         topology: Topology.Star,
         hashInterval: TICK_RATE,
+        disconnectTimeout: ROOM_DISCONNECT_GRACE_MS,
         snapshotHistorySize: TICK_RATE * 4,
         maxSpeculationTicks: TICK_RATE * 2,
         debug: false,
@@ -649,7 +796,11 @@ export class MultiplayerApp {
     });
 
     this.session.on('playerLeft', (player) => {
-      this.setStatus(`Player left: ${player.id}`);
+      this.setStatus(`Player left cleanly: ${player.id}`);
+    });
+
+    this.session.on('playerDropped', (playerId) => {
+      this.setStatus(`Player disconnected abruptly and was removed: ${playerId}`);
     });
 
     this.session.on('gameStart', () => {
@@ -672,51 +823,234 @@ export class MultiplayerApp {
       );
     });
 
+    const sessionOnConnect = this.transport.onConnect;
+    const sessionOnDisconnect = this.transport.onDisconnect;
+
+    this.transport.onConnect = (peerId: string) => {
+      sessionOnConnect?.(peerId);
+      this.setStatus(`WebRTC peer connected: ${peerId}`);
+    };
+
+    this.transport.onDisconnect = (peerId: string) => {
+      const isHostDroppingPeer =
+        this.session?.isHost &&
+        this.session.state !== SessionState.Disconnected &&
+        peerId !== this.peerId;
+
+      if (isHostDroppingPeer) {
+        try {
+          const hostSession = this.session;
+          if (hostSession) {
+            hostSession.dropPlayer(peerId as PlayerId);
+          }
+        } catch {
+          sessionOnDisconnect?.(peerId);
+        }
+        return;
+      }
+
+      sessionOnDisconnect?.(peerId);
+    };
+
     this.setStatus('Connected to signaling server.');
     this.statusBadge.textContent = sessionStateLabel(this.session.state);
   }
 
-  private cleanupNetworking(): void {
-    if (this.signaling && this.roomId) {
-      this.signaling.send({
-        type: 'leave_room',
-        roomId: this.roomId,
-        peerId: this.peerId,
-      });
-    }
+  private cleanupNetworking(options: { sendLeave?: boolean } = {}): void {
+    const { sendLeave = false } = options;
 
-    if (this.session) {
-      try {
-        this.session.leaveRoom();
-      } catch {
-        // Session may already be disconnected.
+    this.isCleaningUp = true;
+
+    try {
+      if (sendLeave && this.signaling && this.roomId) {
+        this.signaling.send({
+          type: 'leave_room',
+          roomId: this.roomId,
+          peerId: this.peerId,
+        });
       }
-      this.session.destroy();
-      this.session = null;
+
+      this.clearRecoveryState();
+      clearStoredRecoveryState();
+
+      if (this.session) {
+        try {
+          this.session.leaveRoom();
+        } catch {
+          // Session may already be disconnected.
+        }
+        this.session.destroy();
+        this.session = null;
+      }
+
+      if (this.transport) {
+        this.transport.destroy();
+        this.transport = null;
+      }
+
+      if (this.unsubscribeSignalMessages) {
+        this.unsubscribeSignalMessages();
+        this.unsubscribeSignalMessages = null;
+      }
+
+      if (this.unsubscribeSignalClose) {
+        this.unsubscribeSignalClose();
+        this.unsubscribeSignalClose = null;
+      }
+
+      if (this.signaling) {
+        this.signaling.disconnect();
+        this.signaling = null;
+      }
+
+      this.roomId = null;
+      this.hostPeerId = null;
+    } finally {
+      this.isCleaningUp = false;
+    }
+  }
+
+  private getCurrentSignalUrl(): string {
+    return this.mainMenu.getSignalUrl() || this.defaultSignalUrl();
+  }
+
+  private clearRecoveryState(): void {
+    if (this.reconnectTimerId !== null) {
+      window.clearTimeout(this.reconnectTimerId);
+      this.reconnectTimerId = null;
     }
 
-    if (this.transport) {
-      this.transport.destroy();
-      this.transport = null;
+    this.reconnectAttempt = 0;
+    this.reconnectingSignaling = false;
+    this.recoveryState = null;
+    clearStoredRecoveryState();
+  }
+
+  private scheduleSignalingRecovery(): void {
+    if (!this.recoveryState || this.reconnectTimerId !== null) {
+      return;
     }
 
-    if (this.unsubscribeSignalMessages) {
-      this.unsubscribeSignalMessages();
-      this.unsubscribeSignalMessages = null;
+    if (this.reconnectAttempt >= SIGNALING_RECONNECT_MAX_ATTEMPTS) {
+      this.setStatus(
+        'Unable to recover the signaling connection automatically.',
+        'error',
+      );
+      this.cleanupNetworking();
+      return;
     }
 
-    if (this.unsubscribeSignalClose) {
-      this.unsubscribeSignalClose();
-      this.unsubscribeSignalClose = null;
+    const attempt = this.reconnectAttempt + 1;
+    const delayMs = Math.min(
+      SIGNALING_RECONNECT_MAX_DELAY_MS,
+      SIGNALING_RECONNECT_BASE_DELAY_MS * 2 ** this.reconnectAttempt,
+    );
+
+    this.reconnectTimerId = window.setTimeout(() => {
+      this.reconnectTimerId = null;
+      void this.recoverSignalingConnection(attempt);
+    }, delayMs);
+
+    this.reconnectAttempt = attempt;
+  }
+
+  private async recoverSignalingConnection(attempt: number): Promise<void> {
+    if (!this.signaling || !this.recoveryState) {
+      return;
     }
 
-    if (this.signaling) {
-      this.signaling.disconnect();
-      this.signaling = null;
-    }
+    const recoveryState = this.recoveryState;
+    this.reconnectingSignaling = true;
 
-    this.roomId = null;
-    this.hostPeerId = null;
+    try {
+      this.setStatus(
+        `Reconnecting to signaling server (attempt ${attempt})...`,
+        'error',
+      );
+
+      await this.signaling.connect(recoveryState.signalUrl);
+
+      if (!this.recoveryState) {
+        return;
+      }
+
+      if (recoveryState.mode === 'host') {
+        const responsePromise = this.waitForSignalMessage(
+          (message) =>
+            (message.type === 'room_hosted' &&
+              message.roomId === recoveryState.roomId) ||
+            message.type === 'room_error',
+          7000,
+        );
+
+        this.signaling.send({
+          type: 'host_room',
+          roomId: recoveryState.roomId,
+          peerId: this.peerId,
+          maxPlayers: MAX_PLAYERS,
+        });
+
+        const response = await responsePromise;
+        if (response.type === 'room_error') {
+          throw new Error(response.message);
+        }
+
+        this.setRoomState(recoveryState.roomId, this.peerId);
+        this.recoveryState = {
+          ...recoveryState,
+          hostPeerId: this.peerId,
+        };
+        storeRecoveryState(this.recoveryState);
+      } else {
+        const responsePromise = this.waitForSignalMessage(
+          (message) =>
+            (message.type === 'room_joined' &&
+              message.roomId === recoveryState.roomId) ||
+            message.type === 'room_error',
+          7000,
+        );
+
+        this.signaling.send({
+          type: 'join_room',
+          roomId: recoveryState.roomId,
+          peerId: this.peerId,
+        });
+
+        const response = await responsePromise;
+        if (response.type === 'room_error') {
+          throw new Error(response.message);
+        }
+
+        if (response.type !== 'room_joined') {
+          throw new Error('Unexpected signaling response while recovering room');
+        }
+
+        const resolvedHostPeer = response.hostPeerId || recoveryState.hostPeerId;
+        this.setRoomState(recoveryState.roomId, resolvedHostPeer);
+        this.recoveryState = {
+          ...recoveryState,
+          hostPeerId: resolvedHostPeer,
+        };
+        storeRecoveryState(this.recoveryState);
+      }
+
+      this.reconnectAttempt = 0;
+      this.setStatus('Recovered room connection.');
+    } catch (error) {
+      if (!this.recoveryState) {
+        return;
+      }
+
+      this.setStatus(
+        `Room recovery failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        'error',
+      );
+      this.scheduleSignalingRecovery();
+    } finally {
+      this.reconnectingSignaling = false;
+    }
   }
 
   private async handleSignalingMessage(
@@ -768,6 +1102,9 @@ export class MultiplayerApp {
 
       case 'room_error':
         this.setStatus(message.message, 'error');
+        if (message.code === 'HOST_LEFT' || message.code === 'ROOM_NOT_FOUND') {
+          this.cleanupNetworking();
+        }
         break;
 
       default:

@@ -77,8 +77,10 @@ type Room = {
   roomId: string;
   hostPeerId: string;
   maxPlayers: number;
+  hostConnected: boolean;
   members: Set<string>;
   sockets: Map<string, WebSocket>;
+  disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
 const rooms = new Map<string, Room>();
@@ -89,6 +91,9 @@ const port = Number(process.env.SIGNALING_PORT ?? process.env.PORT ?? '3000');
 const host = process.env.HOST ?? '0.0.0.0';
 const staticRoot = path.resolve(process.cwd(), 'dist');
 const websocketPath = '/ws';
+const roomDisconnectGraceMs = Number(
+  process.env.ROOM_DISCONNECT_GRACE_MS ?? '15000',
+);
 
 const httpServer = createServer((request, response) => {
   void handleHttpRequest(request, response).catch((error) => {
@@ -174,15 +179,7 @@ websocketServer.on('connection', (socket) => {
   });
 
   socket.on('close', () => {
-    const peerId = socketToPeer.get(socket);
-    if (!peerId) {
-      return;
-    }
-    const roomId = peerToRoom.get(peerId);
-    if (roomId) {
-      leaveRoom(peerId, roomId);
-    }
-    socketToPeer.delete(socket);
+    onSocketClosed(socket);
   });
 });
 
@@ -350,14 +347,35 @@ function hostRoom(
     return;
   }
 
+  if (existingRoom && existingRoom.hostPeerId === message.peerId) {
+    clearDisconnectTimer(existingRoom, message.peerId);
+    existingRoom.hostConnected = true;
+    existingRoom.members.add(message.peerId);
+    existingRoom.sockets.set(message.peerId, socket);
+    peerToRoom.set(message.peerId, existingRoom.roomId);
+    socketToPeer.set(socket, message.peerId);
+
+    send(socket, {
+      type: 'room_hosted',
+      roomId: existingRoom.roomId,
+      hostPeerId: existingRoom.hostPeerId,
+      members: Array.from(existingRoom.members),
+    });
+
+    console.log(`Host reattached to room: ${existingRoom.roomId}`);
+    return;
+  }
+
   removePeerFromCurrentRoom(message.peerId);
 
   const room: Room = {
     roomId: message.roomId,
     hostPeerId: message.peerId,
     maxPlayers: normalizedMax,
+    hostConnected: true,
     members: new Set([message.peerId]),
     sockets: new Map([[message.peerId, socket]]),
+    disconnectTimers: new Map(),
   };
 
   rooms.set(message.roomId, room);
@@ -397,6 +415,19 @@ function joinRoom(
     return;
   }
 
+  const currentRoomId = peerToRoom.get(message.peerId);
+  const isReturningMember =
+    currentRoomId === room.roomId && room.members.has(message.peerId);
+
+  if (!isReturningMember && !room.hostConnected) {
+    send(socket, {
+      type: 'room_error',
+      code: 'HOST_OFFLINE',
+      message: 'Host is temporarily offline. Try again shortly.',
+    });
+    return;
+  }
+
   if (!room.members.has(message.peerId) && room.members.size >= room.maxPlayers) {
     send(socket, {
       type: 'room_error',
@@ -406,12 +437,19 @@ function joinRoom(
     return;
   }
 
-  removePeerFromCurrentRoom(message.peerId);
+  if (currentRoomId && currentRoomId !== room.roomId) {
+    removePeerFromCurrentRoom(message.peerId);
+  }
 
   room.members.add(message.peerId);
   room.sockets.set(message.peerId, socket);
+  clearDisconnectTimer(room, message.peerId);
   peerToRoom.set(message.peerId, room.roomId);
   socketToPeer.set(socket, message.peerId);
+
+  if (message.peerId === room.hostPeerId) {
+    room.hostConnected = true;
+  }
 
   send(socket, {
     type: 'room_joined',
@@ -420,11 +458,15 @@ function joinRoom(
     members: Array.from(room.members),
   });
 
-  broadcastToRoom(room, {
-    type: 'peer_joined',
-    roomId: room.roomId,
-    peerId: message.peerId,
-  }, message.peerId);
+  broadcastToRoom(
+    room,
+    {
+      type: 'peer_joined',
+      roomId: room.roomId,
+      peerId: message.peerId,
+    },
+    isReturningMember ? message.peerId : undefined,
+  );
 
   console.log(`Peer joined room ${room.roomId}: ${message.peerId}`);
 }
@@ -436,6 +478,8 @@ function leaveRoom(peerId: string, roomId: string): void {
   }
 
   const peerSocket = room.sockets.get(peerId);
+
+  clearDisconnectTimer(room, peerId);
 
   room.members.delete(peerId);
   room.sockets.delete(peerId);
@@ -452,6 +496,7 @@ function leaveRoom(peerId: string, roomId: string): void {
   }
 
   if (peerId === room.hostPeerId) {
+    room.hostConnected = false;
     for (const [remainingPeerId, remainingSocket] of room.sockets) {
       send(remainingSocket, {
         type: 'room_error',
@@ -527,6 +572,85 @@ function removePeerFromCurrentRoom(peerId: string): void {
   leaveRoom(peerId, currentRoom);
 }
 
+function scheduleDisconnect(roomId: string, peerId: string): void {
+  const room = rooms.get(roomId);
+  if (!room || !room.members.has(peerId)) {
+    return;
+  }
+
+  clearDisconnectTimer(room, peerId);
+
+  const timeoutId = setTimeout(() => {
+    finalizeDisconnect(roomId, peerId);
+  }, roomDisconnectGraceMs);
+
+  room.disconnectTimers.set(peerId, timeoutId);
+}
+
+function clearDisconnectTimer(room: Room, peerId: string): void {
+  const timeoutId = room.disconnectTimers.get(peerId);
+  if (!timeoutId) {
+    return;
+  }
+
+  clearTimeout(timeoutId);
+  room.disconnectTimers.delete(peerId);
+}
+
+function finalizeDisconnect(roomId: string, peerId: string): void {
+  const room = rooms.get(roomId);
+  if (!room) {
+    return;
+  }
+
+  room.disconnectTimers.delete(peerId);
+
+  if (!room.members.has(peerId)) {
+    return;
+  }
+
+  const peerSocket = room.sockets.get(peerId);
+  room.members.delete(peerId);
+  room.sockets.delete(peerId);
+  peerToRoom.delete(peerId);
+
+  if (peerSocket) {
+    socketToPeer.delete(peerSocket);
+  }
+
+  if (peerId === room.hostPeerId) {
+    room.hostConnected = false;
+
+    if (room.members.size === 0) {
+      rooms.delete(roomId);
+      console.log(`Room closed because host disconnected: ${roomId}`);
+      return;
+    }
+
+    for (const [remainingPeerId, remainingSocket] of room.sockets) {
+      send(remainingSocket, {
+        type: 'room_error',
+        code: 'HOST_LEFT',
+        message: 'Host disconnected. Room closed.',
+      });
+      peerToRoom.delete(remainingPeerId);
+      socketToPeer.delete(remainingSocket);
+    }
+
+    rooms.delete(roomId);
+    console.log(`Room closed because host disconnected: ${roomId}`);
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'peer_left',
+    roomId,
+    peerId,
+  });
+
+  console.log(`Peer disconnected after grace period ${roomId}: ${peerId}`);
+}
+
 function broadcastToRoom(
   room: Room,
   message: ServerMessage,
@@ -545,6 +669,35 @@ function send(socket: WebSocket, message: ServerMessage): void {
     return;
   }
   socket.send(JSON.stringify(message));
+}
+
+function onSocketClosed(socket: WebSocket): void {
+  const peerId = socketToPeer.get(socket);
+  if (!peerId) {
+    return;
+  }
+
+  const roomId = peerToRoom.get(peerId);
+  if (!roomId) {
+    socketToPeer.delete(socket);
+    return;
+  }
+
+  const room = rooms.get(roomId);
+  if (!room) {
+    socketToPeer.delete(socket);
+    peerToRoom.delete(peerId);
+    return;
+  }
+
+  room.sockets.delete(peerId);
+  socketToPeer.delete(socket);
+
+  if (peerId === room.hostPeerId) {
+    room.hostConnected = false;
+  }
+
+  scheduleDisconnect(roomId, peerId);
 }
 
 function parseClientMessage(rawData: RawData): ClientMessage | null {
