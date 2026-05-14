@@ -41,7 +41,10 @@ type RecoveryState = {
 };
 
 const PEER_ID_STORAGE_KEY = 'cs130-peer-id';
-const ROOM_DISCONNECT_GRACE_MS = 15000;
+const ROOM_DISCONNECT_GRACE_MS = 3500;
+const WEBSOCKET_KEEPALIVE_INTERVAL_MS = 1000;
+const WEBSOCKET_KEEPALIVE_TIMEOUT_MS = 3500;
+const WEBSOCKET_CONNECTION_TIMEOUT_MS = 10000;
 const SIGNALING_RECONNECT_BASE_DELAY_MS = 1000;
 const SIGNALING_RECONNECT_MAX_DELAY_MS = 4000;
 const SIGNALING_RECONNECT_MAX_ATTEMPTS = 5;
@@ -740,8 +743,9 @@ export class MultiplayerApp {
       },
       maxReconnectAttempts: 5,
       reconnectDelay: 1000,
-      keepaliveTimeout: 20000,
-      connectionTimeout: 20000,
+      keepaliveInterval: WEBSOCKET_KEEPALIVE_INTERVAL_MS,
+      keepaliveTimeout: WEBSOCKET_KEEPALIVE_TIMEOUT_MS,
+      connectionTimeout: WEBSOCKET_CONNECTION_TIMEOUT_MS,
     });
 
     this.transport.setSignalingCallbacks({
