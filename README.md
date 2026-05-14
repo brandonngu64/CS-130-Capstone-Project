@@ -238,6 +238,124 @@ sudo systemctl start cs130
 sudo systemctl status cs130
 ```
 
+## AWS Deployment
+
+This project can run on a single AWS EC2 instance without Vercel.
+
+Recommended setup:
+
+1. Launch one small EC2 instance and open ports `22`, `80`, and `443` in the security group.
+2. Install Node.js, clone the repo, run `npm install`, then `npm run build`.
+3. Start the production server with `npm start`.
+4. Put Caddy or Nginx in front of Node if you want HTTPS. Proxy the public site to the Node process and forward `/ws` to the same process.
+5. Leave `VITE_SIGNALING_URL` unset unless you intentionally host signaling somewhere else.
+
+With this setup, the browser talks to one public origin, the signaling socket lives at `/ws`, and the app no longer depends on a separate Vercel-hosted websocket endpoint.
+
+### Port Workflow
+
+Think about AWS ports in two layers:
+
+- AWS security group rules control what can reach the EC2 instance from the internet. These are inbound rules.
+- The Node process and reverse proxy listen on local ports inside the instance.
+
+Recommended port layout:
+
+- `22/tcp` inbound: SSH for admin access from your own IP only.
+- `80/tcp` inbound: HTTP entry point for Caddy or Nginx.
+- `443/tcp` inbound: HTTPS entry point for Caddy or Nginx.
+- `3000/tcp` inbound: usually not exposed publicly if Caddy/Nginx is proxying to Node locally.
+
+Outbound traffic is usually left open by default. That lets the instance reach package registries, STUN/TURN servers, and other external services.
+
+### What Proxying Means
+
+Without a proxy, the browser would talk directly to Node on `http://your-host:3000` or `ws://your-host:3000/ws`.
+
+With Caddy or Nginx in front, the browser talks to ports `80`/`443` instead. The proxy receives the public request and forwards it to Node on `127.0.0.1:3000`.
+
+For example:
+
+- Browser requests `https://your-domain.com/`
+- Caddy/Nginx receives that request on port `443`
+- Caddy/Nginx forwards it to Node on `http://127.0.0.1:3000/`
+- Node serves the built frontend from `dist/`
+
+For websocket traffic:
+
+- Browser opens `wss://your-domain.com/ws`
+- Caddy/Nginx forwards the websocket upgrade to Node on `127.0.0.1:3000/ws`
+- The signaling server handles the socket connection
+
+This is called a reverse proxy because the proxy sits in front of your app and relays incoming traffic into it.
+
+### Example Production Flow
+
+1. Build the app with `npm run build`.
+2. Start Node with `npm start` so it listens on port `3000` locally.
+3. Run Caddy or Nginx so the public site is exposed on `80`/`443`.
+4. Keep the Node port private to the instance.
+5. Share the public HTTPS URL with players.
+
+### Important Constraint
+
+This setup solves the frontend/signaling hosting split, but it does not remove WebRTC NAT traversal issues. Some networks still need TURN to connect reliably.
+
+### Cheapest Free Setup
+
+If you do not want to buy a domain yet, skip Caddy and Nginx and run the app directly on port `3000`.
+
+On an Ubuntu EC2 instance:
+
+```bash
+sudo apt update
+sudo apt install -y git curl build-essential
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+git clone <YOUR_REPO_URL>
+cd CS-130-Capstone-Project
+npm install
+npm run build
+npm start
+```
+
+Then open inbound port `3000/tcp` in the EC2 security group and visit:
+
+```text
+http://YOUR_EC2_PUBLIC_DNS:3000
+```
+
+The app will load the frontend from the same process and use the matching websocket endpoint at `/ws` automatically.
+
+To keep it running after you close SSH, use a systemd service:
+
+```bash
+sudo tee /etc/systemd/system/cs130.service >/dev/null <<'EOF'
+[Unit]
+Description=CS130 multiplayer server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/CS-130-Capstone-Project
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+ExecStart=/usr/bin/npm start
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable cs130
+sudo systemctl start cs130
+sudo systemctl status cs130
+```
+
 ## Determinism Notes
 
 Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependent game logic in gameplay state updates. Rollback snapshots serialize full player physical state and input edge state for resimulation consistency.
