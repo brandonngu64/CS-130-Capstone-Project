@@ -116,6 +116,8 @@ Notes:
 
 - For HTTPS client pages, use secure WebSocket (`wss://`) signaling. The app now defaults to same-origin `/ws` and only needs `VITE_SIGNALING_URL` if you want to override that.
 - WebRTC across restrictive NATs may require TURN servers in addition to STUN.
+- Short network drops no longer tear down a room immediately. The client persists its peer id locally, retries signaling reconnects, and the server keeps rooms alive for a 15 second grace window before finalizing a disconnect.
+- If the host reloads the shared room URL, the app now tries to reattach to the existing room instead of joining it as a guest.
 
 ## AWS Deployment
 
