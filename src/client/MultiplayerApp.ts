@@ -41,13 +41,13 @@ type RecoveryState = {
 };
 
 const PEER_ID_STORAGE_KEY = 'cs130-peer-id';
-const ROOM_DISCONNECT_GRACE_MS = 3500;
-const WEBSOCKET_KEEPALIVE_INTERVAL_MS = 1000;
-const WEBSOCKET_KEEPALIVE_TIMEOUT_MS = 3500;
+const ROOM_DISCONNECT_GRACE_MS = 10000;
+const WEBSOCKET_KEEPALIVE_INTERVAL_MS = 10000;
+const WEBSOCKET_KEEPALIVE_TIMEOUT_MS = 10000;
 const WEBSOCKET_CONNECTION_TIMEOUT_MS = 10000;
-const SIGNALING_RECONNECT_BASE_DELAY_MS = 1000;
-const SIGNALING_RECONNECT_MAX_DELAY_MS = 4000;
-const SIGNALING_RECONNECT_MAX_ATTEMPTS = 5;
+const SIGNALING_RECONNECT_BASE_DELAY_MS = 10000;
+const SIGNALING_RECONNECT_MAX_DELAY_MS = 10000;
+const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 
 function requireElement<T extends HTMLElement>(
@@ -63,7 +63,7 @@ function requireElement<T extends HTMLElement>(
 
 function readStoredPeerId(): string | null {
   try {
-    const stored = globalThis.localStorage?.getItem(PEER_ID_STORAGE_KEY);
+    const stored = globalThis.sessionStorage?.getItem(PEER_ID_STORAGE_KEY);
     return stored && stored.trim().length > 0 ? stored.trim() : null;
   } catch {
     return null;
@@ -72,7 +72,8 @@ function readStoredPeerId(): string | null {
 
 function storePeerId(peerId: string): void {
   try {
-    globalThis.localStorage?.setItem(PEER_ID_STORAGE_KEY, peerId);
+    globalThis.sessionStorage?.setItem(PEER_ID_STORAGE_KEY, peerId);
+    globalThis.localStorage?.removeItem(PEER_ID_STORAGE_KEY);
   } catch {
     // Ignore storage failures and continue with the in-memory peer id.
   }
