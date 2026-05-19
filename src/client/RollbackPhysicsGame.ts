@@ -38,6 +38,13 @@ type StepState = {
   ducking: boolean;
 };
 
+type CollisionRegion = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly world: RAPIER.World;
   private readonly level: LevelDefinition;
@@ -45,11 +52,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly previousInputFlags = new Map<string, number>();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
-  private readonly platformTiles: LevelTile[];
+  private readonly solidRegions: CollisionRegion[];
+  private readonly platformRegions: CollisionRegion[];
 
   constructor(level: LevelDefinition) {
     this.level = level;
-    this.platformTiles = level.tiles.filter((tile) => tile.kind === 'platform');
+    this.solidRegions = mergeCollisionRegions(level, 'solid');
+    this.platformRegions = mergeCollisionRegions(level, 'platform');
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
@@ -235,16 +244,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private createStaticLevel(): void {
-    for (const tile of this.level.tiles) {
-      if (tile.kind !== 'solid') {
-        continue;
-      }
-
+    for (const region of this.solidRegions) {
       const body = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(tile.x, tile.y),
+        RAPIER.RigidBodyDesc.fixed().setTranslation(region.x, region.y),
       );
       this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(tile.width * 0.5, tile.height * 0.5)
+        RAPIER.ColliderDesc.cuboid(region.width * 0.5, region.height * 0.5)
           .setFriction(1)
           .setRestitution(0),
         body,
@@ -352,7 +357,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       return false;
     }
 
-    for (const platform of this.platformTiles) {
+    for (const platform of this.platformRegions) {
       const left = platform.x - platform.width * 0.5;
       const right = platform.x + platform.width * 0.5;
       if (
@@ -372,7 +377,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private resolvePlatformContacts(previousStates: Map<string, StepState>): void {
-    if (this.platformTiles.length === 0) {
+    if (this.platformRegions.length === 0) {
       return;
     }
 
@@ -386,7 +391,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const currentFeetY = currentPosition.y - PLAYER_HALF_HEIGHT;
       const previousFeetY = previousState.y - PLAYER_HALF_HEIGHT;
 
-      for (const platform of this.platformTiles) {
+      for (const platform of this.platformRegions) {
         const left = platform.x - platform.width * 0.5;
         const right = platform.x + platform.width * 0.5;
         if (
@@ -463,4 +468,108 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
     return hash >>> 0;
   }
+}
+
+function mergeCollisionRegions(
+  level: LevelDefinition,
+  kind: LevelTile['kind'],
+): CollisionRegion[] {
+  const tilesByLayer = new Map<number, LevelTile[]>();
+
+  for (const tile of level.tiles) {
+    if (tile.kind !== kind) {
+      continue;
+    }
+
+    const layerTiles = tilesByLayer.get(tile.layerIndex);
+    if (layerTiles) {
+      layerTiles.push(tile);
+    } else {
+      tilesByLayer.set(tile.layerIndex, [tile]);
+    }
+  }
+
+  const regions: CollisionRegion[] = [];
+  for (const [, layerTiles] of tilesByLayer) {
+    regions.push(...mergeLayerTilesIntoRegions(layerTiles, level.width, level.height));
+  }
+
+  return regions;
+}
+
+function mergeLayerTilesIntoRegions(
+  tiles: LevelTile[],
+  levelWidth: number,
+  levelHeight: number,
+): CollisionRegion[] {
+  if (tiles.length === 0) {
+    return [];
+  }
+
+  const occupied = new Set<string>();
+  for (const tile of tiles) {
+    occupied.add(cellKey(tile.gridX, tile.gridY));
+  }
+
+  const consumed = new Set<string>();
+  const regions: CollisionRegion[] = [];
+
+  for (let row = 0; row < levelHeight; row += 1) {
+    for (let column = 0; column < levelWidth; ) {
+      const startKey = cellKey(column, row);
+      if (!occupied.has(startKey) || consumed.has(startKey)) {
+        column += 1;
+        continue;
+      }
+
+      let endColumn = column;
+      while (endColumn + 1 < levelWidth) {
+        const nextKey = cellKey(endColumn + 1, row);
+        if (!occupied.has(nextKey) || consumed.has(nextKey)) {
+          break;
+        }
+        endColumn += 1;
+      }
+
+      let regionHeight = 1;
+      while (row + regionHeight < levelHeight) {
+        let canExtend = true;
+        for (let scanColumn = column; scanColumn <= endColumn; scanColumn += 1) {
+          const nextRowKey = cellKey(scanColumn, row + regionHeight);
+          if (!occupied.has(nextRowKey) || consumed.has(nextRowKey)) {
+            canExtend = false;
+            break;
+          }
+        }
+
+        if (!canExtend) {
+          break;
+        }
+
+        regionHeight += 1;
+      }
+
+      for (let scanRow = row; scanRow < row + regionHeight; scanRow += 1) {
+        for (let scanColumn = column; scanColumn <= endColumn; scanColumn += 1) {
+          consumed.add(cellKey(scanColumn, scanRow));
+        }
+      }
+
+      const regionWidth = endColumn - column + 1;
+      regions.push({
+        x: column - levelWidth / 2 + regionWidth / 2,
+        y: levelHeight / 2 - row - regionHeight / 2,
+        width: regionWidth,
+        height: regionHeight,
+      });
+
+      column = endColumn + 1;
+    }
+  }
+
+  return regions;
+}
+
+function cellKey(column: number, row: number): string {
+  return `${column}:${row}`;
 }

@@ -130,6 +130,9 @@ export type LevelTileKind = 'solid' | 'platform' | 'decoration';
 export interface LevelTile {
   id: string;
   kind: LevelTileKind;
+  gridX: number;
+  gridY: number;
+  layerIndex: number;
   x: number;
   y: number;
   width: number;
@@ -265,6 +268,9 @@ function buildLevelDefinition(levelId: string, map: TiledMap): LevelDefinition {
         tiles.push({
           id: `${levelId}:layer-${layerIndex}:tile-${index}`,
           kind,
+          gridX: column,
+          gridY: row,
+          layerIndex,
           x: column - map.width / 2 + 0.5,
           y: map.height / 2 - row - 0.5,
           width: 1,
