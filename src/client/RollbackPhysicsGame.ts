@@ -2,6 +2,9 @@ import * as RAPIER from '@dimforge/rapier2d-compat';
 import type { Game, PlayerId } from 'rollback-netcode';
 import {
   ARENA_HALF_WIDTH,
+  DASH_COOLDOWN_TICKS,
+  DASH_DURATION_TICKS,
+  DASH_SPEED,
   FIXED_STEP_SECONDS,
   FLOOR_Y,
   GRAVITY_Y,
@@ -50,6 +53,8 @@ type PlayerBodyRecord = {
   facing: number;
   equippedWeapon: AttackKind;
   activeAttack: ActiveAttack | null;
+  dashTicksRemaining: number;
+  dashCooldownTicks: number;
 };
 
 const SPAWN_SLOTS = [-6, -2, 2, 6];
@@ -92,12 +97,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         facing,
         attackKind: attack?.kind ?? 0,
         attackTicksRemaining: attack?.ticksRemaining ?? 0,
+        dashTicksRemaining: playerRecord?.dashTicksRemaining ?? 0,
+        dashCooldownTicks: playerRecord?.dashCooldownTicks ?? 0,
       };
     });
 
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 4 * 4 + 1 + 1 + 1 + 1;
+      byteLength += 2 + record.idBytes.length + 4 * 4 + 1 + 1 + 1 + 1 + 1 + 1;
     }
 
     const buffer = new ArrayBuffer(byteLength);
@@ -131,6 +138,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 1;
       view.setUint8(offset, record.attackTicksRemaining);
       offset += 1;
+      view.setUint8(offset, record.dashTicksRemaining);
+      offset += 1;
+      view.setUint8(offset, record.dashCooldownTicks);
+      offset += 1;
     }
 
     return output;
@@ -154,6 +165,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         facing: number;
         attackKind: number;
         attackTicksRemaining: number;
+        dashTicksRemaining: number;
+        dashCooldownTicks: number;
       }
     >();
 
@@ -181,6 +194,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 1;
       const attackTicksRemaining = view.getUint8(offset);
       offset += 1;
+      const dashTicksRemaining = view.getUint8(offset);
+      offset += 1;
+      const dashCooldownTicks = view.getUint8(offset);
+      offset += 1;
 
       incoming.set(id, {
         x,
@@ -191,6 +208,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         facing,
         attackKind,
         attackTicksRemaining,
+        dashTicksRemaining,
+        dashCooldownTicks,
       });
     }
 
@@ -211,6 +230,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
               ticksRemaining: state.attackTicksRemaining,
             }
           : null;
+      record.dashTicksRemaining = state.dashTicksRemaining;
+      record.dashCooldownTicks = state.dashCooldownTicks;
       this.previousInputFlags.set(id, state.inputFlags);
     }
   }
@@ -218,6 +239,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   step(inputs: Map<PlayerId, Uint8Array>): void {
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
+    this.tickDashCooldowns();
 
     for (const id of ids) {
       const raw = inputs.get(id as PlayerId);
@@ -344,6 +366,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           facing: 1,
           equippedWeapon: AttackKind.DefaultPunch,
           activeAttack: null,
+          dashTicksRemaining: 0,
+          dashCooldownTicks: 0,
         });
         this.previousInputFlags.set(id, 0);
       }
@@ -394,6 +418,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const punchPressed =
       (inputFlags & InputBits.Punch) !== 0 &&
       (previousFlags & InputBits.Punch) === 0;
+    const dashPressed =
+      (inputFlags & InputBits.Dash) !== 0 &&
+      (previousFlags & InputBits.Dash) === 0;
+
+    if (record.dashTicksRemaining > 0) {
+      const dashDir = record.facing;
+      body.setLinvel({ x: dashDir * DASH_SPEED, y: velocity.y }, true);
+      record.dashTicksRemaining -= 1;
+      this.previousInputFlags.set(id, inputFlags);
+      return;
+    }
 
     if (jumpPressed && this.isGrounded(body)) {
       nextYVelocity = JUMP_SPEED;
@@ -407,8 +442,30 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       };
     }
 
+    if (
+      dashPressed &&
+      record.dashCooldownTicks === 0 &&
+      record.dashTicksRemaining === 0
+    ) {
+      const dashDir = horizontalDir !== 0 ? horizontalDir : record.facing;
+      record.facing = dashDir;
+      record.dashTicksRemaining = DASH_DURATION_TICKS;
+      record.dashCooldownTicks = DASH_COOLDOWN_TICKS;
+      body.setLinvel({ x: dashDir * DASH_SPEED, y: velocity.y }, true);
+      this.previousInputFlags.set(id, inputFlags);
+      return;
+    }
+
     body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
+  }
+
+  private tickDashCooldowns(): void {
+    for (const [, record] of this.players) {
+      if (record.dashCooldownTicks > 0) {
+        record.dashCooldownTicks -= 1;
+      }
+    }
   }
 
   private tickAttacks(): void {

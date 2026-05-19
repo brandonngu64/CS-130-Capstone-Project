@@ -29,6 +29,7 @@ type InputState = {
   right: boolean;
   jump: boolean;
   punch: boolean;
+  dash: boolean;
 };
 
 function requireElement<T extends HTMLElement>(
@@ -137,6 +138,7 @@ export class MultiplayerApp {
     right: false,
     jump: false,
     punch: false,
+    dash: false,
   };
 
   private readonly debugCounters: DebugCounters = {
@@ -175,15 +177,14 @@ export class MultiplayerApp {
     if (event.code === 'ArrowRight' || event.code === 'KeyD') {
       this.inputState.right = true;
     }
-    if (
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space'
-    ) {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
       this.inputState.jump = true;
     }
     if (event.code === 'KeyU') {
       this.inputState.punch = true;
+    }
+    if (event.code === 'Space') {
+      this.inputState.dash = true;
     }
 
     if (event.code === 'Escape' && this.isInRoom()) {
@@ -198,15 +199,14 @@ export class MultiplayerApp {
     if (event.code === 'ArrowRight' || event.code === 'KeyD') {
       this.inputState.right = false;
     }
-    if (
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space'
-    ) {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
       this.inputState.jump = false;
     }
     if (event.code === 'KeyU') {
       this.inputState.punch = false;
+    }
+    if (event.code === 'Space') {
+      this.inputState.dash = false;
     }
   };
 
