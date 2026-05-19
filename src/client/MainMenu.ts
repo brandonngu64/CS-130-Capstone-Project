@@ -20,6 +20,7 @@ export interface MainMenuCallbacks {
 export class MainMenu {
   private readonly element: HTMLElement;
   private readonly peerIdValue: HTMLElement;
+  private readonly mapIdInput: HTMLInputElement;
   private readonly roomInput: HTMLInputElement;
   private readonly hostInput: HTMLInputElement;
   private readonly signalInput: HTMLInputElement;
@@ -37,6 +38,7 @@ export class MainMenu {
     parent.appendChild(this.element);
 
     this.peerIdValue = getElement<HTMLElement>(this.element, '#mainMenuPeerId');
+    this.mapIdInput = getElement<HTMLInputElement>(this.element, '#mainMenuMapId');
     this.roomInput = getElement<HTMLInputElement>(
       this.element,
       '#mainMenuRoomInput',
@@ -82,6 +84,14 @@ export class MainMenu {
 
   setPeerId(id: string): void {
     this.peerIdValue.textContent = id;
+  }
+
+  setMapId(id: string): void {
+    this.mapIdInput.value = id.trim();
+  }
+
+  getMapId(): string {
+    return this.mapIdInput.value.trim();
   }
 
   getRoomId(): string {
@@ -138,12 +148,17 @@ export class MainMenu {
           <li><strong>A</strong> / <strong>&larr;</strong> &mdash; Move left</li>
           <li><strong>D</strong> / <strong>&rarr;</strong> &mdash; Move right</li>
           <li><strong>W</strong> / <strong>&uarr;</strong> / <strong>Space</strong> &mdash; Jump</li>
+          <li><strong>S</strong> / <strong>&darr;</strong> &mdash; Duck / drop through platforms</li>
         </ul>
 
         <div class="overlay-grid">
           <label>
             <span>Your Peer ID</span>
             <output id="mainMenuPeerId"></output>
+          </label>
+          <label>
+            <span>Map ID</span>
+            <input id="mainMenuMapId" type="text" placeholder="testMap1" />
           </label>
           <label>
             <span>Room ID</span>

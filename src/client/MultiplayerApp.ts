@@ -17,7 +17,7 @@ import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { encodeInput } from './input';
-
+import { DEFAULT_LEVEL_ID, loadLevelDefinition, type LevelDefinition } from './levels';
 type DebugCounters = {
   rollbackCount: number;
   rollbackTicks: number;
@@ -29,11 +29,13 @@ type InputState = {
   left: boolean;
   right: boolean;
   jump: boolean;
+  duck: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
 
 type RecoveryState = {
+  mapId: string;
   roomId: string;
   hostPeerId: string;
   mode: RecoveryMode;
@@ -88,8 +90,8 @@ function readStoredRecoveryState(): RecoveryState | null {
 
     const parsed = JSON.parse(raw) as Partial<RecoveryState>;
     if (
-      parsed.mode !== 'host' &&
-      parsed.mode !== 'join' ||
+      (parsed.mode !== 'host' && parsed.mode !== 'join') ||
+      (parsed.mapId !== undefined && typeof parsed.mapId !== 'string') ||
       typeof parsed.roomId !== 'string' ||
       typeof parsed.hostPeerId !== 'string' ||
       typeof parsed.signalUrl !== 'string'
@@ -99,6 +101,10 @@ function readStoredRecoveryState(): RecoveryState | null {
 
     return {
       mode: parsed.mode,
+      mapId:
+        typeof parsed.mapId === 'string' && parsed.mapId.trim().length > 0
+          ? parsed.mapId.trim()
+          : DEFAULT_LEVEL_ID,
       roomId: parsed.roomId,
       hostPeerId: parsed.hostPeerId,
       signalUrl: parsed.signalUrl,
@@ -215,6 +221,8 @@ export class MultiplayerApp {
   private transport: WebRTCTransport | null = null;
   private session: Session | null = null;
   private game: RollbackPhysicsGame | null = null;
+  private currentLevel: LevelDefinition | null = null;
+  private currentLevelId = DEFAULT_LEVEL_ID;
 
   private roomId: string | null = null;
   private hostPeerId: string | null = null;
@@ -225,6 +233,7 @@ export class MultiplayerApp {
     left: false,
     right: false,
     jump: false,
+    duck: false,
   };
 
   private readonly debugCounters: DebugCounters = {
@@ -257,7 +266,9 @@ export class MultiplayerApp {
       event.code === 'KeyD' ||
       event.code === 'ArrowUp' ||
       event.code === 'KeyW' ||
-      event.code === 'Space'
+      event.code === 'Space' ||
+      event.code === 'ArrowDown' ||
+      event.code === 'KeyS'
     ) {
       event.preventDefault();
     }
@@ -274,6 +285,10 @@ export class MultiplayerApp {
       event.code === 'Space'
     ) {
       this.inputState.jump = true;
+    }
+
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      this.inputState.duck = true;
     }
 
     if (event.code === 'Escape' && this.isInRoom()) {
@@ -294,6 +309,10 @@ export class MultiplayerApp {
       event.code === 'Space'
     ) {
       this.inputState.jump = false;
+    }
+
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      this.inputState.duck = false;
     }
   };
 
@@ -369,6 +388,7 @@ export class MultiplayerApp {
     this.mainMenu.setPeerId(this.peerId);
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
     this.settingsMenu.setPeerId(this.peerId);
+    this.applyLevelSelection(DEFAULT_LEVEL_ID);
 
     this.leaveButton.addEventListener('click', () => {
       this.leaveRoom();
@@ -386,10 +406,17 @@ export class MultiplayerApp {
   }
 
   async start(): Promise<void> {
+    const currentUrl = new URL(window.location.href);
+    const storedRecovery = readStoredRecoveryState();
+    const initialLevelId = this.resolveInitialLevelId(currentUrl, storedRecovery);
+    this.applyLevelSelection(initialLevelId);
+
     await RAPIER.init();
 
     if (!this.game) {
-      this.game = new RollbackPhysicsGame();
+      this.game = new RollbackPhysicsGame(
+        this.currentLevel ?? loadLevelDefinition(initialLevelId),
+      );
     }
 
     this.setStatus('Ready. Host a room or join from a shared URL.');
@@ -398,22 +425,27 @@ export class MultiplayerApp {
     this.lastFrameTimeMs = performance.now();
     this.animationFrameId = requestAnimationFrame(this.onFrame);
 
-    const currentUrl = new URL(window.location.href);
-    const storedRecovery = readStoredRecoveryState();
-
     let roomId = currentUrl.searchParams.get('room');
     let hostPeer = currentUrl.searchParams.get('host');
     let signalUrl = currentUrl.searchParams.get('signal');
+    let mapId = currentUrl.searchParams.get('map');
 
     if (!roomId && storedRecovery) {
       roomId = storedRecovery.roomId;
       hostPeer = storedRecovery.hostPeerId;
       signalUrl = storedRecovery.signalUrl;
+      mapId = storedRecovery.mapId;
     }
 
     if (roomId && !hostPeer && storedRecovery?.roomId === roomId) {
       hostPeer = storedRecovery.hostPeerId;
     }
+
+    if (!mapId) {
+      mapId = storedRecovery?.mapId ?? this.currentLevelId;
+    }
+
+    this.applyLevelSelection(mapId);
 
     if (roomId) {
       this.mainMenu.setRoomId(roomId);
@@ -421,6 +453,7 @@ export class MultiplayerApp {
     if (hostPeer) {
       this.mainMenu.setHostPeerId(hostPeer);
     }
+    this.mainMenu.setMapId(this.currentLevelId);
     if (signalUrl) {
       this.mainMenu.setSignalUrl(signalUrl);
     }
@@ -510,6 +543,7 @@ export class MultiplayerApp {
     this.updateUiState();
 
     try {
+      this.applyLevelSelection(this.mainMenu.getMapId() || this.currentLevelId);
       await this.prepareNetworking();
       if (!this.session || !this.signaling) {
         throw new Error('Network stack is not ready');
@@ -548,6 +582,7 @@ export class MultiplayerApp {
       this.setRoomState(roomId, this.peerId);
       this.recoveryState = {
         mode: 'host',
+        mapId: this.currentLevelId,
         roomId,
         hostPeerId: this.peerId,
         signalUrl: this.getCurrentSignalUrl(),
@@ -590,6 +625,7 @@ export class MultiplayerApp {
     this.updateUiState();
 
     try {
+      this.applyLevelSelection(this.mainMenu.getMapId() || this.currentLevelId);
       await this.prepareNetworking();
       if (!this.session || !this.signaling) {
         throw new Error('Network stack is not ready');
@@ -625,6 +661,7 @@ export class MultiplayerApp {
       this.setRoomState(roomId, resolvedHostPeer);
       this.recoveryState = {
         mode: 'join',
+        mapId: this.currentLevelId,
         roomId,
         hostPeerId: resolvedHostPeer,
         signalUrl: this.getCurrentSignalUrl(),
@@ -911,6 +948,36 @@ export class MultiplayerApp {
     }
   }
 
+  private resolveInitialLevelId(
+    currentUrl: URL,
+    storedRecovery: RecoveryState | null,
+  ): string {
+    const urlLevelId = currentUrl.searchParams.get('map');
+    if (urlLevelId) {
+      return urlLevelId;
+    }
+
+    if (storedRecovery?.mapId) {
+      return storedRecovery.mapId;
+    }
+
+    return DEFAULT_LEVEL_ID;
+  }
+
+  private applyLevelSelection(levelId: string): void {
+    const nextLevel = loadLevelDefinition(levelId || DEFAULT_LEVEL_ID);
+    this.currentLevel = nextLevel;
+    this.currentLevelId = nextLevel.id;
+
+    this.mainMenu.setMapId(this.currentLevelId);
+    this.renderer.setLevel(nextLevel);
+
+    if (this.game) {
+      this.game.reset();
+      this.game = new RollbackPhysicsGame(nextLevel);
+    }
+  }
+
   private getCurrentSignalUrl(): string {
     return this.mainMenu.getSignalUrl() || this.defaultSignalUrl();
   }
@@ -999,6 +1066,7 @@ export class MultiplayerApp {
         this.setRoomState(recoveryState.roomId, this.peerId);
         this.recoveryState = {
           ...recoveryState,
+          mapId: this.currentLevelId,
           hostPeerId: this.peerId,
         };
         storeRecoveryState(this.recoveryState);
@@ -1030,6 +1098,7 @@ export class MultiplayerApp {
         this.setRoomState(recoveryState.roomId, resolvedHostPeer);
         this.recoveryState = {
           ...recoveryState,
+          mapId: this.currentLevelId,
           hostPeerId: resolvedHostPeer,
         };
         storeRecoveryState(this.recoveryState);
@@ -1154,6 +1223,7 @@ export class MultiplayerApp {
     const current = new URL(window.location.href);
     current.searchParams.set('room', roomId);
     current.searchParams.set('host', hostPeerId);
+    current.searchParams.set('map', this.currentLevelId);
 
     const signalUrl = this.mainMenu.getSignalUrl();
     if (signalUrl && signalUrl !== this.defaultSignalUrl()) {

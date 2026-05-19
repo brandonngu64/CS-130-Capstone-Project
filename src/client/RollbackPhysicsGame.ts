@@ -1,19 +1,17 @@
 import * as RAPIER from '@dimforge/rapier2d-compat';
 import type { Game, PlayerId } from 'rollback-netcode';
 import {
-  ARENA_HALF_WIDTH,
   FIXED_STEP_SECONDS,
-  FLOOR_Y,
   GRAVITY_Y,
   JUMP_SPEED,
   MOVE_SPEED,
-  PLATFORMS,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
   PLAYER_SPAWN_Y,
 } from './constants';
 import { InputBits, decodeInputBits } from './input';
+import type { LevelDefinition, LevelSpawnPoint, LevelTile } from './levels';
 
 export interface PlayerRenderState {
   id: string;
@@ -33,16 +31,25 @@ type PlayerBodyRecord = {
   color: number;
 };
 
-const SPAWN_SLOTS = [-10, -4, 4, 10];
+type StepState = {
+  x: number;
+  y: number;
+  velocityY: number;
+  ducking: boolean;
+};
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly world: RAPIER.World;
+  private readonly level: LevelDefinition;
   private readonly players = new Map<string, PlayerBodyRecord>();
   private readonly previousInputFlags = new Map<string, number>();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
+  private readonly platformTiles: LevelTile[];
 
-  constructor() {
+  constructor(level: LevelDefinition) {
+    this.level = level;
+    this.platformTiles = level.tiles.filter((tile) => tile.kind === 'platform');
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
@@ -162,12 +169,30 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
 
+    const beforeStepStates = new Map<string, StepState>();
+
     for (const id of ids) {
       const raw = inputs.get(id as PlayerId);
-      this.applyInput(id, decodeInputBits(raw));
+      const inputFlags = decodeInputBits(raw);
+      this.applyInput(id, inputFlags);
+
+      const record = this.players.get(id);
+      if (!record) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const velocity = record.body.linvel();
+      beforeStepStates.set(id, {
+        x: position.x,
+        y: position.y,
+        velocityY: velocity.y,
+        ducking: (inputFlags & InputBits.Duck) !== 0,
+      });
     }
 
     this.world.step();
+    this.resolvePlatformContacts(beforeStepStates);
     this.enforceHorizontalBounds();
   }
 
@@ -210,33 +235,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private createStaticLevel(): void {
-    const ground = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y - 0.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(ARENA_HALF_WIDTH + 2, 0.5).setFriction(1),
-      ground,
-    );
+    for (const tile of this.level.tiles) {
+      if (tile.kind !== 'solid') {
+        continue;
+      }
 
-    const leftWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-(ARENA_HALF_WIDTH + 0.5), 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), leftWall);
-
-    const rightWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
-
-    for (const platform of PLATFORMS) {
       const body = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(
-          platform.centerX,
-          platform.centerY,
-        ),
+        RAPIER.RigidBodyDesc.fixed().setTranslation(tile.x, tile.y),
       );
       this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(platform.halfWidth, platform.halfHeight)
+        RAPIER.ColliderDesc.cuboid(tile.width * 0.5, tile.height * 0.5)
           .setFriction(1)
           .setRestitution(0),
         body,
@@ -255,10 +263,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
     }
 
-    for (const id of sortedIds) {
+    for (let index = 0; index < sortedIds.length; index += 1) {
+      const id = sortedIds[index];
       if (!this.players.has(id)) {
+        const spawn = this.spawnForPlayer(id, index);
         this.players.set(id, {
-          body: this.createPlayerBody(this.spawnXForPlayer(id)),
+          body: this.createPlayerBody(spawn),
           color: this.colorForPlayer(id),
         });
         this.previousInputFlags.set(id, 0);
@@ -266,10 +276,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
   }
 
-  private createPlayerBody(spawnX: number): RAPIER.RigidBody {
+  private createPlayerBody(spawn: LevelSpawnPoint): RAPIER.RigidBody {
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(spawnX, PLAYER_SPAWN_Y)
+        .setTranslation(spawn.x, spawn.y)
         .lockRotations()
         .setLinearDamping(0)
         .setAngularDamping(0)
@@ -295,6 +305,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const body = record.body;
     const velocity = body.linvel();
     const previousFlags = this.previousInputFlags.get(id) ?? 0;
+    const ducking = (inputFlags & InputBits.Duck) !== 0;
 
     const horizontalDir =
       (inputFlags & InputBits.Left ? -1 : 0) +
@@ -305,7 +316,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       (inputFlags & InputBits.Jump) !== 0 &&
       (previousFlags & InputBits.Jump) === 0;
 
-    if (jumpPressed && this.isGrounded(body)) {
+    if (jumpPressed && this.isGrounded(body, ducking)) {
       nextYVelocity = JUMP_SPEED;
     }
 
@@ -313,17 +324,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousInputFlags.set(id, inputFlags);
   }
 
-  private isGrounded(body: RAPIER.RigidBody): boolean {
+  private isGrounded(body: RAPIER.RigidBody, ducking: boolean): boolean {
     if (body.linvel().y > 0.2) {
       return false;
     }
 
     const position = body.translation();
     const feetY = position.y - PLAYER_HALF_HEIGHT;
-
-    if (feetY <= FLOOR_Y + 0.06) {
-      return true;
-    }
 
     // Cast a short ray straight down from just below each foot to detect
     // platforms underneath the player.
@@ -341,12 +348,71 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
     }
 
+    if (ducking) {
+      return false;
+    }
+
+    for (const platform of this.platformTiles) {
+      const left = platform.x - platform.width * 0.5;
+      const right = platform.x + platform.width * 0.5;
+      if (
+        position.x + PLAYER_HALF_WIDTH <= left ||
+        position.x - PLAYER_HALF_WIDTH >= right
+      ) {
+        continue;
+      }
+
+      const top = platform.y + platform.height * 0.5;
+      if (feetY <= top + 0.06 && feetY >= top - 0.12) {
+        return true;
+      }
+    }
+
     return false;
   }
 
+  private resolvePlatformContacts(previousStates: Map<string, StepState>): void {
+    if (this.platformTiles.length === 0) {
+      return;
+    }
+
+    for (const [id, record] of this.players) {
+      const previousState = previousStates.get(id);
+      if (!previousState || previousState.ducking || previousState.velocityY > 0.05) {
+        continue;
+      }
+
+      const currentPosition = record.body.translation();
+      const currentFeetY = currentPosition.y - PLAYER_HALF_HEIGHT;
+      const previousFeetY = previousState.y - PLAYER_HALF_HEIGHT;
+
+      for (const platform of this.platformTiles) {
+        const left = platform.x - platform.width * 0.5;
+        const right = platform.x + platform.width * 0.5;
+        if (
+          currentPosition.x + PLAYER_HALF_WIDTH <= left ||
+          currentPosition.x - PLAYER_HALF_WIDTH >= right
+        ) {
+          continue;
+        }
+
+        const top = platform.y + platform.height * 0.5;
+        const crossedTop = previousFeetY >= top - 0.08 && currentFeetY <= top + 0.08;
+        if (!crossedTop) {
+          continue;
+        }
+
+        const velocity = record.body.linvel();
+        record.body.setTranslation({ x: currentPosition.x, y: top + PLAYER_HALF_HEIGHT }, true);
+        record.body.setLinvel({ x: velocity.x, y: 0 }, true);
+        break;
+      }
+    }
+  }
+
   private enforceHorizontalBounds(): void {
-    const minX = -ARENA_HALF_WIDTH + PLAYER_HALF_WIDTH;
-    const maxX = ARENA_HALF_WIDTH - PLAYER_HALF_WIDTH;
+    const minX = this.level.bounds.minX + PLAYER_HALF_WIDTH;
+    const maxX = this.level.bounds.maxX - PLAYER_HALF_WIDTH;
 
     for (const [, record] of this.players) {
       const position = record.body.translation();
@@ -359,8 +425,26 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
   }
 
-  private spawnXForPlayer(playerId: string): number {
-    return SPAWN_SLOTS[this.hashString(playerId) % SPAWN_SLOTS.length];
+  private spawnForPlayer(playerId: string, index: number): LevelSpawnPoint {
+    if (this.level.playerSpawns.length > 0) {
+      const spawn = this.level.playerSpawns[index % this.level.playerSpawns.length];
+      return {
+        id: spawn.id,
+        x: spawn.x,
+        y: spawn.y,
+        visible: spawn.visible,
+      };
+    }
+
+    const spawnSlots = [-0.3, -0.1, 0.1, 0.3];
+    const slot = spawnSlots[this.hashString(playerId) % spawnSlots.length];
+
+    return {
+      id: this.hashString(playerId),
+      x: slot * this.level.width,
+      y: PLAYER_SPAWN_Y,
+      visible: false,
+    };
   }
 
   private colorForPlayer(playerId: string): number {

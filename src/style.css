@@ -450,3 +450,15 @@ h2 {
   }
 }
 
+.ssb4-health-text-style {
+  font-size: 50px;
+  font-family: "DFGGothic-UB";
+  color: rgb(0, 0, 0);
+  line-height: 1.2;
+  text-align: left;
+  text-shadow: 2.5px 4.33px 0px rgba(28, 28, 28, 0.004);
+  position: absolute;
+  left: 168.094px;
+  top: 379.015px;
+  z-index: 7;
+}

@@ -362,12 +362,20 @@ Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependen
 
 # Deployment on AWS
 
-- `sudo apt update`
-- `sudo apt install nodejs npm -y`
+- Update AWS and install node
+  - `sudo apt update`
+  - `sudo apt install nodejs npm -y`
 - importing repo via ssh key on remote:
-  `git clone git@github.com:username/repository-name.git`
-
-  - `git clone git@github.com:brandonngu64/CS-130-Capstone-Project.git`
+  - `git clone git@github.com:username/repository-name.git`
+    - `git clone git@github.com:brandonngu64/CS-130-Capstone-Project.git`
+- Upgrading Node JS to ver 20
+  - `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash`
+  - `source ~/.bashrc`
+  - `nvm install 20`
+  - `nvm use 20`
+  - `nvm alias default 20`
+  - Verify with: `node -v` 
+    - `npm -v` 
 
   ### Git Command Notes CLI
 - `git branch -a` show all branches
@@ -376,3 +384,4 @@ Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependen
 ### Launching
 
 - On AWS run
+  - `npm run dev:all`
