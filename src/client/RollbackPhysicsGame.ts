@@ -13,7 +13,17 @@ import {
   PLAYER_HALF_WIDTH,
   PLAYER_SPAWN_Y,
 } from './constants';
+import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import { InputBits, decodeInputBits } from './input';
+
+export interface AttackRenderState {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: number;
+}
 
 export interface PlayerRenderState {
   id: string;
@@ -26,11 +36,20 @@ export interface PlayerRenderState {
 
 export interface RenderState {
   players: PlayerRenderState[];
+  attacks: AttackRenderState[];
 }
+
+type ActiveAttack = {
+  kind: AttackKind;
+  ticksRemaining: number;
+};
 
 type PlayerBodyRecord = {
   body: RAPIER.RigidBody;
   color: number;
+  facing: number;
+  equippedWeapon: AttackKind;
+  activeAttack: ActiveAttack | null;
 };
 
 const SPAWN_SLOTS = [-6, -2, 2, 6];
@@ -60,6 +79,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const translation = record.body.translation();
       const velocity = record.body.linvel();
       const inputFlags = this.previousInputFlags.get(id) ?? 0;
+      const playerRecord = this.players.get(id);
+      const facing = playerRecord?.facing ?? 1;
+      const attack = playerRecord?.activeAttack;
       return {
         idBytes,
         x: translation.x,
@@ -67,12 +89,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         vx: velocity.x,
         vy: velocity.y,
         inputFlags,
+        facing,
+        attackKind: attack?.kind ?? 0,
+        attackTicksRemaining: attack?.ticksRemaining ?? 0,
       };
     });
 
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 4 * 4 + 1;
+      byteLength += 2 + record.idBytes.length + 4 * 4 + 1 + 1 + 1 + 1;
     }
 
     const buffer = new ArrayBuffer(byteLength);
@@ -100,6 +125,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 4;
       view.setUint8(offset, record.inputFlags & 0xff);
       offset += 1;
+      view.setInt8(offset, record.facing < 0 ? -1 : 1);
+      offset += 1;
+      view.setUint8(offset, record.attackKind);
+      offset += 1;
+      view.setUint8(offset, record.attackTicksRemaining);
+      offset += 1;
     }
 
     return output;
@@ -120,6 +151,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         vx: number;
         vy: number;
         inputFlags: number;
+        facing: number;
+        attackKind: number;
+        attackTicksRemaining: number;
       }
     >();
 
@@ -141,8 +175,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 4;
       const inputFlags = view.getUint8(offset);
       offset += 1;
+      const facing = view.getInt8(offset);
+      offset += 1;
+      const attackKind = view.getUint8(offset);
+      offset += 1;
+      const attackTicksRemaining = view.getUint8(offset);
+      offset += 1;
 
-      incoming.set(id, { x, y, vx, vy, inputFlags });
+      incoming.set(id, {
+        x,
+        y,
+        vx,
+        vy,
+        inputFlags,
+        facing,
+        attackKind,
+        attackTicksRemaining,
+      });
     }
 
     this.syncPlayers(Array.from(incoming.keys()).sort());
@@ -154,6 +203,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
       record.body.setTranslation({ x: state.x, y: state.y }, true);
       record.body.setLinvel({ x: state.vx, y: state.vy }, true);
+      record.facing = state.facing < 0 ? -1 : 1;
+      record.activeAttack =
+        state.attackKind > 0 && state.attackTicksRemaining > 0
+          ? {
+              kind: state.attackKind as AttackKind,
+              ticksRemaining: state.attackTicksRemaining,
+            }
+          : null;
       this.previousInputFlags.set(id, state.inputFlags);
     }
   }
@@ -167,6 +224,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       this.applyInput(id, decodeInputBits(raw));
     }
 
+    this.tickAttacks();
     this.world.step();
     this.enforceHorizontalBounds();
   }
@@ -198,7 +256,30 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         };
       });
 
-    return { players };
+    const attacks: AttackRenderState[] = [];
+
+    for (const [id, record] of this.players) {
+      if (!record.activeAttack) {
+        continue;
+      }
+
+      const definition = getAttackDefinition(record.activeAttack.kind);
+      const position = record.body.translation();
+      const center = this.attackCenter(position.x, position.y, record.facing, definition);
+
+      attacks.push({
+        id: `${id}-attack`,
+        x: center.x,
+        y: center.y,
+        width: definition.hitboxHalfWidth * 2,
+        height: definition.hitboxHalfHeight * 2,
+        color: definition.spriteColor,
+      });
+    }
+
+    attacks.sort((left, right) => left.id.localeCompare(right.id));
+
+    return { players, attacks };
   }
 
   reset(): void {
@@ -260,6 +341,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.players.set(id, {
           body: this.createPlayerBody(this.spawnXForPlayer(id)),
           color: this.colorForPlayer(id),
+          facing: 1,
+          equippedWeapon: AttackKind.DefaultPunch,
+          activeAttack: null,
         });
         this.previousInputFlags.set(id, 0);
       }
@@ -299,17 +383,57 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       (inputFlags & InputBits.Left ? -1 : 0) +
       (inputFlags & InputBits.Right ? 1 : 0);
 
+    if (horizontalDir !== 0) {
+      record.facing = horizontalDir;
+    }
+
     let nextYVelocity = velocity.y;
     const jumpPressed =
       (inputFlags & InputBits.Jump) !== 0 &&
       (previousFlags & InputBits.Jump) === 0;
+    const punchPressed =
+      (inputFlags & InputBits.Punch) !== 0 &&
+      (previousFlags & InputBits.Punch) === 0;
 
     if (jumpPressed && this.isGrounded(body)) {
       nextYVelocity = JUMP_SPEED;
     }
 
+    if (punchPressed && record.activeAttack === null) {
+      const definition = getEquippedAttack(record.equippedWeapon);
+      record.activeAttack = {
+        kind: definition.kind,
+        ticksRemaining: definition.durationTicks,
+      };
+    }
+
     body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
+  }
+
+  private tickAttacks(): void {
+    for (const [, record] of this.players) {
+      if (!record.activeAttack) {
+        continue;
+      }
+
+      record.activeAttack.ticksRemaining -= 1;
+      if (record.activeAttack.ticksRemaining <= 0) {
+        record.activeAttack = null;
+      }
+    }
+  }
+
+  private attackCenter(
+    playerX: number,
+    playerY: number,
+    facing: number,
+    definition: ReturnType<typeof getEquippedAttack>,
+  ): { x: number; y: number } {
+    return {
+      x: playerX + definition.centerOffsetX * facing,
+      y: playerY + definition.centerOffsetY,
+    };
   }
 
   private isGrounded(body: RAPIER.RigidBody): boolean {
