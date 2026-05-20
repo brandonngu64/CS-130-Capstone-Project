@@ -362,17 +362,32 @@ Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependen
 
 # Deployment on AWS
 
+### Setup Node v20
 - `sudo apt update`
 - `sudo apt install nodejs npm -y`
+   ### Upgrade Node Version on AWS:
+   - `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash`
+   - `source ~/.bashrc`
+   - `nvm install 20`
+   - `nvm use 20`
+   - `nvm alias default 20`
+
+### Import Github Repo
 - importing repo via ssh key on remote:
   `git clone git@github.com:username/repository-name.git`
-
   - `git clone git@github.com:brandonngu64/CS-130-Capstone-Project.git`
-
-  ### Git Command Notes CLI
-- `git branch -a` show all branches
-- `git switch <BRANCH NAME>`
+  ##### Git Command Notes CLI
+  - `git branch -a` show all branches
+  - `git switch <BRANCH NAME>`
 
 ### Launching
+- `npm install`
+- `npm run dev:all`
+  - starts up server and client: `server`
 
-- On AWS run
+
+# Deployment on Local
+- can use npm or pnpm
+- get node version 20 for vite support
+- `npm install`
+- `npm run dev:all`
