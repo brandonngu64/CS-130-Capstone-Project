@@ -391,3 +391,24 @@ Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependen
 - get node version 20 for vite support
 - `npm install`
 - `npm run dev:all`
+
+
+# Making Maps
+- Download Tiled from: https://thorbjorn.itch.io/tiled
+- Tilemap:
+  - Stored in `./src/assets/tilemap`
+  - Contains json that has properties of tiles and the image the the tiles map to
+- Maps:
+  - Stored in `./src/assets/maps`
+  - Contains json for assembling the tiles from the tileset into a map
+  - Specifications:
+    - There are layers of tilemaps that MUST obey specific naming conventions
+    - `level_layer` contains collidable objects.
+      - `int collision` can be 2 full collision, 1 platform collision, 0 no collision
+        - These values are listed in the tile map
+    - `background` contains tile to be rendered behind the player and `level_layer`
+    - `foreground` contains tiles to be rendered above the player and other layers
+    - Do not add more or less layers than this in the map file
+      - they must have these specific names
+- Other than that learn the software and you should be good to go
+- When exporting export to JSON
