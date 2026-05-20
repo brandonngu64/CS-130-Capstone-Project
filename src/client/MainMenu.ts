@@ -1,3 +1,5 @@
+import type { MapManifest } from './tiledMap';
+
 function getElement<T extends HTMLElement>(
   parent: ParentNode,
   selector: string,
@@ -15,11 +17,13 @@ export interface MainMenuCallbacks {
   onHost(): void;
   onJoin(): void;
   onCopyShareUrl(): void;
+  onMapChange(mapId: string): void;
 }
 
 export class MainMenu {
   private readonly element: HTMLElement;
   private readonly peerIdValue: HTMLElement;
+  private readonly mapSelect: HTMLSelectElement;
   private readonly roomInput: HTMLInputElement;
   private readonly hostInput: HTMLInputElement;
   private readonly signalInput: HTMLInputElement;
@@ -37,6 +41,7 @@ export class MainMenu {
     parent.appendChild(this.element);
 
     this.peerIdValue = getElement<HTMLElement>(this.element, '#mainMenuPeerId');
+    this.mapSelect = getElement<HTMLSelectElement>(this.element, '#mainMenuMapSelect');
     this.roomInput = getElement<HTMLInputElement>(
       this.element,
       '#mainMenuRoomInput',
@@ -70,6 +75,9 @@ export class MainMenu {
     this.hostButton.addEventListener('click', () => callbacks.onHost());
     this.joinButton.addEventListener('click', () => callbacks.onJoin());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
+    this.mapSelect.addEventListener('change', () => {
+      callbacks.onMapChange(this.mapSelect.value);
+    });
   }
 
   show(): void {
@@ -82,6 +90,19 @@ export class MainMenu {
 
   setPeerId(id: string): void {
     this.peerIdValue.textContent = id;
+  }
+
+  setMaps(maps: MapManifest[], selectedMapId: string): void {
+    this.mapSelect.innerHTML = '';
+
+    for (const map of maps) {
+      const option = document.createElement('option');
+      option.value = map.id;
+      option.textContent = map.name;
+      this.mapSelect.appendChild(option);
+    }
+
+    this.mapSelect.value = selectedMapId;
   }
 
   getRoomId(): string {
@@ -123,6 +144,10 @@ export class MainMenu {
     this.joinButton.disabled = busy;
   }
 
+  setMapSelectionEnabled(enabled: boolean): void {
+    this.mapSelect.disabled = !enabled;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -138,12 +163,17 @@ export class MainMenu {
           <li><strong>A</strong> / <strong>&larr;</strong> &mdash; Move left</li>
           <li><strong>D</strong> / <strong>&rarr;</strong> &mdash; Move right</li>
           <li><strong>W</strong> / <strong>&uarr;</strong> / <strong>Space</strong> &mdash; Jump</li>
+          <li><strong>S</strong> / <strong>&darr;</strong> &mdash; Duck / drop through platforms</li>
         </ul>
 
         <div class="overlay-grid">
           <label>
             <span>Your Peer ID</span>
             <output id="mainMenuPeerId"></output>
+          </label>
+          <label>
+            <span>Map</span>
+            <select id="mainMenuMapSelect"></select>
           </label>
           <label>
             <span>Room ID</span>

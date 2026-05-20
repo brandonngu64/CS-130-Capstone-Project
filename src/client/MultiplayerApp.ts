@@ -17,6 +17,7 @@ import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { encodeInput } from './input';
+import { AVAILABLE_MAPS, DEFAULT_MAP_ID, loadMapDefinition } from './tiledMap';
 
 type DebugCounters = {
   rollbackCount: number;
@@ -29,6 +30,7 @@ type InputState = {
   left: boolean;
   right: boolean;
   jump: boolean;
+  duck: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
@@ -191,7 +193,11 @@ class RepeatLastInputPredictor implements InputPredictor<Uint8Array> {
 
 export class MultiplayerApp {
   private readonly root: HTMLElement;
-  private readonly renderer: GameRenderer;
+  private readonly availableMaps = [...AVAILABLE_MAPS];
+  private selectedMapId = DEFAULT_MAP_ID;
+  private mapDefinition = loadMapDefinition(this.selectedMapId);
+  private readonly viewport: HTMLElement;
+  private renderer: GameRenderer;
 
   private readonly peerId: string;
   private readonly mainMenu: MainMenu;
@@ -225,6 +231,7 @@ export class MultiplayerApp {
     left: false,
     right: false,
     jump: false,
+    duck: false,
   };
 
   private readonly debugCounters: DebugCounters = {
@@ -257,7 +264,9 @@ export class MultiplayerApp {
       event.code === 'KeyD' ||
       event.code === 'ArrowUp' ||
       event.code === 'KeyW' ||
-      event.code === 'Space'
+      event.code === 'Space' ||
+      event.code === 'ArrowDown' ||
+      event.code === 'KeyS'
     ) {
       event.preventDefault();
     }
@@ -274,6 +283,9 @@ export class MultiplayerApp {
       event.code === 'Space'
     ) {
       this.inputState.jump = true;
+    }
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      this.inputState.duck = true;
     }
 
     if (event.code === 'Escape' && this.isInRoom()) {
@@ -295,6 +307,9 @@ export class MultiplayerApp {
     ) {
       this.inputState.jump = false;
     }
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      this.inputState.duck = false;
+    }
   };
 
   constructor(root: HTMLElement) {
@@ -303,8 +318,8 @@ export class MultiplayerApp {
 
     this.root.innerHTML = this.renderAppTemplate();
 
-    const viewport = requireElement<HTMLElement>(this.root, '#viewport');
-    this.renderer = new GameRenderer(viewport);
+    this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
@@ -341,7 +356,7 @@ export class MultiplayerApp {
     );
     this.rttValue = requireElement<HTMLElement>(this.root, '#rttValue');
 
-    this.mainMenu = new MainMenu(viewport, {
+    this.mainMenu = new MainMenu(this.viewport, {
       onHost: () => {
         void this.handleHostRoom();
       },
@@ -351,9 +366,14 @@ export class MultiplayerApp {
       onCopyShareUrl: () => {
         void this.copyShareLink();
       },
+      onMapChange: (mapId: string) => {
+        this.setSelectedMap(mapId);
+      },
     });
 
-    this.settingsMenu = new SettingsMenu(viewport, {
+    this.mainMenu.setMaps(this.availableMaps, this.selectedMapId);
+
+    this.settingsMenu = new SettingsMenu(this.viewport, {
       onLeave: () => {
         this.leaveRoom();
       },
@@ -389,7 +409,7 @@ export class MultiplayerApp {
     await RAPIER.init();
 
     if (!this.game) {
-      this.game = new RollbackPhysicsGame();
+      this.game = new RollbackPhysicsGame(this.mapDefinition);
     }
 
     this.setStatus('Ready. Host a room or join from a shared URL.');
@@ -1231,6 +1251,7 @@ export class MultiplayerApp {
     }
 
     this.mainMenu.setBusy(this.connecting);
+    this.mainMenu.setMapSelectionEnabled(!inActiveSession);
 
     this.gameHud.dataset.visible = inActiveSession ? 'true' : 'false';
     this.leaveButton.disabled = !inRoom || this.connecting;
@@ -1242,6 +1263,29 @@ export class MultiplayerApp {
       if (!inActiveSession) {
         this.settingsOpen = false;
       }
+    }
+  }
+
+  private setSelectedMap(mapId: string): void {
+    if (this.isInRoom() || this.connecting) {
+      return;
+    }
+
+    const normalizedMapId = mapId.trim();
+    if (!normalizedMapId || normalizedMapId === this.selectedMapId) {
+      return;
+    }
+
+    this.selectedMapId = normalizedMapId;
+    this.mapDefinition = loadMapDefinition(this.selectedMapId);
+    this.mainMenu.setMaps(this.availableMaps, this.selectedMapId);
+
+    this.renderer.dispose();
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+
+    if (this.game) {
+      this.game.reset();
+      this.game = new RollbackPhysicsGame(this.mapDefinition);
     }
   }
 

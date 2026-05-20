@@ -1,15 +1,13 @@
 import * as THREE from 'three';
-import {
-  ARENA_HALF_WIDTH,
-  FLOOR_Y,
-  PLATFORM_COLOR,
-  PLATFORMS,
-} from './constants';
 import type { RenderState } from './RollbackPhysicsGame';
+import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
-const BASE_VIEW_BOTTOM = -5;
-const BASE_VIEW_TOP = 7;
-const MIN_VIEW_WIDTH = ARENA_HALF_WIDTH * 2 + 4;
+const CAMERA_MARGIN = 1.5;
+
+type CachedTileMaterial = {
+  material: THREE.MeshBasicMaterial;
+  texture: THREE.Texture;
+};
 
 export class GameRenderer {
   private readonly scene: THREE.Scene;
@@ -17,17 +15,23 @@ export class GameRenderer {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly container: HTMLElement;
   private readonly playerMeshes = new Map<string, THREE.Mesh>();
+  private readonly mapMeshes: THREE.Mesh[] = [];
+  private readonly materialCache = new Map<string, CachedTileMaterial>();
+  private readonly backdropMesh: THREE.Mesh;
+  private readonly mapBounds: TiledMapDefinition['bounds'];
+  private readonly textureLoader = new THREE.TextureLoader();
   private readonly resizeObserver: ResizeObserver;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, map: TiledMapDefinition) {
     this.container = container;
+    this.mapBounds = map.bounds;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x131924);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
-    this.camera.position.set(0, 4, 12);
-    this.camera.lookAt(0, 4, 0);
+    this.camera.position.set(0, 0, 12);
+    this.camera.lookAt(0, 0, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -35,7 +39,8 @@ export class GameRenderer {
     this.container.appendChild(this.renderer.domElement);
 
     this.setupLighting();
-    this.setupArenaMeshes();
+    this.backdropMesh = this.setupBackdrop(map);
+    this.setupMapMeshes(map);
 
     this.resizeObserver = new ResizeObserver(() => {
       this.resize();
@@ -84,6 +89,23 @@ export class GameRenderer {
     }
     this.playerMeshes.clear();
 
+    this.scene.remove(this.backdropMesh);
+    this.backdropMesh.geometry.dispose();
+    (this.backdropMesh.material as THREE.MeshBasicMaterial).dispose();
+
+    for (const mesh of this.mapMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.MeshBasicMaterial).dispose();
+    }
+    this.mapMeshes.length = 0;
+
+    for (const cachedMaterial of this.materialCache.values()) {
+      cachedMaterial.material.dispose();
+      cachedMaterial.texture.dispose();
+    }
+    this.materialCache.clear();
+
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
   }
@@ -101,58 +123,71 @@ export class GameRenderer {
     this.scene.add(fillLight);
   }
 
-  private setupArenaMeshes(): void {
-    const groundGeometry = new THREE.BoxGeometry(ARENA_HALF_WIDTH * 2 + 4, 1, 1);
-    const groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2f3a3f,
-      roughness: 0.85,
-      metalness: 0.1,
-    });
-    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-    ground.position.set(0, FLOOR_Y - 0.5, -0.4);
-    this.scene.add(ground);
-
-    const wallMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1f2830,
-      roughness: 0.9,
-      metalness: 0.05,
-    });
-
-    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(1, 16, 1), wallMaterial);
-    leftWall.position.set(-(ARENA_HALF_WIDTH + 0.5), 5.5, -0.6);
-    this.scene.add(leftWall);
-
-    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(1, 16, 1), wallMaterial);
-    rightWall.position.set(ARENA_HALF_WIDTH + 0.5, 5.5, -0.6);
-    this.scene.add(rightWall);
-
-    const backdrop = new THREE.Mesh(
-      new THREE.PlaneGeometry(ARENA_HALF_WIDTH * 2 + 8, 18),
-      new THREE.MeshBasicMaterial({ color: 0x0f141f }),
-    );
-    backdrop.position.set(0, 6, -1.2);
+  private setupBackdrop(map: TiledMapDefinition): THREE.Mesh {
+    const geometry = new THREE.PlaneGeometry(map.bounds.width + 12, map.bounds.height + 12);
+    const material = new THREE.MeshBasicMaterial({ color: 0x0f141f });
+    const backdrop = new THREE.Mesh(geometry, material);
+    backdrop.position.set(0, 0, -2);
     this.scene.add(backdrop);
+    return backdrop;
+  }
 
-    const platformMaterial = new THREE.MeshStandardMaterial({
-      color: PLATFORM_COLOR,
-      roughness: 0.6,
-      metalness: 0.15,
+  private setupMapMeshes(map: TiledMapDefinition): void {
+    for (const layer of map.layers) {
+      if (!layer.renderVisible) {
+        continue;
+      }
+
+      for (const tile of layer.tiles) {
+        if (!tile.renderVisible) {
+          continue;
+        }
+
+        const mesh = new THREE.Mesh(this.createTileGeometry(tile.uv), this.getTileMaterial(tile));
+        mesh.position.set(tile.x, tile.y, tile.z);
+        mesh.renderOrder = tile.layerIndex;
+        this.scene.add(mesh);
+        this.mapMeshes.push(mesh);
+      }
+    }
+  }
+
+  private createTileGeometry(uv: UvRect): THREE.PlaneGeometry {
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    geometry.setAttribute(
+      'uv',
+      new THREE.Float32BufferAttribute(
+        [uv.u0, uv.v1, uv.u1, uv.v1, uv.u0, uv.v0, uv.u1, uv.v0],
+        2,
+      ),
+    );
+    return geometry;
+  }
+
+  private getTileMaterial(tile: MapTileInstance): THREE.MeshBasicMaterial {
+    const tintColor = tile.tintColor ?? 0xffffff;
+    const cacheKey = `${tile.atlasUrl}|${tintColor}|${tile.opacity}`;
+    const cachedMaterial = this.materialCache.get(cacheKey);
+    if (cachedMaterial) {
+      return cachedMaterial.material;
+    }
+
+    const texture = this.textureLoader.load(tile.atlasUrl);
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+
+    const material = new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      color: tintColor,
+      map: texture,
+      opacity: tile.opacity,
+      side: THREE.DoubleSide,
+      transparent: true,
     });
 
-    // Match the player's z range (centered at 0.35, depth 0.7) so the camera
-    // tilt doesn't cause the player to visually clip into the platform top.
-    for (const platform of PLATFORMS) {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          platform.halfWidth * 2,
-          platform.halfHeight * 2,
-          0.7,
-        ),
-        platformMaterial,
-      );
-      mesh.position.set(platform.centerX, platform.centerY, 0.35);
-      this.scene.add(mesh);
-    }
+    this.materialCache.set(cacheKey, { material, texture });
+    return material;
   }
 
   private createPlayerMesh(
@@ -179,23 +214,15 @@ export class GameRenderer {
     }
 
     const aspect = width / height;
-    let viewTop = BASE_VIEW_TOP;
-    let viewBottom = BASE_VIEW_BOTTOM;
-    let viewWidth = (viewTop - viewBottom) * aspect;
-
-    if (viewWidth < MIN_VIEW_WIDTH) {
-      const requiredHeight = MIN_VIEW_WIDTH / aspect;
-      const currentHeight = viewTop - viewBottom;
-      const expand = (requiredHeight - currentHeight) * 0.5;
-      viewTop += expand;
-      viewBottom -= expand;
-      viewWidth = MIN_VIEW_WIDTH;
-    }
+    const contentWidth = this.mapBounds.width + CAMERA_MARGIN * 2;
+    const contentHeight = this.mapBounds.height + CAMERA_MARGIN * 2;
+    const viewHeight = Math.max(contentHeight, contentWidth / aspect);
+    const viewWidth = viewHeight * aspect;
 
     this.camera.left = -viewWidth * 0.5;
     this.camera.right = viewWidth * 0.5;
-    this.camera.top = viewTop;
-    this.camera.bottom = viewBottom;
+    this.camera.top = viewHeight * 0.5;
+    this.camera.bottom = -viewHeight * 0.5;
     this.camera.updateProjectionMatrix();
 
     this.renderer.setSize(width, height);
