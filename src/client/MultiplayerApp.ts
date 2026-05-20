@@ -12,6 +12,7 @@ import {
 } from 'rollback-netcode';
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
+import { HealthBarOverlay } from './HealthBarOverlay';
 import { MainMenu, type StatusTone } from './MainMenu';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
@@ -200,6 +201,7 @@ export class MultiplayerApp {
   private readonly statusBadge: HTMLElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly settingsToggleButton: HTMLButtonElement;
+  private readonly healthBarOverlay: HealthBarOverlay;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -315,6 +317,7 @@ export class MultiplayerApp {
       this.root,
       '#settingsToggleButton',
     );
+    this.healthBarOverlay = new HealthBarOverlay(this.gameHud);
 
     this.tickValue = requireElement<HTMLElement>(this.root, '#tickValue');
     this.confirmedTickValue = requireElement<HTMLElement>(
@@ -447,6 +450,7 @@ export class MultiplayerApp {
     this.cleanupNetworking();
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
+    this.healthBarOverlay.dispose();
     this.renderer.dispose();
 
     if (this.game) {
@@ -466,7 +470,16 @@ export class MultiplayerApp {
     }
 
     if (this.game) {
-      this.renderer.render(this.game.getRenderState(), this.peerId);
+      const renderState = this.game.getRenderState();
+      this.renderer.render(renderState, this.peerId);
+      const localPlayer = renderState.players.find(
+        (player) => player.id === this.peerId,
+      );
+      if (localPlayer) {
+        this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
+      } else {
+        this.healthBarOverlay.hide();
+      }
     }
 
     this.refreshDebugValues();

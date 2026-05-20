@@ -9,6 +9,7 @@ export const FLOOR_Y = 0;
 export const PLAYER_HALF_WIDTH = 0.45;
 export const PLAYER_HALF_HEIGHT = 0.9;
 export const PLAYER_SPAWN_Y = 6;
+export const PLAYER_MAX_HEALTH = 100;
 
 export const MOVE_SPEED = 7;
 export const JUMP_SPEED = 15;
