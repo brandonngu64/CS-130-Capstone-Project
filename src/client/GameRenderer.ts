@@ -4,6 +4,8 @@ import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
 const CAMERA_MARGIN = 1.5;
 
+export type CameraMode = 'follow' | 'free' | 'action';
+
 type CachedTileMaterial = {
   material: THREE.MeshBasicMaterial;
   texture: THREE.Texture;
@@ -19,12 +21,18 @@ export class GameRenderer {
   private readonly materialCache = new Map<string, CachedTileMaterial>();
   private readonly backdropMesh: THREE.Mesh;
   private readonly mapBounds: TiledMapDefinition['bounds'];
+  private readonly baseViewHeight: number;
+  private baseViewWidth = 0;
+  private readonly freeCameraTarget = new THREE.Vector2();
+  private readonly cameraTarget = new THREE.Vector2();
+  private cameraMode: CameraMode = 'follow';
   private readonly textureLoader = new THREE.TextureLoader();
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement, map: TiledMapDefinition) {
     this.container = container;
     this.mapBounds = map.bounds;
+    this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x131924);
@@ -33,8 +41,9 @@ export class GameRenderer {
     this.camera.position.set(0, 0, 12);
     this.camera.lookAt(0, 0, 0);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.domElement.style.imageRendering = 'pixelated';
 
     this.container.appendChild(this.renderer.domElement);
 
@@ -76,7 +85,29 @@ export class GameRenderer {
       }
     }
 
+    this.updateCamera(state, localPlayerId);
     this.renderer.render(this.scene, this.camera);
+  }
+
+  setCameraMode(mode: CameraMode): void {
+    if (this.cameraMode === mode) {
+      return;
+    }
+
+    this.cameraMode = mode;
+    if (mode === 'free') {
+      this.freeCameraTarget.set(this.camera.position.x, this.camera.position.y);
+    }
+  }
+
+  panFreeCamera(deltaX: number, deltaY: number): void {
+    if (this.cameraMode !== 'free') {
+      return;
+    }
+
+    this.freeCameraTarget.x += deltaX;
+    this.freeCameraTarget.y += deltaY;
+    this.clampFreeCameraTarget();
   }
 
   dispose(): void {
@@ -173,21 +204,189 @@ export class GameRenderer {
     }
 
     const texture = this.textureLoader.load(tile.atlasUrl);
-    texture.magFilter = THREE.NearestFilter;
-    texture.minFilter = THREE.NearestFilter;
-    texture.generateMipmaps = false;
+    this.configurePixelTexture(texture);
 
     const material = new THREE.MeshBasicMaterial({
       alphaTest: 0.001,
       color: tintColor,
       map: texture,
       opacity: tile.opacity,
+      depthWrite: false,
       side: THREE.DoubleSide,
       transparent: true,
     });
 
     this.materialCache.set(cacheKey, { material, texture });
     return material;
+  }
+
+  private configurePixelTexture(texture: THREE.Texture): void {
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+
+    texture.onUpdate = () => {
+      const webglTexture = this.getWebGLTexture(texture);
+      if (!webglTexture) {
+        return;
+      }
+
+      const gl = this.renderer.getContext();
+      gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    };
+  }
+
+  private getWebGLTexture(texture: THREE.Texture): WebGLTexture | null {
+    const rendererWithInternals = this.renderer as unknown as {
+      properties?: {
+        get(value: THREE.Texture): { __webglTexture?: WebGLTexture } | undefined;
+      };
+    };
+
+    return rendererWithInternals.properties?.get(texture)?.__webglTexture ?? null;
+  }
+
+  private updateCamera(state: RenderState, localPlayerId: string): void {
+    const target = this.getCameraTarget(state, localPlayerId);
+    const targetZoom = this.getTargetZoom(state);
+
+    const followLerp = this.cameraMode === 'action' ? 0.12 : 0.18;
+    const zoomLerp = this.cameraMode === 'action' ? 0.08 : 0.12;
+
+    this.camera.position.x = THREE.MathUtils.lerp(
+      this.camera.position.x,
+      target.x,
+      followLerp,
+    );
+    this.camera.position.y = THREE.MathUtils.lerp(
+      this.camera.position.y,
+      target.y,
+      followLerp,
+    );
+    this.camera.position.z = 12;
+    this.camera.zoom = THREE.MathUtils.lerp(this.camera.zoom, targetZoom, zoomLerp);
+    this.snapCameraToPixelGrid();
+    this.camera.updateProjectionMatrix();
+  }
+
+  private getCameraTarget(state: RenderState, localPlayerId: string): THREE.Vector2 {
+    if (this.cameraMode === 'free') {
+      return this.cameraTarget.set(this.freeCameraTarget.x, this.freeCameraTarget.y);
+    }
+
+    if (state.players.length === 0) {
+      return this.cameraTarget.set(0, 0);
+    }
+
+    if (this.cameraMode === 'follow') {
+      const localPlayer = state.players.find((player) => player.id === localPlayerId);
+      if (localPlayer) {
+        return this.cameraTarget.set(localPlayer.x, localPlayer.y);
+      }
+    }
+
+    const bounds = this.getPlayerBounds(state.players);
+    if (!bounds) {
+      return this.cameraTarget.set(0, 0);
+    }
+
+    return this.cameraTarget.set(bounds.centerX, bounds.centerY);
+  }
+
+  private getTargetZoom(state: RenderState): number {
+    if (this.cameraMode !== 'action') {
+      return 1;
+    }
+
+    const bounds = this.getPlayerBounds(state.players);
+    if (!bounds) {
+      return 1;
+    }
+
+    const fitWidth = Math.max(bounds.width + CAMERA_MARGIN * 2, 6);
+    const fitHeight = Math.max(bounds.height + CAMERA_MARGIN * 2, 4);
+    const zoom = Math.min(
+      this.baseViewWidth / fitWidth,
+      this.baseViewHeight / fitHeight,
+    );
+
+    if (!Number.isFinite(zoom) || zoom <= 0) {
+      return 1;
+    }
+
+    return THREE.MathUtils.clamp(zoom, 0.75, 2.5);
+  }
+
+  private getPlayerBounds(
+    players: RenderState['players'],
+  ): { centerX: number; centerY: number; height: number; width: number } | null {
+    if (players.length === 0) {
+      return null;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const player of players) {
+      minX = Math.min(minX, player.x - player.width * 0.5);
+      maxX = Math.max(maxX, player.x + player.width * 0.5);
+      minY = Math.min(minY, player.y - player.height * 0.5);
+      maxY = Math.max(maxY, player.y + player.height * 0.5);
+    }
+
+    return {
+      centerX: (minX + maxX) * 0.5,
+      centerY: (minY + maxY) * 0.5,
+      height: maxY - minY,
+      width: maxX - minX,
+    };
+  }
+
+  private clampFreeCameraTarget(): void {
+    const minX = this.mapBounds.minX;
+    const maxX = this.mapBounds.maxX;
+    const minY = this.mapBounds.minY;
+    const maxY = this.mapBounds.maxY;
+
+    this.freeCameraTarget.x = Math.min(Math.max(this.freeCameraTarget.x, minX), maxX);
+    this.freeCameraTarget.y = Math.min(Math.max(this.freeCameraTarget.y, minY), maxY);
+  }
+
+  private computeBaseViewHeight(mapHeight: number): number {
+    return Math.min(Math.max(mapHeight * 0.65, 8), 10);
+  }
+
+  private snapCameraToPixelGrid(): void {
+    const canvasWidth = this.renderer.domElement.width;
+    const canvasHeight = this.renderer.domElement.height;
+
+    if (canvasWidth === 0 || canvasHeight === 0) {
+      return;
+    }
+
+    const visibleWidth = (this.camera.right - this.camera.left) / this.camera.zoom;
+    const visibleHeight = (this.camera.top - this.camera.bottom) / this.camera.zoom;
+    const worldUnitsPerPixelX = visibleWidth / canvasWidth;
+    const worldUnitsPerPixelY = visibleHeight / canvasHeight;
+
+    if (worldUnitsPerPixelX > 0) {
+      this.camera.position.x =
+        Math.round(this.camera.position.x / worldUnitsPerPixelX) * worldUnitsPerPixelX;
+    }
+
+    if (worldUnitsPerPixelY > 0) {
+      this.camera.position.y =
+        Math.round(this.camera.position.y / worldUnitsPerPixelY) * worldUnitsPerPixelY;
+    }
   }
 
   private createPlayerMesh(
@@ -214,10 +413,9 @@ export class GameRenderer {
     }
 
     const aspect = width / height;
-    const contentWidth = this.mapBounds.width + CAMERA_MARGIN * 2;
-    const contentHeight = this.mapBounds.height + CAMERA_MARGIN * 2;
-    const viewHeight = Math.max(contentHeight, contentWidth / aspect);
+    const viewHeight = this.baseViewHeight;
     const viewWidth = viewHeight * aspect;
+    this.baseViewWidth = viewWidth;
 
     this.camera.left = -viewWidth * 0.5;
     this.camera.right = viewWidth * 0.5;

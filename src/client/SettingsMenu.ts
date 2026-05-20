@@ -1,3 +1,4 @@
+import type { MapManifest } from './tiledMap';
 import type { StatusTone } from './MainMenu';
 
 function getElement<T extends HTMLElement>(
@@ -22,6 +23,8 @@ export class SettingsMenu {
   private readonly peerIdValue: HTMLElement;
   private readonly roomIdValue: HTMLElement;
   private readonly hostPeerIdValue: HTMLElement;
+  private readonly mapNameValue: HTMLElement;
+  private readonly mapSizeValue: HTMLElement;
   private readonly shareUrlInput: HTMLInputElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly copyButton: HTMLButtonElement;
@@ -47,6 +50,8 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuHostId',
     );
+    this.mapNameValue = getElement<HTMLElement>(this.element, '#settingsMenuMapName');
+    this.mapSizeValue = getElement<HTMLElement>(this.element, '#settingsMenuMapSize');
     this.shareUrlInput = getElement<HTMLInputElement>(
       this.element,
       '#settingsMenuShareUrl',
@@ -103,6 +108,11 @@ export class SettingsMenu {
     this.hostPeerIdValue.textContent = id || '-';
   }
 
+  setMap(map: MapManifest): void {
+    this.mapNameValue.textContent = map.name || '-';
+    this.mapSizeValue.textContent = `${map.width} x ${map.height}`;
+  }
+
   setShareUrl(url: string): void {
     this.shareUrlInput.value = url;
     this.copyButton.disabled = !url;
@@ -135,6 +145,14 @@ export class SettingsMenu {
           <label>
             <span>Host Peer ID</span>
             <output id="settingsMenuHostId">-</output>
+          </label>
+          <label>
+            <span>Selected Map</span>
+            <output id="settingsMenuMapName">-</output>
+          </label>
+          <label>
+            <span>Map Size</span>
+            <output id="settingsMenuMapSize">-</output>
           </label>
         </div>
 

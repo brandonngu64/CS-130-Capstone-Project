@@ -14,7 +14,9 @@ type RawTiledTileset = {
   image: string;
   imageheight: number;
   imagewidth: number;
+  margin?: number;
   name: string;
+  spacing?: number;
   tilecount: number;
   tileheight: number;
   tiles?: RawTiledTilesetTile[];
@@ -75,8 +77,10 @@ export interface ResolvedTileset {
   imageWidth: number;
   imageHeight: number;
   lastGid: number;
+  margin: number;
   name: string;
   rows: number;
+  spacing: number;
   tileCount: number;
   tileHeight: number;
   tileWidth: number;
@@ -239,14 +243,16 @@ function parseCollisionValue(value: unknown): TileCollision {
   return 0;
 }
 
-function createUvRect(localId: number, columns: number, rows: number): UvRect {
-  const column = localId % columns;
-  const row = Math.floor(localId / columns);
+function createUvRect(tileset: ResolvedTileset, localId: number): UvRect {
+  const column = localId % tileset.columns;
+  const row = Math.floor(localId / tileset.columns);
+  const pixelX = tileset.margin + column * (tileset.tileWidth + tileset.spacing);
+  const pixelY = tileset.margin + row * (tileset.tileHeight + tileset.spacing);
 
-  const u0 = column / columns;
-  const u1 = (column + 1) / columns;
-  const v1 = 1 - row / rows;
-  const v0 = 1 - (row + 1) / rows;
+  const u0 = (pixelX + 0.5) / tileset.imageWidth;
+  const u1 = (pixelX + tileset.tileWidth - 0.5) / tileset.imageWidth;
+  const v1 = 1 - (pixelY + 0.5) / tileset.imageHeight;
+  const v0 = 1 - (pixelY + tileset.tileHeight - 0.5) / tileset.imageHeight;
 
   return { u0, u1, v0, v1 };
 }
@@ -295,8 +301,10 @@ function resolveTilesetRecord(ref: RawTiledMapTilesetRef): ResolvedTileset {
     imageHeight: rawTileset.imageheight,
     imageWidth: rawTileset.imagewidth,
     lastGid: ref.firstgid + rawTileset.tilecount - 1,
+    margin: rawTileset.margin ?? 0,
     name: rawTileset.name,
     rows,
+    spacing: rawTileset.spacing ?? 0,
     tileCount: rawTileset.tilecount,
     tileHeight: rawTileset.tileheight,
     tileWidth: rawTileset.tilewidth,
@@ -320,7 +328,7 @@ function buildTileMetadata(tileset: ResolvedTileset, localId: number): TileMetad
     renderVisible:
       visible && specialRole !== 'player_spawn' && specialRole !== 'item_spawn',
     specialRole,
-    uv: createUvRect(localId, tileset.columns, tileset.rows),
+    uv: createUvRect(tileset, localId),
     visible,
     zLayerPos,
   };
