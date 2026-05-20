@@ -2,12 +2,16 @@ export enum InputBits {
   Left = 1 << 0,
   Right = 1 << 1,
   Jump = 1 << 2,
+  Punch = 1 << 3,
+  Dash = 1 << 4,
 }
 
 export interface InputState {
   left: boolean;
   right: boolean;
   jump: boolean;
+  punch: boolean;
+  dash: boolean;
 }
 
 export function encodeInput(state: InputState): Uint8Array {
@@ -20,6 +24,12 @@ export function encodeInput(state: InputState): Uint8Array {
   }
   if (state.jump) {
     bits |= InputBits.Jump;
+  }
+  if (state.punch) {
+    bits |= InputBits.Punch;
+  }
+  if (state.dash) {
+    bits |= InputBits.Dash;
   }
   return new Uint8Array([bits]);
 }

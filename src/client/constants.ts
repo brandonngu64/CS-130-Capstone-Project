@@ -12,6 +12,9 @@ export const PLAYER_SPAWN_Y = 6;
 
 export const MOVE_SPEED = 7;
 export const JUMP_SPEED = 15;
+export const DASH_SPEED = 18;
+export const DASH_DURATION_TICKS = 8;
+export const DASH_COOLDOWN_TICKS = 45;
 export const GRAVITY_Y = -28;
 
 export const PLAYER_COLOR_PALETTE = [

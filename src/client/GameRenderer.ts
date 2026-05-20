@@ -17,6 +17,7 @@ export class GameRenderer {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly container: HTMLElement;
   private readonly playerMeshes = new Map<string, THREE.Mesh>();
+  private readonly attackMeshes = new Map<string, THREE.Mesh>();
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement) {
@@ -71,6 +72,28 @@ export class GameRenderer {
       }
     }
 
+    const activeAttackIds = new Set(state.attacks.map((attack) => attack.id));
+
+    for (const attack of state.attacks) {
+      let mesh = this.attackMeshes.get(attack.id);
+      if (!mesh) {
+        mesh = this.createAttackMesh(attack.width, attack.height, attack.color);
+        this.scene.add(mesh);
+        this.attackMeshes.set(attack.id, mesh);
+      }
+
+      mesh.position.set(attack.x, attack.y, 0.5);
+    }
+
+    for (const [id, mesh] of this.attackMeshes) {
+      if (!activeAttackIds.has(id)) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.attackMeshes.delete(id);
+      }
+    }
+
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -83,6 +106,13 @@ export class GameRenderer {
       (mesh.material as THREE.MeshStandardMaterial).dispose();
     }
     this.playerMeshes.clear();
+
+    for (const [, mesh] of this.attackMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    }
+    this.attackMeshes.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -165,6 +195,21 @@ export class GameRenderer {
       color,
       roughness: 0.45,
       metalness: 0.1,
+    });
+
+    return new THREE.Mesh(geometry, material);
+  }
+
+  private createAttackMesh(
+    width: number,
+    height: number,
+    color: number,
+  ): THREE.Mesh {
+    const geometry = new THREE.BoxGeometry(width, height, 0.5);
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.35,
+      metalness: 0.05,
     });
 
     return new THREE.Mesh(geometry, material);
