@@ -38,3 +38,9 @@ export const PLATFORMS: readonly PlatformDefinition[] = [
 ];
 
 export const PLATFORM_COLOR = 0x6c7a89;
+
+export const DEFAULT_STOCKS = 3;
+export const RESPAWN_DELAY_TICKS = 120;
+export const BLAST_ZONE_BOTTOM = FLOOR_Y - 4;
+export const BLAST_ZONE_SIDE_MARGIN = 1.5;
+export const OFF_STAGE_Y = -50;

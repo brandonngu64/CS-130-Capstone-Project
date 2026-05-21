@@ -14,6 +14,7 @@ import {
   PLAYER_SPAWN_Y,
 } from './constants';
 import { readArenaSideWallsEnabled } from './arenaOptions';
+import { GameStateManager } from './GameStateManager';
 import { InputBits, decodeInputBits } from './input';
 
 export interface PlayerRenderState {
@@ -23,6 +24,9 @@ export interface PlayerRenderState {
   width: number;
   height: number;
   color: number;
+  stocks: number;
+  eliminated: boolean;
+  respawning: boolean;
 }
 
 export interface RenderState {
@@ -40,6 +44,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly world: RAPIER.World;
   private readonly players = new Map<string, PlayerBodyRecord>();
   private readonly previousInputFlags = new Map<string, number>();
+  private readonly matchState = new GameStateManager();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
 
@@ -90,9 +95,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       };
     });
 
+    const matchBytes = this.matchState.matchBytesPerPlayer();
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 4 * 4 + 1;
+      byteLength += 2 + record.idBytes.length + 4 * 4 + 1 + matchBytes;
     }
 
     const buffer = new ArrayBuffer(byteLength);
@@ -120,6 +126,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 4;
       view.setUint8(offset, record.inputFlags & 0xff);
       offset += 1;
+
+      const id = this.textDecoder.decode(record.idBytes);
+      offset = this.matchState.writePlayer(view, offset, id);
     }
 
     return output;
@@ -162,6 +171,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const inputFlags = view.getUint8(offset);
       offset += 1;
 
+      offset = this.matchState.readPlayer(view, offset, id);
+
       incoming.set(id, { x, y, vx, vy, inputFlags });
     }
 
@@ -183,6 +194,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.syncPlayers(ids);
 
     for (const id of ids) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
       const raw = inputs.get(id as PlayerId);
       this.applyInput(id, decodeInputBits(raw));
     }
@@ -191,6 +205,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     if (this.sideWallsEnabled) {
       this.enforceHorizontalBounds();
     }
+    this.matchState.checkBlastZone(this.players, (playerId) =>
+      this.spawnXForPlayer(playerId),
+    );
+    this.matchState.tickRespawn(this.players, (playerId) =>
+      this.spawnXForPlayer(playerId),
+    );
   }
 
   hash(): number {
@@ -210,6 +230,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
+        const match = this.matchState.getRenderInfo(id);
         return {
           id,
           x: position.x,
@@ -217,6 +238,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
+          stocks: match.stocks,
+          eliminated: match.eliminated,
+          respawning: match.respawning,
         };
       });
 
@@ -229,6 +253,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
     this.players.clear();
     this.previousInputFlags.clear();
+    this.matchState.clear();
   }
 
   private createStaticLevel(): void {
@@ -308,6 +333,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.world.removeRigidBody(record.body);
         this.players.delete(id);
         this.previousInputFlags.delete(id);
+        this.matchState.removePlayer(id);
       }
     }
 
@@ -318,6 +344,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           color: this.colorForPlayer(id),
         });
         this.previousInputFlags.set(id, 0);
+        this.matchState.ensurePlayer(id);
       }
     }
   }
