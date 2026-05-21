@@ -10,6 +10,10 @@ import {
   type SignalMessage,
   type TickResult,
 } from 'rollback-netcode';
+import {
+  readArenaSideWallsEnabled,
+  writeArenaSideWallsEnabled,
+} from './arenaOptions';
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
 import { MainMenu, type StatusTone } from './MainMenu';
@@ -351,6 +355,9 @@ export class MultiplayerApp {
       onCopyShareUrl: () => {
         void this.copyShareLink();
       },
+      onArenaSideWallsChange: (enabled) => {
+        this.applyArenaSideWalls(enabled);
+      },
     });
 
     this.settingsMenu = new SettingsMenu(viewport, {
@@ -364,7 +371,12 @@ export class MultiplayerApp {
         this.settingsOpen = false;
         this.updateUiState();
       },
+      onArenaSideWallsChange: (enabled) => {
+        this.applyArenaSideWalls(enabled);
+      },
     });
+
+    this.syncArenaSideWallsUi(readArenaSideWallsEnabled());
 
     this.mainMenu.setPeerId(this.peerId);
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
@@ -1218,6 +1230,24 @@ export class MultiplayerApp {
     }
     this.settingsOpen = !this.settingsOpen;
     this.updateUiState();
+  }
+
+  private syncArenaSideWallsUi(enabled: boolean): void {
+    this.mainMenu.setArenaSideWallsEnabled(enabled);
+    this.settingsMenu.setArenaSideWallsEnabled(enabled);
+  }
+
+  private applyArenaSideWalls(enabled: boolean): void {
+    writeArenaSideWallsEnabled(enabled);
+    this.syncArenaSideWallsUi(enabled);
+    this.game?.setSideWallsEnabled(enabled);
+    this.renderer.setSideWallsEnabled(enabled);
+
+    const wallLabel = enabled ? 'on' : 'off';
+    const syncHint = this.isInRoom()
+      ? ' All players in the room should use the same setting to avoid desync.'
+      : '';
+    this.setStatus(`Arena side walls ${wallLabel}.${syncHint}`);
   }
 
   private updateUiState(): void {

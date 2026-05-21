@@ -13,6 +13,7 @@ import {
   PLAYER_HALF_WIDTH,
   PLAYER_SPAWN_Y,
 } from './constants';
+import { readArenaSideWallsEnabled } from './arenaOptions';
 import { InputBits, decodeInputBits } from './input';
 
 export interface PlayerRenderState {
@@ -42,10 +43,29 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
 
-  constructor() {
+  private sideWallsEnabled: boolean;
+  private groundBody!: RAPIER.RigidBody;
+  private leftWallBody: RAPIER.RigidBody | null = null;
+  private rightWallBody: RAPIER.RigidBody | null = null;
+
+  constructor(sideWallsEnabled = readArenaSideWallsEnabled()) {
+    this.sideWallsEnabled = sideWallsEnabled;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
+  }
+
+  areSideWallsEnabled(): boolean {
+    return this.sideWallsEnabled;
+  }
+
+  setSideWallsEnabled(enabled: boolean): void {
+    if (enabled === this.sideWallsEnabled) {
+      return;
+    }
+    this.sideWallsEnabled = enabled;
+    this.rebuildGroundCollider();
+    this.syncSideWallColliders();
   }
 
   serialize(): Uint8Array {
@@ -168,7 +188,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
 
     this.world.step();
-    this.enforceHorizontalBounds();
+    if (this.sideWallsEnabled) {
+      this.enforceHorizontalBounds();
+    }
   }
 
   hash(): number {
@@ -210,23 +232,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private createStaticLevel(): void {
-    const ground = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y - 0.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(ARENA_HALF_WIDTH + 2, 0.5).setFriction(1),
-      ground,
-    );
-
-    const leftWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-(ARENA_HALF_WIDTH + 0.5), 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), leftWall);
-
-    const rightWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
+    this.rebuildGroundCollider();
+    this.syncSideWallColliders();
 
     for (const platform of PLATFORMS) {
       const body = this.world.createRigidBody(
@@ -242,6 +249,55 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         body,
       );
     }
+  }
+
+  private floorHalfWidth(): number {
+    return this.sideWallsEnabled ? ARENA_HALF_WIDTH + 2 : ARENA_HALF_WIDTH;
+  }
+
+  private rebuildGroundCollider(): void {
+    if (this.groundBody) {
+      this.world.removeRigidBody(this.groundBody);
+    }
+
+    this.groundBody = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y - 0.5),
+    );
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(this.floorHalfWidth(), 0.5).setFriction(1),
+      this.groundBody,
+    );
+  }
+
+  private syncSideWallColliders(): void {
+    if (this.leftWallBody) {
+      this.world.removeRigidBody(this.leftWallBody);
+      this.leftWallBody = null;
+    }
+    if (this.rightWallBody) {
+      this.world.removeRigidBody(this.rightWallBody);
+      this.rightWallBody = null;
+    }
+
+    if (!this.sideWallsEnabled) {
+      return;
+    }
+
+    this.leftWallBody = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(-(ARENA_HALF_WIDTH + 0.5), 5),
+    );
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(0.5, 8),
+      this.leftWallBody,
+    );
+
+    this.rightWallBody = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
+    );
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(0.5, 8),
+      this.rightWallBody,
+    );
   }
 
   private syncPlayers(sortedIds: string[]): void {

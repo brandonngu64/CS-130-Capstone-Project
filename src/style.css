@@ -389,6 +389,24 @@ h2 {
   text-align: left;
 }
 
+.toggle-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.toggle-field input[type='checkbox'] {
+  margin-top: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.toggle-field span {
+  line-height: 1.35;
+}
+
 .game-hud {
   position: absolute;
   top: 12px;

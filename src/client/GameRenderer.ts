@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { readArenaSideWallsEnabled } from './arenaOptions';
 import {
   ARENA_HALF_WIDTH,
   FLOOR_Y,
@@ -19,8 +20,19 @@ export class GameRenderer {
   private readonly playerMeshes = new Map<string, THREE.Mesh>();
   private readonly resizeObserver: ResizeObserver;
 
-  constructor(container: HTMLElement) {
+  private sideWallsEnabled: boolean;
+  private groundMesh!: THREE.Mesh;
+  private leftWallMesh: THREE.Mesh | null = null;
+  private rightWallMesh: THREE.Mesh | null = null;
+  private readonly wallMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1f2830,
+    roughness: 0.9,
+    metalness: 0.05,
+  });
+
+  constructor(container: HTMLElement, sideWallsEnabled = readArenaSideWallsEnabled()) {
     this.container = container;
+    this.sideWallsEnabled = sideWallsEnabled;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x131924);
@@ -42,6 +54,19 @@ export class GameRenderer {
     });
     this.resizeObserver.observe(this.container);
     this.resize();
+  }
+
+  areSideWallsEnabled(): boolean {
+    return this.sideWallsEnabled;
+  }
+
+  setSideWallsEnabled(enabled: boolean): void {
+    if (enabled === this.sideWallsEnabled) {
+      return;
+    }
+    this.sideWallsEnabled = enabled;
+    this.rebuildGroundMesh();
+    this.syncSideWallMeshes();
   }
 
   render(state: RenderState, localPlayerId: string): void {
@@ -101,30 +126,13 @@ export class GameRenderer {
     this.scene.add(fillLight);
   }
 
+  private floorDisplayWidth(): number {
+    return this.sideWallsEnabled ? ARENA_HALF_WIDTH * 2 + 4 : ARENA_HALF_WIDTH * 2;
+  }
+
   private setupArenaMeshes(): void {
-    const groundGeometry = new THREE.BoxGeometry(ARENA_HALF_WIDTH * 2 + 4, 1, 1);
-    const groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2f3a3f,
-      roughness: 0.85,
-      metalness: 0.1,
-    });
-    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-    ground.position.set(0, FLOOR_Y - 0.5, -0.4);
-    this.scene.add(ground);
-
-    const wallMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1f2830,
-      roughness: 0.9,
-      metalness: 0.05,
-    });
-
-    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(1, 16, 1), wallMaterial);
-    leftWall.position.set(-(ARENA_HALF_WIDTH + 0.5), 5.5, -0.6);
-    this.scene.add(leftWall);
-
-    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(1, 16, 1), wallMaterial);
-    rightWall.position.set(ARENA_HALF_WIDTH + 0.5, 5.5, -0.6);
-    this.scene.add(rightWall);
+    this.rebuildGroundMesh();
+    this.syncSideWallMeshes();
 
     const backdrop = new THREE.Mesh(
       new THREE.PlaneGeometry(ARENA_HALF_WIDTH * 2 + 8, 18),
@@ -139,8 +147,6 @@ export class GameRenderer {
       metalness: 0.15,
     });
 
-    // Match the player's z range (centered at 0.35, depth 0.7) so the camera
-    // tilt doesn't cause the player to visually clip into the platform top.
     for (const platform of PLATFORMS) {
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(
@@ -153,6 +159,55 @@ export class GameRenderer {
       mesh.position.set(platform.centerX, platform.centerY, 0.35);
       this.scene.add(mesh);
     }
+  }
+
+  private rebuildGroundMesh(): void {
+    if (this.groundMesh) {
+      this.scene.remove(this.groundMesh);
+      this.groundMesh.geometry.dispose();
+      (this.groundMesh.material as THREE.MeshStandardMaterial).dispose();
+    }
+
+    const groundGeometry = new THREE.BoxGeometry(this.floorDisplayWidth(), 1, 1);
+    const groundMaterial = new THREE.MeshStandardMaterial({
+      color: 0x2f3a3f,
+      roughness: 0.85,
+      metalness: 0.1,
+    });
+    this.groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+    this.groundMesh.position.set(0, FLOOR_Y - 0.5, -0.4);
+    this.scene.add(this.groundMesh);
+  }
+
+  private syncSideWallMeshes(): void {
+    if (this.leftWallMesh) {
+      this.scene.remove(this.leftWallMesh);
+      this.leftWallMesh.geometry.dispose();
+      this.leftWallMesh = null;
+    }
+    if (this.rightWallMesh) {
+      this.scene.remove(this.rightWallMesh);
+      this.rightWallMesh.geometry.dispose();
+      this.rightWallMesh = null;
+    }
+
+    if (!this.sideWallsEnabled) {
+      return;
+    }
+
+    this.leftWallMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 16, 1),
+      this.wallMaterial,
+    );
+    this.leftWallMesh.position.set(-(ARENA_HALF_WIDTH + 0.5), 5.5, -0.6);
+    this.scene.add(this.leftWallMesh);
+
+    this.rightWallMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 16, 1),
+      this.wallMaterial,
+    );
+    this.rightWallMesh.position.set(ARENA_HALF_WIDTH + 0.5, 5.5, -0.6);
+    this.scene.add(this.rightWallMesh);
   }
 
   private createPlayerMesh(

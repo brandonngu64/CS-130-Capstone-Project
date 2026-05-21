@@ -15,6 +15,7 @@ export interface SettingsMenuCallbacks {
   onLeave(): void;
   onCopyShareUrl(): void;
   onClose(): void;
+  onArenaSideWallsChange(enabled: boolean): void;
 }
 
 export class SettingsMenu {
@@ -26,6 +27,7 @@ export class SettingsMenu {
   private readonly leaveButton: HTMLButtonElement;
   private readonly copyButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
+  private readonly sideWallsToggle: HTMLInputElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -67,10 +69,17 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuStatus',
     );
+    this.sideWallsToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuSideWallsToggle',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
     this.closeButton.addEventListener('click', () => callbacks.onClose());
+    this.sideWallsToggle.addEventListener('change', () => {
+      callbacks.onArenaSideWallsChange(this.sideWallsToggle.checked);
+    });
 
     this.element.addEventListener('click', (event) => {
       if (event.target === this.element) {
@@ -113,6 +122,10 @@ export class SettingsMenu {
     this.statusText.dataset.tone = tone;
   }
 
+  setArenaSideWallsEnabled(enabled: boolean): void {
+    this.sideWallsToggle.checked = enabled;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -144,6 +157,11 @@ export class SettingsMenu {
             <input id="settingsMenuShareUrl" type="text" readonly />
             <button id="settingsMenuCopyButton" type="button">Copy</button>
           </div>
+        </label>
+
+        <label class="toggle-field">
+          <input id="settingsMenuSideWallsToggle" type="checkbox" />
+          <span>Arena side walls (blocks walking off stage)</span>
         </label>
 
         <button id="settingsMenuLeaveButton" class="action-danger" type="button">Leave Room</button>
