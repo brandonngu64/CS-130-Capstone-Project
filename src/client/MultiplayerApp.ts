@@ -20,6 +20,7 @@ import { MainMenu, type StatusTone } from './MainMenu';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
+import { StockHud } from './StockHud';
 import { encodeInput } from './input';
 
 type DebugCounters = {
@@ -200,6 +201,7 @@ export class MultiplayerApp {
   private readonly peerId: string;
   private readonly mainMenu: MainMenu;
   private readonly settingsMenu: SettingsMenu;
+  private readonly stockHud: StockHud;
 
   private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
@@ -309,6 +311,7 @@ export class MultiplayerApp {
 
     const viewport = requireElement<HTMLElement>(this.root, '#viewport');
     this.renderer = new GameRenderer(viewport);
+    this.stockHud = new StockHud(viewport);
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
@@ -460,6 +463,7 @@ export class MultiplayerApp {
     this.cleanupNetworking();
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
+    this.stockHud.destroy();
     this.renderer.dispose();
 
     if (this.game) {
@@ -479,7 +483,11 @@ export class MultiplayerApp {
     }
 
     if (this.game) {
-      this.renderer.render(this.game.getRenderState(), this.peerId);
+      const renderState = this.game.getRenderState();
+      this.renderer.render(renderState, this.peerId);
+      if (this.isInRoom() || this.connecting) {
+        this.stockHud.update(renderState.players, this.peerId);
+      }
     }
 
     this.refreshDebugValues();
@@ -1263,6 +1271,7 @@ export class MultiplayerApp {
     this.mainMenu.setBusy(this.connecting);
 
     this.gameHud.dataset.visible = inActiveSession ? 'true' : 'false';
+    this.stockHud.setVisible(inActiveSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
 
     if (this.settingsOpen && inActiveSession) {
