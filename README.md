@@ -362,17 +362,53 @@ Simulation runs at fixed tick (`60 Hz`) and avoids random or wall-clock dependen
 
 # Deployment on AWS
 
+### Setup Node v20
 - `sudo apt update`
 - `sudo apt install nodejs npm -y`
+   ### Upgrade Node Version on AWS:
+   - `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash`
+   - `source ~/.bashrc`
+   - `nvm install 20`
+   - `nvm use 20`
+   - `nvm alias default 20`
+
+### Import Github Repo
 - importing repo via ssh key on remote:
   `git clone git@github.com:username/repository-name.git`
-
   - `git clone git@github.com:brandonngu64/CS-130-Capstone-Project.git`
-
-  ### Git Command Notes CLI
-- `git branch -a` show all branches
-- `git switch <BRANCH NAME>`
+  ##### Git Command Notes CLI
+  - `git branch -a` show all branches
+  - `git switch <BRANCH NAME>`
 
 ### Launching
+- `npm install`
+- `npm run dev:all`
+  - starts up server and client: `server`
 
-- On AWS run
+
+# Deployment on Local
+- can use npm or pnpm
+- get node version 20 for vite support
+- `npm install`
+- `npm run dev:all`
+
+
+# Making Maps
+- Download Tiled from: https://thorbjorn.itch.io/tiled
+- Tilemap:
+  - Stored in `./src/assets/tilemap`
+  - Contains json that has properties of tiles and the image the the tiles map to
+- Maps:
+  - Stored in `./src/assets/maps`
+  - Contains json for assembling the tiles from the tileset into a map
+  - Specifications:
+    - There are layers of tilemaps that MUST obey specific naming conventions
+    - `level_layer` contains collidable objects.
+      - `int collision` can be 2 full collision, 1 platform collision, 0 no collision
+        - These values are listed in the tile map
+    - `background` contains tile to be rendered behind the player and `level_layer`
+    - `foreground` contains tiles to be rendered above the player and other layers
+    - Do not add more or less layers than this in the map file
+      - they must have these specific names
+- Other than that learn the software and you should be good to go
+- When exporting export to JSON

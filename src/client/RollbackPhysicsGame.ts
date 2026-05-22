@@ -1,19 +1,16 @@
 import * as RAPIER from '@dimforge/rapier2d-compat';
 import type { Game, PlayerId } from 'rollback-netcode';
 import {
-  ARENA_HALF_WIDTH,
   FIXED_STEP_SECONDS,
-  FLOOR_Y,
   GRAVITY_Y,
   JUMP_SPEED,
   MOVE_SPEED,
-  PLATFORMS,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
-  PLAYER_SPAWN_Y,
 } from './constants';
 import { InputBits, decodeInputBits } from './input';
+import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
 export interface PlayerRenderState {
   id: string;
@@ -29,20 +26,34 @@ export interface RenderState {
 }
 
 type PlayerBodyRecord = {
+  id: string;
   body: RAPIER.RigidBody;
   color: number;
 };
 
-const SPAWN_SLOTS = [-10, -4, 4, 10];
+type StepPlayerState = {
+  ducking: boolean;
+  vx: number;
+  vy: number;
+  x: number;
+  y: number;
+};
+
+const CONTACT_ALLOWANCE = 0.15;
+const GROUND_RAY_OFFSET = 0.02;
+const GROUND_RAY_LENGTH = 0.25;
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
+  private readonly map: TiledMapDefinition;
   private readonly world: RAPIER.World;
   private readonly players = new Map<string, PlayerBodyRecord>();
   private readonly previousInputFlags = new Map<string, number>();
+  private readonly staticColliderHandles = new Set<number>();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
 
-  constructor() {
+  constructor(map: TiledMapDefinition) {
+    this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
@@ -56,17 +67,19 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (!record) {
         throw new Error(`Missing player record for ${id}`);
       }
+
       const idBytes = this.textEncoder.encode(id);
       const translation = record.body.translation();
       const velocity = record.body.linvel();
       const inputFlags = this.previousInputFlags.get(id) ?? 0;
+
       return {
         idBytes,
-        x: translation.x,
-        y: translation.y,
+        inputFlags,
         vx: velocity.x,
         vy: velocity.y,
-        inputFlags,
+        x: translation.x,
+        y: translation.y,
       };
     });
 
@@ -115,11 +128,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const incoming = new Map<
       string,
       {
-        x: number;
-        y: number;
+        inputFlags: number;
         vx: number;
         vy: number;
-        inputFlags: number;
+        x: number;
+        y: number;
       }
     >();
 
@@ -142,7 +155,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const inputFlags = view.getUint8(offset);
       offset += 1;
 
-      incoming.set(id, { x, y, vx, vy, inputFlags });
+      incoming.set(id, { inputFlags, vx, vy, x, y });
     }
 
     this.syncPlayers(Array.from(incoming.keys()).sort());
@@ -152,6 +165,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (!record) {
         continue;
       }
+
       record.body.setTranslation({ x: state.x, y: state.y }, true);
       record.body.setLinvel({ x: state.vx, y: state.vy }, true);
       this.previousInputFlags.set(id, state.inputFlags);
@@ -162,12 +176,31 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
 
+    const previousStates = new Map<string, StepPlayerState>();
+
     for (const id of ids) {
       const raw = inputs.get(id as PlayerId);
-      this.applyInput(id, decodeInputBits(raw));
+      const inputFlags = decodeInputBits(raw);
+      const record = this.players.get(id);
+      if (!record) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      this.applyInput(id, inputFlags);
+
+      const velocity = record.body.linvel();
+      previousStates.set(id, {
+        ducking: (inputFlags & InputBits.Duck) !== 0,
+        vx: velocity.x,
+        vy: velocity.y,
+        x: position.x,
+        y: position.y,
+      });
     }
 
     this.world.step();
+    this.resolvePlatformContacts(previousStates);
     this.enforceHorizontalBounds();
   }
 
@@ -189,12 +222,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .map(([id, record]) => {
         const position = record.body.translation();
         return {
+          color: record.color,
+          height: PLAYER_HALF_HEIGHT * 2,
           id,
+          width: PLAYER_HALF_WIDTH * 2,
           x: position.x,
           y: position.y,
-          width: PLAYER_HALF_WIDTH * 2,
-          height: PLAYER_HALF_HEIGHT * 2,
-          color: record.color,
         };
       });
 
@@ -205,43 +238,39 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (const [, record] of this.players) {
       this.world.removeRigidBody(record.body);
     }
+
     this.players.clear();
     this.previousInputFlags.clear();
   }
 
   private createStaticLevel(): void {
-    const ground = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y - 0.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(ARENA_HALF_WIDTH + 2, 0.5).setFriction(1),
-      ground,
-    );
-
-    const leftWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-(ARENA_HALF_WIDTH + 0.5), 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), leftWall);
-
-    const rightWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
-
-    for (const platform of PLATFORMS) {
-      const body = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(
-          platform.centerX,
-          platform.centerY,
-        ),
-      );
-      this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(platform.halfWidth, platform.halfHeight)
-          .setFriction(1)
-          .setRestitution(0),
-        body,
-      );
+    for (const rect of this.map.colliders.solids) {
+      this.createStaticCollider(rect, false);
     }
+
+    for (const rect of this.map.colliders.platforms) {
+      this.createStaticCollider(rect, true);
+    }
+  }
+
+  private createStaticCollider(rect: MapColliderRect, platform: boolean): void {
+    const body = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(rect.x, rect.y),
+    );
+
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(
+      rect.width * 0.5,
+      rect.height * 0.5,
+    )
+      .setFriction(1)
+      .setRestitution(0);
+
+    if (platform) {
+      colliderDesc.setSensor(true);
+    }
+
+    const collider = this.world.createCollider(colliderDesc, body);
+    this.staticColliderHandles.add(collider.handle);
   }
 
   private syncPlayers(sortedIds: string[]): void {
@@ -257,19 +286,21 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (const id of sortedIds) {
       if (!this.players.has(id)) {
+        const spawnPoint = this.spawnPointForPlayer(id);
         this.players.set(id, {
-          body: this.createPlayerBody(this.spawnXForPlayer(id)),
+          body: this.createPlayerBody(spawnPoint),
           color: this.colorForPlayer(id),
+          id,
         });
         this.previousInputFlags.set(id, 0);
       }
     }
   }
 
-  private createPlayerBody(spawnX: number): RAPIER.RigidBody {
+  private createPlayerBody(spawnPoint: MapSpawnPoint): RAPIER.RigidBody {
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(spawnX, PLAYER_SPAWN_Y)
+        .setTranslation(spawnPoint.x, spawnPoint.feetY + PLAYER_HALF_HEIGHT)
         .lockRotations()
         .setLinearDamping(0)
         .setAngularDamping(0)
@@ -304,8 +335,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const jumpPressed =
       (inputFlags & InputBits.Jump) !== 0 &&
       (previousFlags & InputBits.Jump) === 0;
+    const ducking = (inputFlags & InputBits.Duck) !== 0;
 
-    if (jumpPressed && this.isGrounded(body)) {
+    if (jumpPressed && this.isGrounded(record, ducking)) {
       nextYVelocity = JUMP_SPEED;
     }
 
@@ -313,30 +345,37 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousInputFlags.set(id, inputFlags);
   }
 
-  private isGrounded(body: RAPIER.RigidBody): boolean {
+  private isGrounded(record: PlayerBodyRecord, ducking: boolean): boolean {
+    if (ducking) {
+      return false;
+    }
+
+    const body = record.body;
     if (body.linvel().y > 0.2) {
       return false;
     }
 
     const position = body.translation();
     const feetY = position.y - PLAYER_HALF_HEIGHT;
-
-    if (feetY <= FLOOR_Y + 0.06) {
-      return true;
-    }
-
-    // Cast a short ray straight down from just below each foot to detect
-    // platforms underneath the player.
     const rayOrigins = [
-      { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
-      { x: position.x, y: feetY - 0.01 },
-      { x: position.x + PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
+      { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY + GROUND_RAY_OFFSET },
+      { x: position.x, y: feetY + GROUND_RAY_OFFSET },
+      { x: position.x + PLAYER_HALF_WIDTH * 0.9, y: feetY + GROUND_RAY_OFFSET },
     ];
 
     for (const origin of rayOrigins) {
       const ray = new RAPIER.Ray(origin, { x: 0, y: -1 });
-      const hit = this.world.castRay(ray, 0.1, true);
-      if (hit !== null) {
+      const hit = this.world.castRay(
+        ray,
+        GROUND_RAY_LENGTH,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        body,
+        (collider) => this.staticColliderHandles.has(collider.handle),
+      );
+      if (hit) {
         return true;
       }
     }
@@ -344,9 +383,60 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return false;
   }
 
+  private resolvePlatformContacts(previousStates: Map<string, StepPlayerState>): void {
+    for (const [id, record] of this.players) {
+      const previousState = previousStates.get(id);
+      if (!previousState || previousState.ducking) {
+        continue;
+      }
+
+      if (previousState.vy > 0.05) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const currentBottom = position.y - PLAYER_HALF_HEIGHT;
+      const previousBottom = previousState.y - PLAYER_HALF_HEIGHT;
+      const playerLeft = position.x - PLAYER_HALF_WIDTH;
+      const playerRight = position.x + PLAYER_HALF_WIDTH;
+
+      let bestPlatformTop: number | null = null;
+
+      for (const platform of this.map.colliders.platforms) {
+        const platformLeft = platform.x - platform.width * 0.5;
+        const platformRight = platform.x + platform.width * 0.5;
+        if (playerRight <= platformLeft || playerLeft >= platformRight) {
+          continue;
+        }
+
+        const platformTop = platform.y + platform.height * 0.5;
+        const crossedFromAbove =
+          previousBottom >= platformTop - CONTACT_ALLOWANCE &&
+          currentBottom <= platformTop + CONTACT_ALLOWANCE;
+
+        if (!crossedFromAbove) {
+          continue;
+        }
+
+        if (bestPlatformTop === null || platformTop > bestPlatformTop) {
+          bestPlatformTop = platformTop;
+        }
+      }
+
+      if (bestPlatformTop !== null) {
+        const velocity = record.body.linvel();
+        record.body.setTranslation(
+          { x: position.x, y: bestPlatformTop + PLAYER_HALF_HEIGHT },
+          true,
+        );
+        record.body.setLinvel({ x: velocity.x, y: 0 }, true);
+      }
+    }
+  }
+
   private enforceHorizontalBounds(): void {
-    const minX = -ARENA_HALF_WIDTH + PLAYER_HALF_WIDTH;
-    const maxX = ARENA_HALF_WIDTH - PLAYER_HALF_WIDTH;
+    const minX = this.map.bounds.minX + PLAYER_HALF_WIDTH;
+    const maxX = this.map.bounds.maxX - PLAYER_HALF_WIDTH;
 
     for (const [, record] of this.players) {
       const position = record.body.translation();
@@ -359,8 +449,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
   }
 
-  private spawnXForPlayer(playerId: string): number {
-    return SPAWN_SLOTS[this.hashString(playerId) % SPAWN_SLOTS.length];
+  private spawnPointForPlayer(playerId: string): MapSpawnPoint {
+    if (this.map.playerSpawnPoints.length === 0) {
+      return {
+        feetY: 0,
+        layerName: 'level_layer',
+        role: 'player_spawn',
+        tileX: 0,
+        tileY: 0,
+        x: 0,
+        y: 0,
+      };
+    }
+
+    return this.map.playerSpawnPoints[
+      this.hashString(playerId) % this.map.playerSpawnPoints.length
+    ];
   }
 
   private colorForPlayer(playerId: string): number {
