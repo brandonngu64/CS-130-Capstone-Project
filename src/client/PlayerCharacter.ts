@@ -1,5 +1,6 @@
 import type { RigidBody } from '@dimforge/rapier2d-compat';
 import { AttackKind } from './attacks';
+import { ItemKind } from './items';
 import { PLAYER_MAX_HEALTH } from './constants';
 
 type ActiveAttack = {
@@ -18,6 +19,8 @@ export class PlayerCharacter {
   public activeAttack: ActiveAttack | null;
   public dashTicksRemaining: number;
   public dashCooldownTicks: number;
+  public heldItem: ItemKind | null;
+  public heldItemExpiryTick: number;
 
   constructor(
     id: string,
@@ -35,6 +38,8 @@ export class PlayerCharacter {
     this.activeAttack = null;
     this.dashTicksRemaining = 0;
     this.dashCooldownTicks = 0;
+    this.heldItem = null;
+    this.heldItemExpiryTick = 0;
   }
 
   takeDamage(amount: number): number {
@@ -69,11 +74,22 @@ export class PlayerCharacter {
     return this.dashCooldownTicks === 0 && this.dashTicksRemaining === 0;
   }
 
+  hasItem(): boolean {
+    return this.heldItem !== null;
+  }
+
+  dropItem(): void {
+    this.heldItem = null;
+    this.heldItemExpiryTick = 0;
+  }
+
   reset(): void {
     this.health = this.maxHealth;
     this.facing = 1;
     this.activeAttack = null;
     this.dashTicksRemaining = 0;
     this.dashCooldownTicks = 0;
+    this.heldItem = null;
+    this.heldItemExpiryTick = 0;
   }
 }

@@ -5,11 +5,17 @@ import {
   PLATFORM_COLOR,
   PLATFORMS,
 } from './constants';
+import { GUN_COLOR, ItemKind } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 
 const BASE_VIEW_BOTTOM = -5;
 const BASE_VIEW_TOP = 7;
 const MIN_VIEW_WIDTH = ARENA_HALF_WIDTH * 2 + 4;
+
+// Visual size of a gun item sitting on the ground.
+const ITEM_GUN_WIDTH  = 0.5;
+const ITEM_GUN_HEIGHT = 0.25;
+const ITEM_GUN_DEPTH  = 0.25;
 
 export class GameRenderer {
   private readonly scene: THREE.Scene;
@@ -18,6 +24,7 @@ export class GameRenderer {
   private readonly container: HTMLElement;
   private readonly playerMeshes = new Map<string, THREE.Mesh>();
   private readonly attackMeshes = new Map<string, THREE.Mesh>();
+  private readonly itemMeshes   = new Map<number, THREE.Mesh>();
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement) {
@@ -46,7 +53,8 @@ export class GameRenderer {
   }
 
   render(state: RenderState, localPlayerId: string): void {
-    const activeIds = new Set(state.players.map((player) => player.id));
+    // --- Players ---
+    const activeIds = new Set(state.players.map((p) => p.id));
 
     for (const player of state.players) {
       let mesh = this.playerMeshes.get(player.id);
@@ -72,7 +80,8 @@ export class GameRenderer {
       }
     }
 
-    const activeAttackIds = new Set(state.attacks.map((attack) => attack.id));
+    // --- Attacks ---
+    const activeAttackIds = new Set(state.attacks.map((a) => a.id));
 
     for (const attack of state.attacks) {
       let mesh = this.attackMeshes.get(attack.id);
@@ -81,7 +90,6 @@ export class GameRenderer {
         this.scene.add(mesh);
         this.attackMeshes.set(attack.id, mesh);
       }
-
       mesh.position.set(attack.x, attack.y, 0.5);
     }
 
@@ -91,6 +99,30 @@ export class GameRenderer {
         mesh.geometry.dispose();
         (mesh.material as THREE.MeshStandardMaterial).dispose();
         this.attackMeshes.delete(id);
+      }
+    }
+
+    // --- Items ---
+    const activeItemIds = new Set(state.items.map((item) => item.id));
+
+    for (const item of state.items) {
+      let mesh = this.itemMeshes.get(item.id);
+      if (!mesh) {
+        mesh = this.createItemMesh(item.kind);
+        this.scene.add(mesh);
+        this.itemMeshes.set(item.id, mesh);
+      }
+      // Bob gently up and down so items are easy to spot.
+      const bob = Math.sin(Date.now() / 400) * 0.08;
+      mesh.position.set(item.x, item.y + bob, 0.35);
+    }
+
+    for (const [id, mesh] of this.itemMeshes) {
+      if (!activeItemIds.has(id)) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.itemMeshes.delete(id);
       }
     }
 
@@ -113,6 +145,13 @@ export class GameRenderer {
       (mesh.material as THREE.MeshStandardMaterial).dispose();
     }
     this.attackMeshes.clear();
+
+    for (const [, mesh] of this.itemMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    }
+    this.itemMeshes.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -169,15 +208,9 @@ export class GameRenderer {
       metalness: 0.15,
     });
 
-    // Match the player's z range (centered at 0.35, depth 0.7) so the camera
-    // tilt doesn't cause the player to visually clip into the platform top.
     for (const platform of PLATFORMS) {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          platform.halfWidth * 2,
-          platform.halfHeight * 2,
-          0.7,
-        ),
+        new THREE.BoxGeometry(platform.halfWidth * 2, platform.halfHeight * 2, 0.7),
         platformMaterial,
       );
       mesh.position.set(platform.centerX, platform.centerY, 0.35);
@@ -185,61 +218,61 @@ export class GameRenderer {
     }
   }
 
-  private createPlayerMesh(
-    width: number,
-    height: number,
-    color: number,
-  ): THREE.Mesh {
+  private createPlayerMesh(width: number, height: number, color: number): THREE.Mesh {
     const geometry = new THREE.BoxGeometry(width, height, 0.7);
     const material = new THREE.MeshStandardMaterial({
       color,
       roughness: 0.45,
       metalness: 0.1,
     });
-
     return new THREE.Mesh(geometry, material);
   }
 
-  private createAttackMesh(
-    width: number,
-    height: number,
-    color: number,
-  ): THREE.Mesh {
+  private createAttackMesh(width: number, height: number, color: number): THREE.Mesh {
     const geometry = new THREE.BoxGeometry(width, height, 0.5);
     const material = new THREE.MeshStandardMaterial({
       color,
       roughness: 0.35,
       metalness: 0.05,
     });
+    return new THREE.Mesh(geometry, material);
+  }
 
+  private createItemMesh(kind: ItemKind): THREE.Mesh {
+    // For now only Gun exists; expand with a switch when more items are added.
+    const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
+    const material = new THREE.MeshStandardMaterial({
+      color: GUN_COLOR,
+      roughness: 0.3,
+      metalness: 0.7,
+      emissive: new THREE.Color(GUN_COLOR),
+      emissiveIntensity: 0.15,
+    });
     return new THREE.Mesh(geometry, material);
   }
 
   private resize(): void {
-    const width = this.container.clientWidth;
+    const width  = this.container.clientWidth;
     const height = this.container.clientHeight;
-
-    if (width === 0 || height === 0) {
-      return;
-    }
+    if (width === 0 || height === 0) return;
 
     const aspect = width / height;
-    let viewTop = BASE_VIEW_TOP;
+    let viewTop    = BASE_VIEW_TOP;
     let viewBottom = BASE_VIEW_BOTTOM;
-    let viewWidth = (viewTop - viewBottom) * aspect;
+    let viewWidth  = (viewTop - viewBottom) * aspect;
 
     if (viewWidth < MIN_VIEW_WIDTH) {
       const requiredHeight = MIN_VIEW_WIDTH / aspect;
-      const currentHeight = viewTop - viewBottom;
-      const expand = (requiredHeight - currentHeight) * 0.5;
-      viewTop += expand;
+      const currentHeight  = viewTop - viewBottom;
+      const expand         = (requiredHeight - currentHeight) * 0.5;
+      viewTop    += expand;
       viewBottom -= expand;
-      viewWidth = MIN_VIEW_WIDTH;
+      viewWidth   = MIN_VIEW_WIDTH;
     }
 
-    this.camera.left = -viewWidth * 0.5;
-    this.camera.right = viewWidth * 0.5;
-    this.camera.top = viewTop;
+    this.camera.left   = -viewWidth * 0.5;
+    this.camera.right  =  viewWidth * 0.5;
+    this.camera.top    = viewTop;
     this.camera.bottom = viewBottom;
     this.camera.updateProjectionMatrix();
 
