@@ -32,6 +32,7 @@ type InputState = {
   jump: boolean;
   punch: boolean;
   dash: boolean;
+  shoot: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
@@ -231,6 +232,7 @@ export class MultiplayerApp {
     jump: false,
     punch: false,
     dash: false,
+    shoot: false,
   };
 
   private readonly debugCounters: DebugCounters = {
@@ -264,7 +266,8 @@ export class MultiplayerApp {
       event.code === 'ArrowUp' ||
       event.code === 'KeyW' ||
       event.code === 'Space' ||
-      event.code === 'KeyU'
+      event.code === 'KeyU' ||
+      event.code === 'KeyI'
     ) {
       event.preventDefault();
     }
@@ -280,6 +283,9 @@ export class MultiplayerApp {
     }
     if (event.code === 'KeyU') {
       this.inputState.punch = true;
+    }
+    if (event.code === 'KeyI') {
+      this.inputState.shoot = true;
     }
     if (event.code === 'Space') {
       this.inputState.dash = true;
@@ -302,6 +308,9 @@ export class MultiplayerApp {
     }
     if (event.code === 'KeyU') {
       this.inputState.punch = false;
+    }
+    if (event.code === 'KeyI') {
+      this.inputState.shoot = true;
     }
     if (event.code === 'Space') {
       this.inputState.dash = false;

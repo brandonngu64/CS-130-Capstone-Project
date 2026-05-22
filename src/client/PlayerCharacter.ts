@@ -21,6 +21,7 @@ export class PlayerCharacter {
   public dashCooldownTicks: number;
   public heldItem: ItemKind | null;
   public heldItemExpiryTick: number;
+  public gunFireCooldownTicks: number;
 
   constructor(
     id: string,
@@ -40,6 +41,7 @@ export class PlayerCharacter {
     this.dashCooldownTicks = 0;
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
+    this.gunFireCooldownTicks = 0;
   }
 
   takeDamage(amount: number): number {
@@ -81,6 +83,7 @@ export class PlayerCharacter {
   dropItem(): void {
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
+    this.gunFireCooldownTicks = 0;
   }
 
   reset(): void {
@@ -91,5 +94,6 @@ export class PlayerCharacter {
     this.dashCooldownTicks = 0;
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
+    this.gunFireCooldownTicks = 0;
   }
 }

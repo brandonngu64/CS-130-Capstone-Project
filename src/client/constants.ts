@@ -18,6 +18,14 @@ export const DASH_DURATION_TICKS = 8;
 export const DASH_COOLDOWN_TICKS = 45;
 export const GRAVITY_Y = -28;
 
+export const BULLET_SPEED = 28;
+export const BULLET_LIFETIME_TICKS = 120;
+export const BULLET_HALF_WIDTH  = 0.15;
+export const BULLET_HALF_HEIGHT = 0.08;
+export const BULLET_COLOR = 0xffe066;
+export const BULLET_ID_MAX = 255;
+export const GUN_FIRE_COOLDOWN_TICKS = 15;
+
 export const PLAYER_COLOR_PALETTE = [
   0xe76f51,
   0x2a9d8f,

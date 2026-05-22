@@ -12,10 +12,14 @@ const BASE_VIEW_BOTTOM = -5;
 const BASE_VIEW_TOP = 7;
 const MIN_VIEW_WIDTH = ARENA_HALF_WIDTH * 2 + 4;
 
-// Visual size of a gun item sitting on the ground.
+// Size of a collectible item sitting on the ground
 const ITEM_GUN_WIDTH  = 0.5;
 const ITEM_GUN_HEIGHT = 0.25;
 const ITEM_GUN_DEPTH  = 0.25;
+
+const BULLET_W = 0.3;
+const BULLET_H = 0.16;
+const BULLET_D = 0.16;
 
 export class GameRenderer {
   private readonly scene: THREE.Scene;
@@ -25,6 +29,8 @@ export class GameRenderer {
   private readonly playerMeshes = new Map<string, THREE.Mesh>();
   private readonly attackMeshes = new Map<string, THREE.Mesh>();
   private readonly itemMeshes   = new Map<number, THREE.Mesh>();
+  private readonly bulletMeshes = new Map<number, THREE.Mesh>();
+  private readonly gunMeshes = new Map<string, THREE.Mesh>();
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement) {
@@ -69,6 +75,20 @@ export class GameRenderer {
       const material = mesh.material as THREE.MeshStandardMaterial;
       material.emissive.setHex(player.id === localPlayerId ? 0x2a9d8f : 0x000000);
       material.emissiveIntensity = player.id === localPlayerId ? 0.26 : 0;
+
+      if (player.heldItem !== null) {
+        let gun = this.gunMeshes.get(player.id);
+        if (!gun) {
+          gun = this.createGunMesh();
+          this.scene.add(gun);
+          this.gunMeshes.set(player.id, gun);
+        }
+        gun.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
+        gun.visible = true;
+      } else {
+        const gun = this.gunMeshes.get(player.id);
+        if (gun) gun.visible = false;
+      }
     }
 
     for (const [id, mesh] of this.playerMeshes) {
@@ -77,6 +97,14 @@ export class GameRenderer {
         mesh.geometry.dispose();
         (mesh.material as THREE.MeshStandardMaterial).dispose();
         this.playerMeshes.delete(id);
+
+        const gun = this.gunMeshes.get(id);
+        if (gun) {
+          this.scene.remove(gun);
+          gun.geometry.dispose();
+          (gun.material as THREE.MeshStandardMaterial).dispose();
+          this.gunMeshes.delete(id);
+        }
       }
     }
 
@@ -126,6 +154,28 @@ export class GameRenderer {
       }
     }
 
+    // --- Bullets ---
+    const activeBulletIds = new Set(state.bullets.map((b) => b.id));
+
+    for (const bullet of state.bullets) {
+      let mesh = this.bulletMeshes.get(bullet.id);
+      if (!mesh) {
+        mesh = this.createBulletMesh();
+        this.scene.add(mesh);
+        this.bulletMeshes.set(bullet.id, mesh);
+      }
+      mesh.position.set(bullet.x, bullet.y, 0.35);
+    }
+
+    for (const [id, mesh] of this.bulletMeshes) {
+      if (!activeBulletIds.has(id)) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.bulletMeshes.delete(id);
+      }
+    }
+
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -152,6 +202,20 @@ export class GameRenderer {
       (mesh.material as THREE.MeshStandardMaterial).dispose();
     }
     this.itemMeshes.clear();
+
+    for (const [, mesh] of this.bulletMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    }
+    this.bulletMeshes.clear();
+
+    for (const [, mesh] of this.gunMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    }
+    this.gunMeshes.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -239,7 +303,6 @@ export class GameRenderer {
   }
 
   private createItemMesh(kind: ItemKind): THREE.Mesh {
-    // For now only Gun exists; expand with a switch when more items are added.
     const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
     const material = new THREE.MeshStandardMaterial({
       color: GUN_COLOR,
@@ -247,6 +310,30 @@ export class GameRenderer {
       metalness: 0.7,
       emissive: new THREE.Color(GUN_COLOR),
       emissiveIntensity: 0.15,
+    });
+    return new THREE.Mesh(geometry, material);
+  }
+
+  private createGunMesh(): THREE.Mesh {
+    const geometry = new THREE.BoxGeometry(0.35, 0.35, 0.18);
+    const material = new THREE.MeshStandardMaterial({
+      color: GUN_COLOR,
+      roughness: 0.3,
+      metalness: 0.8,
+      emissive: new THREE.Color(GUN_COLOR),
+      emissiveIntensity: 0.3,
+    });
+    return new THREE.Mesh(geometry, material);
+  }
+
+  private createBulletMesh(): THREE.Mesh {
+    const geometry = new THREE.BoxGeometry(BULLET_W, BULLET_H, BULLET_D);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffe066,
+      roughness: 0.2,
+      metalness: 0.5,
+      emissive: new THREE.Color(0xffe066),
+      emissiveIntensity: 0.6,
     });
     return new THREE.Mesh(geometry, material);
   }
