@@ -14,10 +14,12 @@ import {
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
+  PLAYER_MAX_HEALTH,
   PLAYER_SPAWN_Y,
 } from './constants';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import { InputBits, decodeInputBits } from './input';
+import { PlayerCharacter } from './PlayerCharacter';
 
 export interface AttackRenderState {
   id: string;
@@ -35,6 +37,8 @@ export interface PlayerRenderState {
   width: number;
   height: number;
   color: number;
+  health: number;
+  maxHealth: number;
 }
 
 export interface RenderState {
@@ -42,26 +46,11 @@ export interface RenderState {
   attacks: AttackRenderState[];
 }
 
-type ActiveAttack = {
-  kind: AttackKind;
-  ticksRemaining: number;
-};
-
-type PlayerBodyRecord = {
-  body: RAPIER.RigidBody;
-  color: number;
-  facing: number;
-  equippedWeapon: AttackKind;
-  activeAttack: ActiveAttack | null;
-  dashTicksRemaining: number;
-  dashCooldownTicks: number;
-};
-
 const SPAWN_SLOTS = [-10, -4, 4, 10];
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly world: RAPIER.World;
-  private readonly players = new Map<string, PlayerBodyRecord>();
+  private readonly players = new Map<string, PlayerCharacter>();
   private readonly previousInputFlags = new Map<string, number>();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
@@ -84,9 +73,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const translation = record.body.translation();
       const velocity = record.body.linvel();
       const inputFlags = this.previousInputFlags.get(id) ?? 0;
-      const playerRecord = this.players.get(id);
-      const facing = playerRecord?.facing ?? 1;
-      const attack = playerRecord?.activeAttack;
+      const attack = record.activeAttack;
       return {
         idBytes,
         x: translation.x,
@@ -94,11 +81,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         vx: velocity.x,
         vy: velocity.y,
         inputFlags,
-        facing,
+        health: record.health,
+        facing: record.facing,
         attackKind: attack?.kind ?? 0,
         attackTicksRemaining: attack?.ticksRemaining ?? 0,
-        dashTicksRemaining: playerRecord?.dashTicksRemaining ?? 0,
-        dashCooldownTicks: playerRecord?.dashCooldownTicks ?? 0,
+        dashTicksRemaining: record.dashTicksRemaining,
+        dashCooldownTicks: record.dashCooldownTicks,
       };
     });
 
@@ -132,6 +120,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 4;
       view.setUint8(offset, record.inputFlags & 0xff);
       offset += 1;
+      view.setUint8(offset, record.health);
+      offset += 1;
       view.setInt8(offset, record.facing < 0 ? -1 : 1);
       offset += 1;
       view.setUint8(offset, record.attackKind);
@@ -162,6 +152,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         vx: number;
         vy: number;
         inputFlags: number;
+        health: number;
         facing: number;
         attackKind: number;
         attackTicksRemaining: number;
@@ -188,6 +179,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 4;
       const inputFlags = view.getUint8(offset);
       offset += 1;
+      const health = view.getUint8(offset);
+      offset += 1;
       const facing = view.getInt8(offset);
       offset += 1;
       const attackKind = view.getUint8(offset);
@@ -205,6 +198,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         vx,
         vy,
         inputFlags,
+        health,
         facing,
         attackKind,
         attackTicksRemaining,
@@ -222,6 +216,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
       record.body.setTranslation({ x: state.x, y: state.y }, true);
       record.body.setLinvel({ x: state.vx, y: state.vy }, true);
+      record.health = Math.max(0, Math.min(state.health, PLAYER_MAX_HEALTH));
       record.facing = state.facing < 0 ? -1 : 1;
       record.activeAttack =
         state.attackKind > 0 && state.attackTicksRemaining > 0
@@ -275,6 +270,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
+          health: record.health,
+          maxHealth: record.maxHealth,
         };
       });
 
@@ -360,15 +357,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (const id of sortedIds) {
       if (!this.players.has(id)) {
-        this.players.set(id, {
-          body: this.createPlayerBody(this.spawnXForPlayer(id)),
-          color: this.colorForPlayer(id),
-          facing: 1,
-          equippedWeapon: AttackKind.DefaultPunch,
-          activeAttack: null,
-          dashTicksRemaining: 0,
-          dashCooldownTicks: 0,
-        });
+        this.players.set(
+          id,
+          new PlayerCharacter(
+            id,
+            this.createPlayerBody(this.spawnXForPlayer(id)),
+            this.colorForPlayer(id),
+          ),
+        );
         this.previousInputFlags.set(id, 0);
       }
     }
