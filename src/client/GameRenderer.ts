@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { readArenaSideWallsEnabled } from './arenaOptions';
 import { GUN_COLOR, ItemKind } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
@@ -43,21 +42,11 @@ export class GameRenderer {
   private readonly bulletMeshes = new Map<number, THREE.Mesh>();
   private readonly gunMeshes = new Map<string, THREE.Mesh>();
   private readonly resizeObserver: ResizeObserver;
-  private sideWallsEnabled: boolean;
-  private groundMesh!: THREE.Mesh;
-  private leftWallMesh: THREE.Mesh | null = null;
-  private rightWallMesh: THREE.Mesh | null = null;
-  private readonly wallMaterial = new THREE.MeshStandardMaterial({
-    color: 0x1f2830,
-    roughness: 0.9,
-    metalness: 0.05,
-  });
 
-  constructor(container: HTMLElement, map: TiledMapDefinition, sideWallsEnabled = readArenaSideWallsEnabled()) {
+  constructor(container: HTMLElement, map: TiledMapDefinition) {
     this.container = container;
     this.mapBounds = map.bounds;
     this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
-    this.sideWallsEnabled = sideWallsEnabled;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x131924);
@@ -75,26 +64,12 @@ export class GameRenderer {
     this.setupLighting();
     this.backdropMesh = this.setupBackdrop(map);
     this.setupMapMeshes(map);
-    this.rebuildGroundMesh();
-    this.setupArenaMeshes();
 
     this.resizeObserver = new ResizeObserver(() => {
       this.resize();
     });
     this.resizeObserver.observe(this.container);
     this.resize();
-  }
-
-  areSideWallsEnabled(): boolean {
-    return this.sideWallsEnabled;
-  }
-
-  setSideWallsEnabled(enabled: boolean): void {
-    if (enabled === this.sideWallsEnabled) {
-      return;
-    }
-    this.sideWallsEnabled = enabled;
-    this.syncSideWallMeshes();
   }
 
   render(state: RenderState, localPlayerId: string): void {
@@ -319,14 +294,6 @@ export class GameRenderer {
     backdrop.position.set(0, 0, -2);
     this.scene.add(backdrop);
     return backdrop;
-  }
-
-  private floorDisplayWidth(): number {
-    return this.mapBounds.width;
-  }
-
-  private setupArenaMeshes(): void {
-    this.syncSideWallMeshes();
   }
 
   private setupMapMeshes(map: TiledMapDefinition): void {
@@ -555,58 +522,6 @@ export class GameRenderer {
       this.camera.position.y =
         Math.round(this.camera.position.y / worldUnitsPerPixelY) * worldUnitsPerPixelY;
     }
-  }
-
-  private rebuildGroundMesh(): void {
-    if (this.groundMesh) {
-      this.scene.remove(this.groundMesh);
-      this.groundMesh.geometry.dispose();
-      (this.groundMesh.material as THREE.MeshStandardMaterial).dispose();
-    }
-
-    const groundGeometry = new THREE.BoxGeometry(this.floorDisplayWidth(), 1, 1);
-    const groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2f3a3f,
-      roughness: 0.85,
-      metalness: 0.1,
-    });
-    this.groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-    this.groundMesh.position.set(0, this.mapBounds.minY - 0.5, -0.4);
-    this.scene.add(this.groundMesh);
-  }
-
-  private syncSideWallMeshes(): void {
-    if (this.leftWallMesh) {
-      this.scene.remove(this.leftWallMesh);
-      this.leftWallMesh.geometry.dispose();
-      this.leftWallMesh = null;
-    }
-    if (this.rightWallMesh) {
-      this.scene.remove(this.rightWallMesh);
-      this.rightWallMesh.geometry.dispose();
-      this.rightWallMesh = null;
-    }
-
-    if (!this.sideWallsEnabled) {
-      return;
-    }
-
-    const wallHeight = this.mapBounds.height;
-    const wallCenterY = (this.mapBounds.minY + this.mapBounds.maxY) * 0.5;
-
-    this.leftWallMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, wallHeight, 1),
-      this.wallMaterial,
-    );
-    this.leftWallMesh.position.set(this.mapBounds.minX - 0.5, wallCenterY, -0.6);
-    this.scene.add(this.leftWallMesh);
-
-    this.rightWallMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, wallHeight, 1),
-      this.wallMaterial,
-    );
-    this.rightWallMesh.position.set(this.mapBounds.maxX + 0.5, wallCenterY, -0.6);
-    this.scene.add(this.rightWallMesh);
   }
 
   private createPlayerMesh(width: number, height: number, color: number): THREE.Mesh {

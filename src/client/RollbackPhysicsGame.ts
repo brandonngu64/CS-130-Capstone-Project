@@ -18,7 +18,6 @@ import {
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
 } from './constants';
-import { readArenaSideWallsEnabled } from './arenaOptions';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import { InputBits, decodeInputBits } from './input';
@@ -101,23 +100,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
   private readonly bullets = new Map<number, Bullet>();
-  private sideWallsEnabled: boolean;
   private nextBulletId = 1;
 
-  constructor(map: TiledMapDefinition, sideWallsEnabled = readArenaSideWallsEnabled()) {
+  constructor(map: TiledMapDefinition) {
     this.map = map;
-    this.sideWallsEnabled = sideWallsEnabled;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
-  }
-
-  areSideWallsEnabled(): boolean {
-    return this.sideWallsEnabled;
-  }
-
-  setSideWallsEnabled(enabled: boolean): void {
-    this.sideWallsEnabled = enabled;
   }
 
   serialize(): Uint8Array {
@@ -359,10 +348,6 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.tickBullets();
     this.world.step();
     this.resolvePlatformContacts(previousStates);
-
-    if (this.sideWallsEnabled) {
-      this.enforceHorizontalBounds();
-    }
 
     this.matchState.checkBlastZone(this.players, (playerId) => this.spawnPointForPlayer(playerId));
     this.matchState.tickRespawn(this.players, (playerId) => this.spawnPointForPlayer(playerId));
@@ -768,21 +753,6 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         const velocity = record.body.linvel();
         record.body.setTranslation({ x: position.x, y: bestPlatformTop + PLAYER_HALF_HEIGHT }, true);
         record.body.setLinvel({ x: velocity.x, y: 0 }, true);
-      }
-    }
-  }
-
-  private enforceHorizontalBounds(): void {
-    const minX = this.map.bounds.minX + PLAYER_HALF_WIDTH;
-    const maxX = this.map.bounds.maxX - PLAYER_HALF_WIDTH;
-
-    for (const [, record] of this.players) {
-      const position = record.body.translation();
-      if (position.x < minX || position.x > maxX) {
-        const clampedX = Math.min(Math.max(position.x, minX), maxX);
-        const velocity = record.body.linvel();
-        record.body.setTranslation({ x: clampedX, y: position.y }, true);
-        record.body.setLinvel({ x: 0, y: velocity.y }, true);
       }
     }
   }

@@ -10,10 +10,6 @@ import {
   type SignalMessage,
   type TickResult,
 } from 'rollback-netcode';
-import {
-  readArenaSideWallsEnabled,
-  writeArenaSideWallsEnabled,
-} from './arenaOptions';
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
@@ -494,8 +490,6 @@ export class MultiplayerApp {
         this.applyArenaSideWalls(enabled);
       },
     });
-
-    this.syncArenaSideWallsUi(readArenaSideWallsEnabled());
 
     this.mainMenu.setPeerId(this.peerId);
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
@@ -1389,16 +1383,7 @@ export class MultiplayerApp {
     this.updateUiState();
   }
 
-  private syncArenaSideWallsUi(enabled: boolean): void {
-    this.mainMenu.setArenaSideWallsEnabled(enabled);
-    this.settingsMenu.setArenaSideWallsEnabled(enabled);
-  }
-
   private applyArenaSideWalls(enabled: boolean): void {
-    writeArenaSideWallsEnabled(enabled);
-    this.syncArenaSideWallsUi(enabled);
-    this.game?.setSideWallsEnabled(enabled);
-    this.renderer.setSideWallsEnabled(enabled);
 
     const wallLabel = enabled ? 'on' : 'off';
     const syncHint = this.isInRoom()
