@@ -8,10 +8,23 @@ export const FLOOR_Y = 0;
 
 export const PLAYER_HALF_WIDTH = 0.45;
 export const PLAYER_HALF_HEIGHT = 0.9;
+export const PLAYER_SPAWN_Y = 6;
+export const PLAYER_MAX_HEALTH = 100;
 
 export const MOVE_SPEED = 7;
 export const JUMP_SPEED = 15;
+export const DASH_SPEED = 18;
+export const DASH_DURATION_TICKS = 8;
+export const DASH_COOLDOWN_TICKS = 45;
 export const GRAVITY_Y = -28;
+
+export const BULLET_SPEED = 28;
+export const BULLET_LIFETIME_TICKS = 120;
+export const BULLET_HALF_WIDTH  = 0.15;
+export const BULLET_HALF_HEIGHT = 0.08;
+export const BULLET_COLOR = 0xffe066;
+export const BULLET_ID_MAX = 255;
+export const GUN_FIRE_COOLDOWN_TICKS = 15;
 
 export const PLAYER_COLOR_PALETTE = [
   0xe76f51,

@@ -17,6 +17,7 @@ import {
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
+import { HealthBarOverlay } from './HealthBarOverlay';
 import { MainMenu, type StatusTone } from './MainMenu';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
@@ -37,6 +38,9 @@ type InputState = {
   right: boolean;
   jump: boolean;
   duck: boolean;
+  punch: boolean;
+  dash: boolean;
+  shoot: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
@@ -239,6 +243,7 @@ export class MultiplayerApp {
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly settingsToggleButton: HTMLButtonElement;
+  private readonly healthBarOverlay: HealthBarOverlay;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -272,6 +277,9 @@ export class MultiplayerApp {
     right: false,
     jump: false,
     duck: false,
+    punch: false,
+    dash: false,
+    shoot: false,
   };
 
   private readonly debugCounters: DebugCounters = {
@@ -328,7 +336,11 @@ export class MultiplayerApp {
       event.code === 'KeyW' ||
       event.code === 'Space' ||
       event.code === 'ArrowDown' ||
-      event.code === 'KeyS'
+      event.code === 'KeyS' ||
+      event.code === 'KeyU' ||
+      event.code === 'KeyI' ||
+      event.code === 'ShiftLeft' ||
+      event.code === 'ShiftRight'
     ) {
       event.preventDefault();
     }
@@ -339,15 +351,20 @@ export class MultiplayerApp {
     if (event.code === 'ArrowRight' || event.code === 'KeyD') {
       this.inputState.right = true;
     }
-    if (
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space'
-    ) {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
       this.inputState.jump = true;
     }
     if (event.code === 'ArrowDown' || event.code === 'KeyS') {
       this.inputState.duck = true;
+    }
+    if (event.code === 'KeyU') {
+      this.inputState.punch = true;
+    }
+    if (event.code === 'KeyI') {
+      this.inputState.shoot = true;
+    }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      this.inputState.dash = true;
     }
 
     if (event.code === 'Escape' && this.isInRoom()) {
@@ -375,15 +392,20 @@ export class MultiplayerApp {
     if (event.code === 'ArrowRight' || event.code === 'KeyD') {
       this.inputState.right = false;
     }
-    if (
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space'
-    ) {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
       this.inputState.jump = false;
     }
     if (event.code === 'ArrowDown' || event.code === 'KeyS') {
       this.inputState.duck = false;
+    }
+    if (event.code === 'KeyU') {
+      this.inputState.punch = false;
+    }
+    if (event.code === 'KeyI') {
+      this.inputState.shoot = false;
+    }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      this.inputState.dash = false;
     }
   };
 
@@ -395,7 +417,7 @@ export class MultiplayerApp {
 
     this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
     this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
-  this.stockHud = new StockHud(this.viewport);
+    this.stockHud = new StockHud(this.viewport);
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
@@ -411,6 +433,7 @@ export class MultiplayerApp {
       this.root,
       '#cameraModeButton',
     );
+    this.healthBarOverlay = new HealthBarOverlay(this.gameHud);
 
     this.tickValue = requireElement<HTMLElement>(this.root, '#tickValue');
     this.confirmedTickValue = requireElement<HTMLElement>(
@@ -448,8 +471,8 @@ export class MultiplayerApp {
       },
       onMapChange: (mapId: string) => {
         this.setSelectedMap(mapId);
-  },
-  onArenaSideWallsChange: (enabled) => {
+      },
+      onArenaSideWallsChange: (enabled) => {
         this.applyArenaSideWalls(enabled);
       },
     });
@@ -568,6 +591,7 @@ export class MultiplayerApp {
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
     this.stockHud.destroy();
+    this.healthBarOverlay.dispose();
     this.renderer.dispose();
 
     if (this.game) {
@@ -595,6 +619,16 @@ export class MultiplayerApp {
       this.renderer.render(renderState, this.peerId);
       if (this.isInRoom() || this.connecting) {
         this.stockHud.update(renderState.players, this.peerId);
+      }
+
+      const localPlayer = renderState.players.find(
+        (player: { id: string; health: number; maxHealth: number }) =>
+          player.id === this.peerId,
+      );
+      if (localPlayer) {
+        this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
+      } else {
+        this.healthBarOverlay.hide();
       }
     }
 
