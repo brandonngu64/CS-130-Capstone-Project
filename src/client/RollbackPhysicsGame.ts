@@ -419,8 +419,24 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.world.step();
     this.resolvePlatformContacts(previousStates);
     this.handleBlastZoneDeaths();
+    this.handleHealthDamage();
     this.tickHeldItems();
     this.tickItems();
+  }
+
+  // if a player's health drops to 0 or below, they should be considered dead and respawn 
+  private handleHealthDamage(): void {
+    for (const [id, record] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      if (record.health <= 0) {
+        record.body.setLinvel({ x: 0, y: 0 }, true);
+        record.body.sleep();
+        this.matchState.startRespawn(id);
+      }
+    }
   }
 
   hash(): number {
