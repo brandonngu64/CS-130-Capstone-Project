@@ -25,7 +25,13 @@ import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import { InputBits, decodeInputBits } from './input';
 import { PlayerCharacter } from './PlayerCharacter';
-import type { ItemKind } from './items';
+import {
+  ITEM_LIFETIME_TICKS,
+  ITEM_PICKUP_RADIUS,
+  ITEM_SPAWN_INTERVAL_TICKS,
+  ItemKind,
+} from './items';
+import type { WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
 export interface AttackRenderState {
@@ -90,6 +96,11 @@ type Bullet = {
   ticksRemaining: number;
 };
 
+type ItemSlotState = {
+  item: WorldItem | null;
+  respawnTick: number;
+};
+
 const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
@@ -104,13 +115,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
   private readonly bullets = new Map<number, Bullet>();
+  private readonly itemSlots: ItemSlotState[] = [];
   private nextBulletId = 1;
+  private tickCount = 0;
 
   constructor(map: TiledMapDefinition) {
     this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
+    this.initializeItemSlots();
   }
 
   serialize(): Uint8Array {
@@ -152,7 +166,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (const record of records) {
       byteLength += 2 + record.idBytes.length + 16 + 13 + matchBytes;
     }
-    byteLength += 1 + bulletList.length * 11 + 1;
+    byteLength += 4 + 1 + bulletList.length * 11 + 1 + this.itemSlots.length * 9 + 1;
 
     const buffer = new ArrayBuffer(byteLength);
     const view = new DataView(buffer);
@@ -186,6 +200,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
     }
 
+    view.setUint32(offset, this.tickCount, true);
+    offset += 4;
+
     view.setUint8(offset, bulletList.length);
     offset += 1;
 
@@ -195,6 +212,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setFloat32(offset, bullet.y, true); offset += 4;
       view.setInt8(offset, bullet.vx < 0 ? -1 : 1); offset += 1;
       view.setUint8(offset, bullet.ticksRemaining); offset += 1;
+    }
+
+    view.setUint8(offset, this.itemSlots.length);
+    offset += 1;
+
+    for (const slot of this.itemSlots) {
+      view.setUint8(offset, slot.item?.kind ?? 0); offset += 1;
+      view.setUint32(offset, slot.item?.expiryTick ?? 0, true); offset += 4;
+      view.setUint32(offset, slot.respawnTick, true); offset += 4;
     }
 
     view.setUint8(offset, this.nextBulletId); offset += 1;
@@ -273,6 +299,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.syncPlayers(Array.from(incoming.keys()).sort());
 
+    this.tickCount = view.getUint32(offset, true);
+    offset += 4;
+
     for (const [id, state] of incoming) {
       const record = this.players.get(id);
       if (!record) {
@@ -308,10 +337,45 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       this.bullets.set(id, { id, x, y, vx, ticksRemaining });
     }
 
+    const itemSlotCount = view.getUint8(offset);
+    offset += 1;
+
+    if (itemSlotCount !== this.itemSlots.length) {
+      throw new Error(`Mismatched item slot count: expected ${this.itemSlots.length}, got ${itemSlotCount}`);
+    }
+
+    for (let slotIndex = 0; slotIndex < itemSlotCount; slotIndex += 1) {
+      const kind = view.getUint8(offset); offset += 1;
+      const expiryTick = view.getUint32(offset, true); offset += 4;
+      const respawnTick = view.getUint32(offset, true); offset += 4;
+
+      const spawnPoint = this.map.itemSpawnPoints[slotIndex];
+      if (!spawnPoint) {
+        throw new Error(`Missing item spawn point for slot ${slotIndex}`);
+      }
+
+      this.itemSlots[slotIndex] = {
+        item:
+          kind > 0
+            ? {
+                id: slotIndex,
+                kind: kind as ItemKind,
+                slotIndex,
+                x: spawnPoint.x,
+                y: spawnPoint.y,
+                expiryTick,
+              }
+            : null,
+        respawnTick,
+      };
+    }
+
     this.nextBulletId = view.getUint8(offset) || 1;
   }
 
   step(inputs: Map<PlayerId, Uint8Array>): void {
+    this.tickCount += 1;
+
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
     const respawnedIds = this.matchState.advanceTimers();
@@ -355,6 +419,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.world.step();
     this.resolvePlatformContacts(previousStates);
     this.handleBlastZoneDeaths();
+    this.tickHeldItems();
+    this.tickItems();
   }
 
   hash(): number {
@@ -417,10 +483,21 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort((left, right) => left.id - right.id)
       .map((bullet) => ({ id: bullet.id, x: bullet.x, y: bullet.y }));
 
+    const items = this.itemSlots
+      .map((slot) => slot.item)
+      .filter((item): item is WorldItem => item !== null)
+      .sort((left, right) => left.id - right.id)
+      .map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        x: item.x,
+        y: item.y,
+      }));
+
     return {
       players,
       attacks,
-      items: [],
+      items,
       bullets,
     };
   }
@@ -434,7 +511,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousInputFlags.clear();
     this.bullets.clear();
     this.nextBulletId = 1;
+    this.tickCount = 0;
     this.matchState.clear();
+    this.initializeItemSlots();
   }
 
   private createStaticLevel(): void {
@@ -635,6 +714,125 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (bullet.x < minX || bullet.x > maxX) {
         this.bullets.delete(bulletId);
       }
+    }
+  }
+
+  private tickHeldItems(): void {
+    for (const [, record] of this.players) {
+      if (record.heldItem === null) {
+        continue;
+      }
+
+      if (this.tickCount >= record.heldItemExpiryTick) {
+        record.dropItem();
+      }
+    }
+  }
+
+  private tickItems(): void {
+    for (let slotIndex = 0; slotIndex < this.itemSlots.length; slotIndex += 1) {
+      const slot = this.itemSlots[slotIndex];
+
+      if (slot.item !== null) {
+        if (this.tickCount >= slot.item.expiryTick) {
+          this.queueItemRespawn(slotIndex);
+          continue;
+        }
+
+        const pickedUpBy = this.findItemPickupCandidate(slot.item);
+        if (pickedUpBy) {
+          this.collectItem(slotIndex, pickedUpBy);
+        }
+
+        continue;
+      }
+
+      if (slot.respawnTick > 0 && this.tickCount >= slot.respawnTick) {
+        this.spawnItem(slotIndex);
+      }
+    }
+  }
+
+  private findItemPickupCandidate(item: WorldItem): PlayerCharacter | null {
+    let closestPlayer: PlayerCharacter | null = null;
+    let closestDistanceSq = Number.POSITIVE_INFINITY;
+
+    for (const [id, record] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const dx = position.x - item.x;
+      const dy = position.y - item.y;
+      const distanceSq = dx * dx + dy * dy;
+
+      if (distanceSq > ITEM_PICKUP_RADIUS * ITEM_PICKUP_RADIUS) {
+        continue;
+      }
+
+      if (distanceSq < closestDistanceSq) {
+        closestPlayer = record;
+        closestDistanceSq = distanceSq;
+      }
+    }
+
+    return closestPlayer;
+  }
+
+  private collectItem(slotIndex: number, player: PlayerCharacter): void {
+    const slot = this.itemSlots[slotIndex];
+    if (!slot.item) {
+      return;
+    }
+
+    player.heldItem = slot.item.kind;
+    player.heldItemExpiryTick = this.tickCount + ITEM_LIFETIME_TICKS;
+    player.gunFireCooldownTicks = 0;
+    this.queueItemRespawn(slotIndex);
+  }
+
+  private queueItemRespawn(slotIndex: number): void {
+    const slot = this.itemSlots[slotIndex];
+    slot.item = null;
+    slot.respawnTick = this.tickCount + ITEM_SPAWN_INTERVAL_TICKS;
+  }
+
+  private spawnItem(slotIndex: number): void {
+    const spawnPoint = this.map.itemSpawnPoints[slotIndex];
+    if (!spawnPoint) {
+      return;
+    }
+
+    this.itemSlots[slotIndex] = {
+      item: {
+        id: slotIndex,
+        kind: ItemKind.Gun,
+        slotIndex,
+        x: spawnPoint.x,
+        y: spawnPoint.y,
+        expiryTick: this.tickCount + ITEM_LIFETIME_TICKS,
+      },
+      respawnTick: 0,
+    };
+  }
+
+  private initializeItemSlots(): void {
+    this.itemSlots.length = 0;
+
+    for (let slotIndex = 0; slotIndex < this.map.itemSpawnPoints.length; slotIndex += 1) {
+      const spawnPoint = this.map.itemSpawnPoints[slotIndex];
+      this.itemSlots.push({
+        item: {
+          id: slotIndex,
+          kind: ItemKind.Gun,
+          slotIndex,
+          x: spawnPoint.x,
+          y: spawnPoint.y,
+          expiryTick: this.tickCount + ITEM_LIFETIME_TICKS,
+        },
+        respawnTick: 0,
+      });
     }
   }
 
