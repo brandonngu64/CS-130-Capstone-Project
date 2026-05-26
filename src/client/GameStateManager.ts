@@ -5,12 +5,14 @@ import {
   BLAST_ZONE_SIDE_MARGIN,
   DEFAULT_STOCKS,
   OFF_STAGE_Y,
+  PLAYER_HALF_HEIGHT,
   RESPAWN_DELAY_TICKS,
 } from './constants';
 
 type SpawnPoint = {
   x: number;
   y: number;
+  feetY: number;
 };
 
 /** Per-player match data kept in sync across rollback. */
@@ -137,7 +139,7 @@ export class GameStateManager {
       }
 
       const spawnPoint = spawnPointForPlayer(playerId);
-      body.setTranslation({ x: spawnPoint.x, y: spawnPoint.y }, true);
+      body.setTranslation({ x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT }, true);
       body.setLinvel({ x: 0, y: 0 }, true);
     }
   }

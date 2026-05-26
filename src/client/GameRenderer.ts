@@ -83,7 +83,6 @@ export class GameRenderer {
       return;
     }
     this.sideWallsEnabled = enabled;
-    this.rebuildGroundMesh();
     this.syncSideWallMeshes();
   }
 
@@ -197,7 +196,6 @@ export class GameRenderer {
   }
 
   private setupArenaMeshes(): void {
-    this.rebuildGroundMesh();
     this.syncSideWallMeshes();
   }
 
