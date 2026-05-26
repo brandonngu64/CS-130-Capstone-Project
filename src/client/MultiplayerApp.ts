@@ -12,12 +12,18 @@ import {
 } from 'rollback-netcode';
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
+<<<<<<< HEAD
+=======
+import type { CameraMode } from './GameRenderer';
+>>>>>>> origin/main
 import { HealthBarOverlay } from './HealthBarOverlay';
 import { MainMenu, type StatusTone } from './MainMenu';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
+import { StockHud } from './StockHud';
 import { encodeInput } from './input';
+import { AVAILABLE_MAPS, DEFAULT_MAP_ID, loadMapDefinition } from './tiledMap';
 
 type DebugCounters = {
   rollbackCount: number;
@@ -30,6 +36,10 @@ type InputState = {
   left: boolean;
   right: boolean;
   jump: boolean;
+  duck: boolean;
+  punch: boolean;
+  dash: boolean;
+  shoot: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
@@ -38,17 +48,18 @@ type RecoveryState = {
   roomId: string;
   hostPeerId: string;
   mode: RecoveryMode;
+  mapId: string;
   signalUrl: string;
 };
 
 const PEER_ID_STORAGE_KEY = 'cs130-peer-id';
-const ROOM_DISCONNECT_GRACE_MS = 3500;
-const WEBSOCKET_KEEPALIVE_INTERVAL_MS = 1000;
-const WEBSOCKET_KEEPALIVE_TIMEOUT_MS = 3500;
+const ROOM_DISCONNECT_GRACE_MS = 10000;
+const WEBSOCKET_KEEPALIVE_INTERVAL_MS = 10000;
+const WEBSOCKET_KEEPALIVE_TIMEOUT_MS = 10000;
 const WEBSOCKET_CONNECTION_TIMEOUT_MS = 10000;
-const SIGNALING_RECONNECT_BASE_DELAY_MS = 1000;
-const SIGNALING_RECONNECT_MAX_DELAY_MS = 4000;
-const SIGNALING_RECONNECT_MAX_ATTEMPTS = 5;
+const SIGNALING_RECONNECT_BASE_DELAY_MS = 10000;
+const SIGNALING_RECONNECT_MAX_DELAY_MS = 10000;
+const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 
 function requireElement<T extends HTMLElement>(
@@ -62,9 +73,31 @@ function requireElement<T extends HTMLElement>(
   return element;
 }
 
+function isArrowKey(code: string): boolean {
+  return (
+    code === 'ArrowLeft' ||
+    code === 'ArrowRight' ||
+    code === 'ArrowUp' ||
+    code === 'ArrowDown'
+  );
+}
+
+function cameraModeLabel(mode: CameraMode): string {
+  switch (mode) {
+    case 'follow':
+      return 'Follow';
+    case 'free':
+      return 'Free';
+    case 'action':
+      return 'Action';
+    default:
+      return 'Follow';
+  }
+}
+
 function readStoredPeerId(): string | null {
   try {
-    const stored = globalThis.localStorage?.getItem(PEER_ID_STORAGE_KEY);
+    const stored = globalThis.sessionStorage?.getItem(PEER_ID_STORAGE_KEY);
     return stored && stored.trim().length > 0 ? stored.trim() : null;
   } catch {
     return null;
@@ -73,7 +106,8 @@ function readStoredPeerId(): string | null {
 
 function storePeerId(peerId: string): void {
   try {
-    globalThis.localStorage?.setItem(PEER_ID_STORAGE_KEY, peerId);
+    globalThis.sessionStorage?.setItem(PEER_ID_STORAGE_KEY, peerId);
+    globalThis.localStorage?.removeItem(PEER_ID_STORAGE_KEY);
   } catch {
     // Ignore storage failures and continue with the in-memory peer id.
   }
@@ -98,6 +132,7 @@ function readStoredRecoveryState(): RecoveryState | null {
     }
 
     return {
+      mapId: typeof parsed.mapId === 'string' ? parsed.mapId : DEFAULT_MAP_ID,
       mode: parsed.mode,
       roomId: parsed.roomId,
       hostPeerId: parsed.hostPeerId,
@@ -191,15 +226,21 @@ class RepeatLastInputPredictor implements InputPredictor<Uint8Array> {
 
 export class MultiplayerApp {
   private readonly root: HTMLElement;
-  private readonly renderer: GameRenderer;
+  private readonly availableMaps = [...AVAILABLE_MAPS];
+  private selectedMapId = DEFAULT_MAP_ID;
+  private mapDefinition = loadMapDefinition(this.selectedMapId);
+  private readonly viewport: HTMLElement;
+  private renderer: GameRenderer;
 
   private readonly peerId: string;
   private readonly mainMenu: MainMenu;
   private readonly settingsMenu: SettingsMenu;
+  private readonly stockHud: StockHud;
 
   private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
   private readonly leaveButton: HTMLButtonElement;
+  private readonly cameraToggleButton: HTMLButtonElement;
   private readonly settingsToggleButton: HTMLButtonElement;
   private readonly healthBarOverlay: HealthBarOverlay;
 
@@ -221,11 +262,23 @@ export class MultiplayerApp {
   private hostPeerId: string | null = null;
   private currentShareUrl = '';
   private settingsOpen = false;
+  private cameraMode: CameraMode = 'follow';
+  private readonly cameraPanInput = {
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+  };
+  private readonly cameraMoveSpeed = 8;
 
   private readonly inputState: InputState = {
     left: false,
     right: false,
     jump: false,
+    duck: false,
+    punch: false,
+    dash: false,
+    shoot: false,
   };
 
   private readonly debugCounters: DebugCounters = {
@@ -240,6 +293,7 @@ export class MultiplayerApp {
   private reconnectAttempt = 0;
   private reconnectingSignaling = false;
   private isCleaningUp = false;
+  private respawnCameraLocked = false;
 
   private unsubscribeSignalMessages: (() => void) | null = null;
   private unsubscribeSignalClose: (() => void) | null = null;
@@ -251,6 +305,28 @@ export class MultiplayerApp {
   private connecting = false;
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.code === 'KeyC') {
+      event.preventDefault();
+      if (this.isInRoom() || this.connecting) {
+        this.toggleCameraMode();
+      }
+      return;
+    }
+
+    if (this.cameraMode === 'free' && isArrowKey(event.code)) {
+      event.preventDefault();
+      if (event.code === 'ArrowLeft') {
+        this.cameraPanInput.left = true;
+      } else if (event.code === 'ArrowRight') {
+        this.cameraPanInput.right = true;
+      } else if (event.code === 'ArrowUp') {
+        this.cameraPanInput.up = true;
+      } else if (event.code === 'ArrowDown') {
+        this.cameraPanInput.down = true;
+      }
+      return;
+    }
+
     if (
       event.code === 'ArrowLeft' ||
       event.code === 'KeyA' ||
@@ -258,7 +334,13 @@ export class MultiplayerApp {
       event.code === 'KeyD' ||
       event.code === 'ArrowUp' ||
       event.code === 'KeyW' ||
-      event.code === 'Space'
+      event.code === 'Space' ||
+      event.code === 'ArrowDown' ||
+      event.code === 'KeyS' ||
+      event.code === 'KeyU' ||
+      event.code === 'KeyI' ||
+      event.code === 'ShiftLeft' ||
+      event.code === 'ShiftRight'
     ) {
       event.preventDefault();
     }
@@ -269,12 +351,20 @@ export class MultiplayerApp {
     if (event.code === 'ArrowRight' || event.code === 'KeyD') {
       this.inputState.right = true;
     }
-    if (
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space'
-    ) {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
       this.inputState.jump = true;
+    }
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      this.inputState.duck = true;
+    }
+    if (event.code === 'KeyU') {
+      this.inputState.punch = true;
+    }
+    if (event.code === 'KeyI') {
+      this.inputState.shoot = true;
+    }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      this.inputState.dash = true;
     }
 
     if (event.code === 'Escape' && this.isInRoom()) {
@@ -283,18 +373,39 @@ export class MultiplayerApp {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
+    if (this.cameraMode === 'free' && isArrowKey(event.code)) {
+      if (event.code === 'ArrowLeft') {
+        this.cameraPanInput.left = false;
+      } else if (event.code === 'ArrowRight') {
+        this.cameraPanInput.right = false;
+      } else if (event.code === 'ArrowUp') {
+        this.cameraPanInput.up = false;
+      } else if (event.code === 'ArrowDown') {
+        this.cameraPanInput.down = false;
+      }
+      return;
+    }
+
     if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
       this.inputState.left = false;
     }
     if (event.code === 'ArrowRight' || event.code === 'KeyD') {
       this.inputState.right = false;
     }
-    if (
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space'
-    ) {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
       this.inputState.jump = false;
+    }
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      this.inputState.duck = false;
+    }
+    if (event.code === 'KeyU') {
+      this.inputState.punch = false;
+    }
+    if (event.code === 'KeyI') {
+      this.inputState.shoot = false;
+    }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      this.inputState.dash = false;
     }
   };
 
@@ -304,8 +415,9 @@ export class MultiplayerApp {
 
     this.root.innerHTML = this.renderAppTemplate();
 
-    const viewport = requireElement<HTMLElement>(this.root, '#viewport');
-    this.renderer = new GameRenderer(viewport);
+    this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+    this.stockHud = new StockHud(this.viewport);
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
@@ -317,6 +429,13 @@ export class MultiplayerApp {
       this.root,
       '#settingsToggleButton',
     );
+<<<<<<< HEAD
+=======
+    this.cameraToggleButton = requireElement<HTMLButtonElement>(
+      this.root,
+      '#cameraModeButton',
+    );
+>>>>>>> origin/main
     this.healthBarOverlay = new HealthBarOverlay(this.gameHud);
 
     this.tickValue = requireElement<HTMLElement>(this.root, '#tickValue');
@@ -343,7 +462,7 @@ export class MultiplayerApp {
     );
     this.rttValue = requireElement<HTMLElement>(this.root, '#rttValue');
 
-    this.mainMenu = new MainMenu(viewport, {
+    this.mainMenu = new MainMenu(this.viewport, {
       onHost: () => {
         void this.handleHostRoom();
       },
@@ -353,9 +472,17 @@ export class MultiplayerApp {
       onCopyShareUrl: () => {
         void this.copyShareLink();
       },
+      onMapChange: (mapId: string) => {
+        this.setSelectedMap(mapId);
+      },
+      onArenaSideWallsChange: (enabled) => {
+        this.applyArenaSideWalls(enabled);
+      },
     });
 
-    this.settingsMenu = new SettingsMenu(viewport, {
+    this.mainMenu.setMaps(this.availableMaps, this.selectedMapId);
+
+    this.settingsMenu = new SettingsMenu(this.viewport, {
       onLeave: () => {
         this.leaveRoom();
       },
@@ -366,17 +493,27 @@ export class MultiplayerApp {
         this.settingsOpen = false;
         this.updateUiState();
       },
+      onArenaSideWallsChange: (enabled) => {
+        this.applyArenaSideWalls(enabled);
+      },
     });
 
     this.mainMenu.setPeerId(this.peerId);
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
     this.settingsMenu.setPeerId(this.peerId);
+    this.settingsMenu.setMap(this.getSelectedMapManifest());
+
+    this.renderer.setCameraMode(this.cameraMode);
+    this.updateCameraButton();
 
     this.leaveButton.addEventListener('click', () => {
       this.leaveRoom();
     });
     this.settingsToggleButton.addEventListener('click', () => {
       this.toggleSettings();
+    });
+    this.cameraToggleButton.addEventListener('click', () => {
+      this.toggleCameraMode();
     });
 
     window.addEventListener('keydown', this.onKeyDown, { passive: false });
@@ -390,8 +527,15 @@ export class MultiplayerApp {
   async start(): Promise<void> {
     await RAPIER.init();
 
+    const currentUrl = new URL(window.location.href);
+    const storedRecovery = readStoredRecoveryState();
+    const mapId = currentUrl.searchParams.get('map') ?? storedRecovery?.mapId ?? null;
+    if (mapId) {
+      this.setSelectedMap(mapId);
+    }
+
     if (!this.game) {
-      this.game = new RollbackPhysicsGame();
+      this.game = new RollbackPhysicsGame(this.mapDefinition);
     }
 
     this.setStatus('Ready. Host a room or join from a shared URL.');
@@ -399,9 +543,6 @@ export class MultiplayerApp {
 
     this.lastFrameTimeMs = performance.now();
     this.animationFrameId = requestAnimationFrame(this.onFrame);
-
-    const currentUrl = new URL(window.location.href);
-    const storedRecovery = readStoredRecoveryState();
 
     let roomId = currentUrl.searchParams.get('room');
     let hostPeer = currentUrl.searchParams.get('host');
@@ -450,6 +591,10 @@ export class MultiplayerApp {
     this.cleanupNetworking();
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
+<<<<<<< HEAD
+=======
+    this.stockHud.destroy();
+>>>>>>> origin/main
     this.healthBarOverlay.dispose();
     this.renderer.dispose();
 
@@ -469,15 +614,35 @@ export class MultiplayerApp {
       this.accumulatedTimeMs -= this.fixedStepMs;
     }
 
+    if (this.cameraMode === 'free') {
+      this.updateFreeCamera(frameDelta / 1000);
+    }
+
     if (this.game) {
       const renderState = this.game.getRenderState();
       this.renderer.render(renderState, this.peerId);
+<<<<<<< HEAD
       const localPlayer = renderState.players.find(
         (player) => player.id === this.peerId,
       );
       if (localPlayer) {
         this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
       } else {
+=======
+      if (this.isInRoom() || this.connecting) {
+        this.stockHud.update(renderState.players, this.peerId);
+      }
+
+      const localPlayer = renderState.players.find(
+        (player: { id: string; health: number; maxHealth: number }) =>
+          player.id === this.peerId,
+      );
+      if (localPlayer) {
+        this.syncRespawnCamera(localPlayer);
+        this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
+      } else {
+        this.releaseRespawnCamera();
+>>>>>>> origin/main
         this.healthBarOverlay.hide();
       }
     }
@@ -560,6 +725,7 @@ export class MultiplayerApp {
       this.setRoomState(roomId, this.peerId);
       this.recoveryState = {
         mode: 'host',
+        mapId: this.selectedMapId,
         roomId,
         hostPeerId: this.peerId,
         signalUrl: this.getCurrentSignalUrl(),
@@ -637,6 +803,7 @@ export class MultiplayerApp {
       this.setRoomState(roomId, resolvedHostPeer);
       this.recoveryState = {
         mode: 'join',
+        mapId: this.selectedMapId,
         roomId,
         hostPeerId: resolvedHostPeer,
         signalUrl: this.getCurrentSignalUrl(),
@@ -678,6 +845,8 @@ export class MultiplayerApp {
   private leaveRoom(): void {
     this.settingsOpen = false;
     this.cleanupNetworking({ sendLeave: true });
+    this.clearCameraInput();
+    this.setCameraMode('follow');
 
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.delete('room');
@@ -691,6 +860,7 @@ export class MultiplayerApp {
     this.settingsMenu.setShareUrl('');
     this.settingsMenu.setRoomId('');
     this.settingsMenu.setHostPeerId('');
+    this.settingsMenu.setMap(this.getSelectedMapManifest());
 
     this.setStatus('Left room. Host or join another session.');
     this.statusBadge.textContent = sessionStateLabel(SessionState.Disconnected);
@@ -1158,6 +1328,7 @@ export class MultiplayerApp {
     this.mainMenu.setHostPeerId(hostPeerId);
     this.settingsMenu.setRoomId(roomId);
     this.settingsMenu.setHostPeerId(hostPeerId);
+    this.settingsMenu.setMap(this.getSelectedMapManifest());
 
     this.publishShareUrl(roomId, hostPeerId);
   }
@@ -1166,6 +1337,7 @@ export class MultiplayerApp {
     const current = new URL(window.location.href);
     current.searchParams.set('room', roomId);
     current.searchParams.set('host', hostPeerId);
+    current.searchParams.set('map', this.selectedMapId);
 
     const signalUrl = this.mainMenu.getSignalUrl();
     if (signalUrl && signalUrl !== this.defaultSignalUrl()) {
@@ -1232,6 +1404,15 @@ export class MultiplayerApp {
     this.updateUiState();
   }
 
+  private applyArenaSideWalls(enabled: boolean): void {
+
+    const wallLabel = enabled ? 'on' : 'off';
+    const syncHint = this.isInRoom()
+      ? ' All players in the room should use the same setting to avoid desync.'
+      : '';
+    this.setStatus(`Arena side walls ${wallLabel}.${syncHint}`);
+  }
+
   private updateUiState(): void {
     const inRoom = this.isInRoom();
     const inActiveSession = inRoom || this.connecting;
@@ -1243,8 +1424,12 @@ export class MultiplayerApp {
     }
 
     this.mainMenu.setBusy(this.connecting);
+    this.mainMenu.setMapSelectionEnabled(!inActiveSession);
+  this.cameraToggleButton.disabled = !inActiveSession;
+  this.updateCameraButton();
 
     this.gameHud.dataset.visible = inActiveSession ? 'true' : 'false';
+    this.stockHud.setVisible(inActiveSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
 
     if (this.settingsOpen && inActiveSession) {
@@ -1254,6 +1439,35 @@ export class MultiplayerApp {
       if (!inActiveSession) {
         this.settingsOpen = false;
       }
+    }
+  }
+
+  private setSelectedMap(mapId: string): void {
+    if (this.isInRoom() || this.connecting) {
+      return;
+    }
+
+    const normalizedMapId = mapId.trim();
+    if (!normalizedMapId || normalizedMapId === this.selectedMapId) {
+      return;
+    }
+
+    if (!this.availableMaps.find((entry) => entry.id === normalizedMapId)) {
+      return;
+    }
+
+    this.selectedMapId = normalizedMapId;
+    this.mapDefinition = loadMapDefinition(this.selectedMapId);
+    this.mainMenu.setMaps(this.availableMaps, this.selectedMapId);
+    this.settingsMenu.setMap(this.getSelectedMapManifest());
+
+    this.renderer.dispose();
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+    this.renderer.setCameraMode(this.cameraMode);
+
+    if (this.game) {
+      this.game.reset();
+      this.game = new RollbackPhysicsGame(this.mapDefinition);
     }
   }
 
@@ -1275,6 +1489,7 @@ export class MultiplayerApp {
               <strong id="statusBadge">Disconnected</strong>
             </div>
             <div class="game-hud-actions">
+              <button id="cameraModeButton" class="action-ghost" type="button">Camera: Follow</button>
               <button id="settingsToggleButton" class="action-ghost" type="button">Settings</button>
               <button id="leaveButton" class="action-ghost" type="button">Leave</button>
             </div>
@@ -1296,5 +1511,87 @@ export class MultiplayerApp {
         </section>
       </div>
     `;
+  }
+
+  private getSelectedMapManifest() {
+    return (
+      this.availableMaps.find((entry) => entry.id === this.selectedMapId) ?? {
+        height: this.mapDefinition.height,
+        id: this.selectedMapId,
+        name: this.mapDefinition.name,
+        width: this.mapDefinition.width,
+      }
+    );
+  }
+
+  private toggleCameraMode(): void {
+    const nextMode: CameraMode =
+      this.cameraMode === 'follow'
+        ? 'free'
+        : this.cameraMode === 'free'
+          ? 'action'
+          : 'follow';
+    this.setCameraMode(nextMode);
+  }
+
+  private setCameraMode(mode: CameraMode): void {
+    this.cameraMode = mode;
+    this.renderer.setCameraMode(mode);
+    if (mode !== 'free') {
+      this.clearCameraInput();
+    }
+    this.updateCameraButton();
+  }
+
+  private clearCameraInput(): void {
+    this.cameraPanInput.left = false;
+    this.cameraPanInput.right = false;
+    this.cameraPanInput.up = false;
+    this.cameraPanInput.down = false;
+  }
+
+  private updateCameraButton(): void {
+    this.cameraToggleButton.textContent = `Camera: ${cameraModeLabel(this.cameraMode)}`;
+  }
+
+  private updateFreeCamera(deltaSeconds: number): void {
+    if (this.cameraMode !== 'free' || deltaSeconds <= 0) {
+      return;
+    }
+
+    const moveX = (this.cameraPanInput.right ? 1 : 0) - (this.cameraPanInput.left ? 1 : 0);
+    const moveY = (this.cameraPanInput.up ? 1 : 0) - (this.cameraPanInput.down ? 1 : 0);
+
+    if (moveX === 0 && moveY === 0) {
+      return;
+    }
+
+    this.renderer.panFreeCamera(
+      moveX * this.cameraMoveSpeed * deltaSeconds,
+      moveY * this.cameraMoveSpeed * deltaSeconds,
+    );
+  }
+
+  private syncRespawnCamera(localPlayer: { eliminated: boolean; respawning: boolean }): void {
+    const shouldLock = this.cameraMode !== 'free' && (localPlayer.eliminated || localPlayer.respawning);
+
+    if (shouldLock) {
+      if (!this.respawnCameraLocked) {
+        this.renderer.lockCamera();
+        this.respawnCameraLocked = true;
+      }
+      return;
+    }
+
+    this.releaseRespawnCamera();
+  }
+
+  private releaseRespawnCamera(): void {
+    if (!this.respawnCameraLocked) {
+      return;
+    }
+
+    this.renderer.unlockCamera();
+    this.respawnCameraLocked = false;
   }
 }

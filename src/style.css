@@ -389,6 +389,24 @@ h2 {
   text-align: left;
 }
 
+.toggle-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.toggle-field input[type='checkbox'] {
+  margin-top: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.toggle-field span {
+  line-height: 1.35;
+}
+
 .game-hud {
   position: absolute;
   top: 12px;
@@ -479,6 +497,105 @@ h2 {
 
 .game-hud-actions button {
   box-shadow: 0 6px 18px rgba(11, 28, 44, 0.18);
+}
+
+.stock-hud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: min(100% - 24px, 420px);
+  pointer-events: none;
+}
+
+.stock-hud[data-visible='false'] {
+  display: none;
+}
+
+.stock-hud-empty {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(15, 20, 31, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+
+.stock-card {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(40, 65, 82, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(11, 28, 44, 0.16);
+  min-width: 108px;
+}
+
+.stock-card--local {
+  border-color: rgba(42, 157, 143, 0.55);
+  box-shadow: 0 6px 18px rgba(42, 157, 143, 0.22);
+}
+
+.stock-card[data-eliminated='true'] {
+  opacity: 0.55;
+}
+
+.stock-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.stock-card-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.stock-card-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #1a2a35;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-card-status {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a3412;
+}
+
+.stock-card[data-respawning='true'] .stock-card-status {
+  color: #1d4ed8;
+}
+
+.stock-pips {
+  display: flex;
+  gap: 5px;
+}
+
+.stock-pip {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid rgba(40, 65, 82, 0.35);
+  background: transparent;
+}
+
+.stock-pip--filled {
+  background: linear-gradient(135deg, #2a9d8f, #457b9d);
+  border-color: transparent;
 }
 
 @media (max-width: 720px) {

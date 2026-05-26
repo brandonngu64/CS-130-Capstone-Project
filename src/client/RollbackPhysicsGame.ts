@@ -1,23 +1,48 @@
 import * as RAPIER from '@dimforge/rapier2d-compat';
 import type { Game, PlayerId } from 'rollback-netcode';
 import {
-  ARENA_HALF_WIDTH,
+  BLAST_ZONE_DOWN_OFFSET,
+  BLAST_ZONE_SIDE_OFFSET,
+  BLAST_ZONE_UP_OFFSET,
+  BULLET_HALF_WIDTH,
+  BULLET_ID_MAX,
+  BULLET_LIFETIME_TICKS,
+  BULLET_SPEED,
+  DASH_COOLDOWN_TICKS,
+  DASH_DURATION_TICKS,
+  DASH_SPEED,
   FIXED_STEP_SECONDS,
   FLOOR_Y,
   GRAVITY_Y,
+  GUN_FIRE_COOLDOWN_TICKS,
   JUMP_SPEED,
   MOVE_SPEED,
-  PLATFORMS,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
+<<<<<<< HEAD
   PLAYER_MAX_HEALTH,
   PLAYER_SPAWN_Y,
+=======
+>>>>>>> origin/main
 } from './constants';
+import { GameStateManager } from './GameStateManager';
+import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import { InputBits, decodeInputBits } from './input';
 import { PlayerCharacter } from './PlayerCharacter';
+<<<<<<< HEAD
+=======
+import {
+  ITEM_LIFETIME_TICKS,
+  ITEM_PICKUP_RADIUS,
+  ITEM_SPAWN_INTERVAL_TICKS,
+  ItemKind,
+} from './items';
+import type { WorldItem } from './items';
+import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
+>>>>>>> origin/main
 
-export interface PlayerRenderState {
+export interface AttackRenderState {
   id: string;
   x: number;
   y: number;
@@ -28,52 +53,143 @@ export interface PlayerRenderState {
   maxHealth: number;
 }
 
-export interface RenderState {
-  players: PlayerRenderState[];
+export interface PlayerRenderState {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: number;
+  stocks: number;
+  eliminated: boolean;
+  respawning: boolean;
+  respawnFlashTicksRemaining: number;
+  health: number;
+  maxHealth: number;
+  heldItem: ItemKind | null;
+  facing: number;
 }
 
+<<<<<<< HEAD
 const SPAWN_SLOTS = [-10, -4, 4, 10];
+=======
+export interface ItemRenderState {
+  id: number;
+  kind: ItemKind;
+  x: number;
+  y: number;
+}
+
+export interface BulletRenderState {
+  id: number;
+  x: number;
+  y: number;
+}
+
+export interface RenderState {
+  players: PlayerRenderState[];
+  attacks: AttackRenderState[];
+  items: ItemRenderState[];
+  bullets: BulletRenderState[];
+}
+
+type StepPlayerState = {
+  ducking: boolean;
+  vx: number;
+  vy: number;
+  x: number;
+  y: number;
+};
+
+type Bullet = {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  ticksRemaining: number;
+};
+
+type ItemSlotState = {
+  item: WorldItem | null;
+  respawnTick: number;
+};
+
+const CONTACT_ALLOWANCE = 0.15;
+const GROUND_RAY_OFFSET = 0.02;
+const GROUND_RAY_LENGTH = 0.25;
+>>>>>>> origin/main
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
+  private readonly map: TiledMapDefinition;
   private readonly world: RAPIER.World;
   private readonly players = new Map<string, PlayerCharacter>();
   private readonly previousInputFlags = new Map<string, number>();
+  private readonly staticColliderHandles = new Set<number>();
+  private readonly matchState = new GameStateManager();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
+  private readonly bullets = new Map<number, Bullet>();
+  private readonly itemSlots: ItemSlotState[] = [];
+  private nextBulletId = 1;
+  private tickCount = 0;
 
-  constructor() {
+  constructor(map: TiledMapDefinition) {
+    this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
+    this.initializeItemSlots();
   }
 
   serialize(): Uint8Array {
     const sortedIds = Array.from(this.players.keys()).sort();
-
     const records = sortedIds.map((id) => {
       const record = this.players.get(id);
       if (!record) {
         throw new Error(`Missing player record for ${id}`);
       }
+
       const idBytes = this.textEncoder.encode(id);
       const translation = record.body.translation();
       const velocity = record.body.linvel();
       const inputFlags = this.previousInputFlags.get(id) ?? 0;
+      const activeAttack = record.activeAttack;
+
       return {
         idBytes,
+        inputFlags,
         x: translation.x,
         y: translation.y,
         vx: velocity.x,
         vy: velocity.y,
+<<<<<<< HEAD
         inputFlags,
         health: record.health,
+=======
+        health: record.health,
+        facing: record.facing,
+        attackKind: activeAttack?.kind ?? 0,
+        attackTicksRemaining: activeAttack?.ticksRemaining ?? 0,
+        dashTicksRemaining: record.dashTicksRemaining,
+        dashCooldownTicks: record.dashCooldownTicks,
+        heldItem: record.heldItem ?? 0,
+        heldItemExpiryTick: record.heldItemExpiryTick,
+        gunFireCooldownTicks: record.gunFireCooldownTicks,
+>>>>>>> origin/main
       };
     });
 
+    const matchBytes = this.matchState.matchBytesPerPlayer();
+    const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
     let byteLength = 1;
     for (const record of records) {
+<<<<<<< HEAD
       byteLength += 2 + record.idBytes.length + 4 * 4 + 1 + 1;
+=======
+      byteLength += 2 + record.idBytes.length + 16 + 13 + matchBytes;
+>>>>>>> origin/main
     }
+    byteLength += 4 + 1 + bulletList.length * 11 + 1 + this.itemSlots.length * 9 + 1;
 
     const buffer = new ArrayBuffer(byteLength);
     const view = new DataView(buffer);
@@ -86,10 +202,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (const record of records) {
       view.setUint16(offset, record.idBytes.length, true);
       offset += 2;
-
       output.set(record.idBytes, offset);
       offset += record.idBytes.length;
 
+<<<<<<< HEAD
       view.setFloat32(offset, record.x, true);
       offset += 4;
       view.setFloat32(offset, record.y, true);
@@ -102,7 +218,50 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 1;
       view.setUint8(offset, record.health);
       offset += 1;
+=======
+      view.setFloat32(offset, record.x, true); offset += 4;
+      view.setFloat32(offset, record.y, true); offset += 4;
+      view.setFloat32(offset, record.vx, true); offset += 4;
+      view.setFloat32(offset, record.vy, true); offset += 4;
+      view.setUint8(offset, record.inputFlags & 0xff); offset += 1;
+      view.setUint8(offset, record.health); offset += 1;
+      view.setInt8(offset, record.facing < 0 ? -1 : 1); offset += 1;
+      view.setUint8(offset, record.attackKind); offset += 1;
+      view.setUint8(offset, record.attackTicksRemaining); offset += 1;
+      view.setUint8(offset, record.dashTicksRemaining); offset += 1;
+      view.setUint8(offset, record.dashCooldownTicks); offset += 1;
+      view.setUint8(offset, record.heldItem); offset += 1;
+      view.setUint16(offset, record.heldItemExpiryTick, true); offset += 2;
+      view.setUint8(offset, record.gunFireCooldownTicks); offset += 1;
+
+      offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
+>>>>>>> origin/main
     }
+
+    view.setUint32(offset, this.tickCount, true);
+    offset += 4;
+
+    view.setUint8(offset, bulletList.length);
+    offset += 1;
+
+    for (const bullet of bulletList) {
+      view.setUint8(offset, bullet.id); offset += 1;
+      view.setFloat32(offset, bullet.x, true); offset += 4;
+      view.setFloat32(offset, bullet.y, true); offset += 4;
+      view.setInt8(offset, bullet.vx < 0 ? -1 : 1); offset += 1;
+      view.setUint8(offset, bullet.ticksRemaining); offset += 1;
+    }
+
+    view.setUint8(offset, this.itemSlots.length);
+    offset += 1;
+
+    for (const slot of this.itemSlots) {
+      view.setUint8(offset, slot.item?.kind ?? 0); offset += 1;
+      view.setUint32(offset, slot.item?.expiryTick ?? 0, true); offset += 4;
+      view.setUint32(offset, slot.respawnTick, true); offset += 4;
+    }
+
+    view.setUint8(offset, this.nextBulletId); offset += 1;
 
     return output;
   }
@@ -123,17 +282,27 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         vy: number;
         inputFlags: number;
         health: number;
+<<<<<<< HEAD
+=======
+        facing: number;
+        attackKind: number;
+        attackTicksRemaining: number;
+        dashTicksRemaining: number;
+        dashCooldownTicks: number;
+        heldItem: number;
+        heldItemExpiryTick: number;
+        gunFireCooldownTicks: number;
+>>>>>>> origin/main
       }
     >();
 
     for (let i = 0; i < count; i += 1) {
       const idByteLength = view.getUint16(offset, true);
       offset += 2;
-
       const idBytes = data.slice(offset, offset + idByteLength);
       offset += idByteLength;
-
       const id = this.textDecoder.decode(idBytes);
+<<<<<<< HEAD
       const x = view.getFloat32(offset, true);
       offset += 4;
       const y = view.getFloat32(offset, true);
@@ -148,44 +317,181 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 1;
 
       incoming.set(id, { x, y, vx, vy, inputFlags, health });
+=======
+
+      const x = view.getFloat32(offset, true); offset += 4;
+      const y = view.getFloat32(offset, true); offset += 4;
+      const vx = view.getFloat32(offset, true); offset += 4;
+      const vy = view.getFloat32(offset, true); offset += 4;
+      const inputFlags = view.getUint8(offset); offset += 1;
+      const health = view.getUint8(offset); offset += 1;
+      const facing = view.getInt8(offset); offset += 1;
+      const attackKind = view.getUint8(offset); offset += 1;
+      const attackTicksRemaining = view.getUint8(offset); offset += 1;
+      const dashTicksRemaining = view.getUint8(offset); offset += 1;
+      const dashCooldownTicks = view.getUint8(offset); offset += 1;
+      const heldItem = view.getUint8(offset); offset += 1;
+      const heldItemExpiryTick = view.getUint16(offset, true); offset += 2;
+      const gunFireCooldownTicks = view.getUint8(offset); offset += 1;
+
+      incoming.set(id, {
+        x,
+        y,
+        vx,
+        vy,
+        inputFlags,
+        health,
+        facing,
+        attackKind,
+        attackTicksRemaining,
+        dashTicksRemaining,
+        dashCooldownTicks,
+        heldItem,
+        heldItemExpiryTick,
+        gunFireCooldownTicks,
+      });
+
+      offset = this.matchState.readPlayer(view, offset, id);
+>>>>>>> origin/main
     }
 
     this.syncPlayers(Array.from(incoming.keys()).sort());
+
+    this.tickCount = view.getUint32(offset, true);
+    offset += 4;
 
     for (const [id, state] of incoming) {
       const record = this.players.get(id);
       if (!record) {
         continue;
       }
+
       record.body.setTranslation({ x: state.x, y: state.y }, true);
       record.body.setLinvel({ x: state.vx, y: state.vy }, true);
+<<<<<<< HEAD
       record.health = Math.max(0, Math.min(state.health, PLAYER_MAX_HEALTH));
+=======
+      record.health = Math.max(0, Math.min(state.health, record.maxHealth));
+      record.facing = state.facing < 0 ? -1 : 1;
+      record.activeAttack =
+        state.attackKind > 0 && state.attackTicksRemaining > 0
+          ? { kind: state.attackKind as AttackKind, ticksRemaining: state.attackTicksRemaining }
+          : null;
+      record.dashTicksRemaining = state.dashTicksRemaining;
+      record.dashCooldownTicks = state.dashCooldownTicks;
+      record.heldItem = state.heldItem > 0 ? (state.heldItem as ItemKind) : null;
+      record.heldItemExpiryTick = state.heldItemExpiryTick;
+      record.gunFireCooldownTicks = state.gunFireCooldownTicks;
+>>>>>>> origin/main
       this.previousInputFlags.set(id, state.inputFlags);
     }
+
+    this.bullets.clear();
+    const bulletCount = view.getUint8(offset);
+    offset += 1;
+
+    for (let i = 0; i < bulletCount; i += 1) {
+      const id = view.getUint8(offset); offset += 1;
+      const x = view.getFloat32(offset, true); offset += 4;
+      const y = view.getFloat32(offset, true); offset += 4;
+      const vx = view.getInt8(offset) < 0 ? -BULLET_SPEED : BULLET_SPEED; offset += 1;
+      const ticksRemaining = view.getUint8(offset); offset += 1;
+      this.bullets.set(id, { id, x, y, vx, ticksRemaining });
+    }
+
+    const itemSlotCount = view.getUint8(offset);
+    offset += 1;
+
+    if (itemSlotCount !== this.itemSlots.length) {
+      throw new Error(`Mismatched item slot count: expected ${this.itemSlots.length}, got ${itemSlotCount}`);
+    }
+
+    for (let slotIndex = 0; slotIndex < itemSlotCount; slotIndex += 1) {
+      const kind = view.getUint8(offset); offset += 1;
+      const expiryTick = view.getUint32(offset, true); offset += 4;
+      const respawnTick = view.getUint32(offset, true); offset += 4;
+
+      const spawnPoint = this.map.itemSpawnPoints[slotIndex];
+      if (!spawnPoint) {
+        throw new Error(`Missing item spawn point for slot ${slotIndex}`);
+      }
+
+      this.itemSlots[slotIndex] = {
+        item:
+          kind > 0
+            ? {
+                id: slotIndex,
+                kind: kind as ItemKind,
+                slotIndex,
+                x: spawnPoint.x,
+                y: spawnPoint.y,
+                expiryTick,
+              }
+            : null,
+        respawnTick,
+      };
+    }
+
+    this.nextBulletId = view.getUint8(offset) || 1;
   }
 
   step(inputs: Map<PlayerId, Uint8Array>): void {
+    this.tickCount += 1;
+
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
+    const respawnedIds = this.matchState.advanceTimers();
+    this.respawnPlayers(respawnedIds);
+    this.tickDashCooldowns();
+    this.tickGunCooldowns();
+
+    const previousStates = new Map<string, StepPlayerState>();
 
     for (const id of ids) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
       const raw = inputs.get(id as PlayerId);
-      this.applyInput(id, decodeInputBits(raw));
+      if (!raw) {
+        continue;
+      }
+
+      const inputFlags = decodeInputBits(raw);
+      const record = this.players.get(id);
+      if (!record) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const velocity = record.body.linvel();
+      previousStates.set(id, {
+        ducking: (inputFlags & InputBits.Duck) !== 0,
+        vx: velocity.x,
+        vy: velocity.y,
+        x: position.x,
+        y: position.y,
+      });
+
+      this.applyInput(id, inputFlags);
     }
 
+    this.tickAttacks();
+    this.tickBullets();
     this.world.step();
-    this.enforceHorizontalBounds();
+    this.resolvePlatformContacts(previousStates);
+    this.handleBlastZoneDeaths();
+    this.tickHeldItems();
+    this.tickItems();
   }
 
   hash(): number {
     const bytes = this.serialize();
     let hash = 0x811c9dc5;
-
     for (const byte of bytes) {
       hash ^= byte;
       hash = Math.imul(hash, 0x01000193);
     }
-
     return hash >>> 0;
   }
 
@@ -194,6 +500,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
+        const match = this.matchState.getRenderInfo(id);
+
         return {
           id,
           x: position.x,
@@ -201,55 +509,105 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
+<<<<<<< HEAD
           health: record.health,
           maxHealth: record.maxHealth,
+=======
+          stocks: match.stocks,
+          eliminated: match.eliminated,
+          respawning: match.respawning,
+          respawnFlashTicksRemaining: match.respawnFlashTicksRemaining,
+          health: record.health,
+          maxHealth: record.maxHealth,
+          heldItem: record.heldItem,
+          facing: record.facing,
+>>>>>>> origin/main
         };
       });
 
-    return { players };
+    const attacks: AttackRenderState[] = [];
+    for (const [id, record] of this.players) {
+      if (!record.activeAttack) {
+        continue;
+      }
+
+      const definition = getAttackDefinition(record.activeAttack.kind);
+      const position = record.body.translation();
+      const center = this.attackCenter(position.x, position.y, record.facing, definition);
+      attacks.push({
+        id: `${id}-attack`,
+        x: center.x,
+        y: center.y,
+        width: definition.hitboxHalfWidth * 2,
+        height: definition.hitboxHalfHeight * 2,
+        color: definition.spriteColor,
+      });
+    }
+
+    attacks.sort((left, right) => left.id.localeCompare(right.id));
+
+    const bullets = Array.from(this.bullets.values())
+      .sort((left, right) => left.id - right.id)
+      .map((bullet) => ({ id: bullet.id, x: bullet.x, y: bullet.y }));
+
+    const items = this.itemSlots
+      .map((slot) => slot.item)
+      .filter((item): item is WorldItem => item !== null)
+      .sort((left, right) => left.id - right.id)
+      .map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        x: item.x,
+        y: item.y,
+      }));
+
+    return {
+      players,
+      attacks,
+      items,
+      bullets,
+    };
   }
 
   reset(): void {
     for (const [, record] of this.players) {
       this.world.removeRigidBody(record.body);
     }
+
     this.players.clear();
     this.previousInputFlags.clear();
+    this.bullets.clear();
+    this.nextBulletId = 1;
+    this.tickCount = 0;
+    this.matchState.clear();
+    this.initializeItemSlots();
   }
 
   private createStaticLevel(): void {
-    const ground = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, FLOOR_Y - 0.5),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(ARENA_HALF_WIDTH + 2, 0.5).setFriction(1),
-      ground,
-    );
-
-    const leftWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-(ARENA_HALF_WIDTH + 0.5), 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), leftWall);
-
-    const rightWall = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(ARENA_HALF_WIDTH + 0.5, 5),
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 8), rightWall);
-
-    for (const platform of PLATFORMS) {
-      const body = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(
-          platform.centerX,
-          platform.centerY,
-        ),
-      );
-      this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(platform.halfWidth, platform.halfHeight)
-          .setFriction(1)
-          .setRestitution(0),
-        body,
-      );
+    for (const rect of this.map.colliders.solids) {
+      this.createStaticCollider(rect, false);
     }
+
+    for (const rect of this.map.colliders.platforms) {
+      this.createStaticCollider(rect, true);
+    }
+  }
+
+  private createStaticCollider(rect: MapColliderRect, platform: boolean): void {
+    const body = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(rect.x, rect.y),
+    );
+
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(rect.width * 0.5, rect.height * 0.5)
+      .setFriction(0)
+      .setRestitution(0);
+
+    if (platform) {
+      colliderDesc.setSensor(true);
+    }
+
+    const collider = this.world.createCollider(colliderDesc, body);
+    this.staticColliderHandles.add(collider.handle);
   }
 
   private syncPlayers(sortedIds: string[]): void {
@@ -260,10 +618,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.world.removeRigidBody(record.body);
         this.players.delete(id);
         this.previousInputFlags.delete(id);
+        this.matchState.removePlayer(id);
       }
     }
 
     for (const id of sortedIds) {
+<<<<<<< HEAD
       if (!this.players.has(id)) {
         this.players.set(
           id,
@@ -274,14 +634,25 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           ),
         );
         this.previousInputFlags.set(id, 0);
+=======
+      if (this.players.has(id)) {
+        continue;
+>>>>>>> origin/main
       }
+
+      this.players.set(
+        id,
+        new PlayerCharacter(id, this.createPlayerBody(this.spawnPointForPlayer(id)), this.colorForPlayer(id)),
+      );
+      this.previousInputFlags.set(id, 0);
+      this.matchState.ensurePlayer(id);
     }
   }
 
-  private createPlayerBody(spawnX: number): RAPIER.RigidBody {
+  private createPlayerBody(spawnPoint: MapSpawnPoint): RAPIER.RigidBody {
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(spawnX, PLAYER_SPAWN_Y)
+        .setTranslation(spawnPoint.x, spawnPoint.feetY + PLAYER_HALF_HEIGHT)
         .lockRotations()
         .setLinearDamping(0)
         .setAngularDamping(0)
@@ -290,7 +661,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.world.createCollider(
       RAPIER.ColliderDesc.cuboid(PLAYER_HALF_WIDTH, PLAYER_HALF_HEIGHT)
-        .setFriction(1)
+        .setFriction(0)
         .setRestitution(0),
       body,
     );
@@ -312,20 +683,379 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       (inputFlags & InputBits.Left ? -1 : 0) +
       (inputFlags & InputBits.Right ? 1 : 0);
 
-    let nextYVelocity = velocity.y;
-    const jumpPressed =
-      (inputFlags & InputBits.Jump) !== 0 &&
-      (previousFlags & InputBits.Jump) === 0;
+    if (horizontalDir !== 0) {
+      record.facing = horizontalDir;
+    }
 
-    if (jumpPressed && this.isGrounded(body)) {
+    const jumpPressed = (inputFlags & InputBits.Jump) !== 0 && (previousFlags & InputBits.Jump) === 0;
+    const ducking = (inputFlags & InputBits.Duck) !== 0;
+    const punchPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
+    const dashPressed = (inputFlags & InputBits.Dash) !== 0 && (previousFlags & InputBits.Dash) === 0;
+    const shootPressed = (inputFlags & InputBits.Shoot) !== 0 && (previousFlags & InputBits.Shoot) === 0;
+
+    if (record.dashTicksRemaining > 0) {
+      body.setLinvel({ x: record.facing * DASH_SPEED, y: velocity.y }, true);
+      record.dashTicksRemaining -= 1;
+      this.previousInputFlags.set(id, inputFlags);
+      return;
+    }
+
+    let nextYVelocity = velocity.y;
+    if (jumpPressed && this.isGrounded(body, ducking)) {
       nextYVelocity = JUMP_SPEED;
+    }
+
+    if (punchPressed && record.activeAttack === null && record.canPunch()) {
+      const definition = getEquippedAttack(record.equippedWeapon);
+      record.activeAttack = {
+        kind: definition.kind,
+        ticksRemaining: definition.durationTicks,
+      };
+    }
+
+    if (
+      shootPressed &&
+      record.gunFireCooldownTicks === 0 &&
+      record.canShoot()
+    ) {
+      this.fireBullet(record);
+      record.gunFireCooldownTicks = GUN_FIRE_COOLDOWN_TICKS;
+    }
+
+    if (dashPressed && record.canDash()) {
+      const dashDir = horizontalDir !== 0 ? horizontalDir : record.facing;
+      record.facing = dashDir;
+      record.dashTicksRemaining = DASH_DURATION_TICKS;
+      record.dashCooldownTicks = DASH_COOLDOWN_TICKS;
+      body.setLinvel({ x: dashDir * DASH_SPEED, y: velocity.y }, true);
+      this.previousInputFlags.set(id, inputFlags);
+      return;
     }
 
     body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
   }
 
-  private isGrounded(body: RAPIER.RigidBody): boolean {
+  private tickDashCooldowns(): void {
+    for (const [, record] of this.players) {
+      if (record.dashCooldownTicks > 0) {
+        record.dashCooldownTicks -= 1;
+      }
+    }
+  }
+
+  private tickGunCooldowns(): void {
+    for (const [, record] of this.players) {
+      if (record.gunFireCooldownTicks > 0) {
+        record.gunFireCooldownTicks -= 1;
+      }
+    }
+  }
+
+  private tickAttacks(): void {
+    for (const [, record] of this.players) {
+      if (!record.activeAttack) {
+        continue;
+      }
+
+      record.activeAttack.ticksRemaining -= 1;
+      if (record.activeAttack.ticksRemaining <= 0) {
+        record.activeAttack = null;
+      }
+    }
+  }
+
+  private tickBullets(): void {
+    const minX = this.map.bounds.minX - 1;
+    const maxX = this.map.bounds.maxX + 1;
+
+    for (const [bulletId, bullet] of this.bullets) {
+      bullet.ticksRemaining -= 1;
+      if (bullet.ticksRemaining <= 0) {
+        this.bullets.delete(bulletId);
+        continue;
+      }
+
+      const dx = bullet.vx * FIXED_STEP_SECONDS;
+      const ray = new RAPIER.Ray({ x: bullet.x, y: bullet.y }, { x: Math.sign(bullet.vx), y: 0 });
+      const hit = this.world.castRay(
+        ray,
+        Math.abs(dx) + BULLET_HALF_WIDTH,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (collider) => this.staticColliderHandles.has(collider.handle),
+      );
+
+      if (hit) {
+        this.bullets.delete(bulletId);
+        continue;
+      }
+
+      bullet.x += dx;
+      if (bullet.x < minX || bullet.x > maxX) {
+        this.bullets.delete(bulletId);
+      }
+    }
+  }
+
+  private tickHeldItems(): void {
+    for (const [, record] of this.players) {
+      if (record.heldItem === null) {
+        continue;
+      }
+
+      if (this.tickCount >= record.heldItemExpiryTick) {
+        record.dropItem();
+      }
+    }
+  }
+
+  private tickItems(): void {
+    for (let slotIndex = 0; slotIndex < this.itemSlots.length; slotIndex += 1) {
+      const slot = this.itemSlots[slotIndex];
+
+      if (slot.item !== null) {
+        if (this.tickCount >= slot.item.expiryTick) {
+          this.queueItemRespawn(slotIndex);
+          continue;
+        }
+
+        const pickedUpBy = this.findItemPickupCandidate(slot.item);
+        if (pickedUpBy) {
+          this.collectItem(slotIndex, pickedUpBy);
+        }
+
+        continue;
+      }
+
+      if (slot.respawnTick > 0 && this.tickCount >= slot.respawnTick) {
+        this.spawnItem(slotIndex);
+      }
+    }
+  }
+
+  private findItemPickupCandidate(item: WorldItem): PlayerCharacter | null {
+    let closestPlayer: PlayerCharacter | null = null;
+    let closestDistanceSq = Number.POSITIVE_INFINITY;
+
+    for (const [id, record] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const dx = position.x - item.x;
+      const dy = position.y - item.y;
+      const distanceSq = dx * dx + dy * dy;
+
+      if (distanceSq > ITEM_PICKUP_RADIUS * ITEM_PICKUP_RADIUS) {
+        continue;
+      }
+
+      if (distanceSq < closestDistanceSq) {
+        closestPlayer = record;
+        closestDistanceSq = distanceSq;
+      }
+    }
+
+    return closestPlayer;
+  }
+
+  private collectItem(slotIndex: number, player: PlayerCharacter): void {
+    const slot = this.itemSlots[slotIndex];
+    if (!slot.item) {
+      return;
+    }
+
+    player.heldItem = slot.item.kind;
+    player.heldItemExpiryTick = this.tickCount + ITEM_LIFETIME_TICKS;
+    player.gunFireCooldownTicks = 0;
+    this.queueItemRespawn(slotIndex);
+  }
+
+  private queueItemRespawn(slotIndex: number): void {
+    const slot = this.itemSlots[slotIndex];
+    slot.item = null;
+    slot.respawnTick = this.tickCount + ITEM_SPAWN_INTERVAL_TICKS;
+  }
+
+  private spawnItem(slotIndex: number): void {
+    const spawnPoint = this.map.itemSpawnPoints[slotIndex];
+    if (!spawnPoint) {
+      return;
+    }
+
+    this.itemSlots[slotIndex] = {
+      item: {
+        id: slotIndex,
+        kind: ItemKind.Gun,
+        slotIndex,
+        x: spawnPoint.x,
+        y: spawnPoint.y,
+        expiryTick: this.tickCount + ITEM_LIFETIME_TICKS,
+      },
+      respawnTick: 0,
+    };
+  }
+
+  private initializeItemSlots(): void {
+    this.itemSlots.length = 0;
+
+    for (let slotIndex = 0; slotIndex < this.map.itemSpawnPoints.length; slotIndex += 1) {
+      const spawnPoint = this.map.itemSpawnPoints[slotIndex];
+      this.itemSlots.push({
+        item: {
+          id: slotIndex,
+          kind: ItemKind.Gun,
+          slotIndex,
+          x: spawnPoint.x,
+          y: spawnPoint.y,
+          expiryTick: this.tickCount + ITEM_LIFETIME_TICKS,
+        },
+        respawnTick: 0,
+      });
+    }
+  }
+
+  private handleBlastZoneDeaths(): void {
+    for (const [id, record] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      if (!this.isOutsideBlastZone(position)) {
+        continue;
+      }
+
+      record.body.setLinvel({ x: 0, y: 0 }, true);
+      record.body.sleep();
+      this.matchState.startRespawn(id);
+    }
+  }
+
+  private respawnPlayers(respawnedIds: string[]): void {
+    const sortedRespawnedIds = [...respawnedIds].sort();
+
+    for (const playerId of sortedRespawnedIds) {
+      const record = this.players.get(playerId);
+      if (!record) {
+        continue;
+      }
+
+      const spawnPoint = this.chooseRespawnPoint(playerId);
+      record.reset();
+      record.body.setTranslation(
+        { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+        true,
+      );
+      record.body.setLinvel({ x: 0, y: 0 }, true);
+      record.body.wakeUp();
+    }
+  }
+
+  private chooseRespawnPoint(playerId: string): MapSpawnPoint {
+    if (this.map.playerSpawnPoints.length === 0) {
+      return this.spawnPointForPlayer(playerId);
+    }
+
+    const alivePlayers = Array.from(this.players.entries())
+      .filter(([otherId]) => otherId !== playerId && this.matchState.canReceiveInput(otherId))
+      .map(([, record]) => {
+        const position = record.body.translation();
+        return { x: position.x, y: position.y };
+      });
+
+    let bestSpawn = this.map.playerSpawnPoints[0];
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const spawnPoint of this.map.playerSpawnPoints) {
+      const spawnCenterY = spawnPoint.feetY + PLAYER_HALF_HEIGHT;
+      const score = alivePlayers.length === 0
+        ? Number.POSITIVE_INFINITY
+        : Math.min(
+            ...alivePlayers.map((player) => {
+              const dx = spawnPoint.x - player.x;
+              const dy = spawnCenterY - player.y;
+              return dx * dx + dy * dy;
+            }),
+          );
+
+      if (score > bestScore) {
+        bestSpawn = spawnPoint;
+        bestScore = score;
+        continue;
+      }
+
+      if (score === bestScore) {
+        const currentSortKey = `${bestSpawn.tileY}:${bestSpawn.tileX}`;
+        const nextSortKey = `${spawnPoint.tileY}:${spawnPoint.tileX}`;
+        if (nextSortKey < currentSortKey) {
+          bestSpawn = spawnPoint;
+        }
+      }
+    }
+
+    return bestSpawn;
+  }
+
+  private isOutsideBlastZone(position: { x: number; y: number }): boolean {
+    const left = position.x - PLAYER_HALF_WIDTH;
+    const right = position.x + PLAYER_HALF_WIDTH;
+    const top = position.y + PLAYER_HALF_HEIGHT;
+    const bottom = position.y - PLAYER_HALF_HEIGHT;
+
+    return (
+      left < this.map.bounds.minX - BLAST_ZONE_SIDE_OFFSET ||
+      right > this.map.bounds.maxX + BLAST_ZONE_SIDE_OFFSET ||
+      top > this.map.bounds.maxY + BLAST_ZONE_UP_OFFSET ||
+      bottom < this.map.bounds.minY - BLAST_ZONE_DOWN_OFFSET
+    );
+  }
+
+  private fireBullet(owner: PlayerCharacter): void {
+    let bulletId = this.nextBulletId;
+    for (let i = 0; i < BULLET_ID_MAX; i += 1) {
+      if (!this.bullets.has(bulletId)) {
+        break;
+      }
+      bulletId = (bulletId % BULLET_ID_MAX) + 1;
+    }
+
+    this.nextBulletId = (bulletId % BULLET_ID_MAX) + 1;
+
+    const position = owner.body.translation();
+    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05);
+
+    this.bullets.set(bulletId, {
+      id: bulletId,
+      x: spawnX,
+      y: position.y,
+      vx: owner.facing * BULLET_SPEED,
+      ticksRemaining: BULLET_LIFETIME_TICKS,
+    });
+  }
+
+  private attackCenter(
+    playerX: number,
+    playerY: number,
+    facing: number,
+    definition: ReturnType<typeof getEquippedAttack>,
+  ): { x: number; y: number } {
+    return {
+      x: playerX + definition.centerOffsetX * facing,
+      y: playerY + definition.centerOffsetY,
+    };
+  }
+
+  private isGrounded(body: RAPIER.RigidBody, ducking: boolean): boolean {
+    if (ducking) {
+      return false;
+    }
+
     if (body.linvel().y > 0.2) {
       return false;
     }
@@ -333,22 +1063,25 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const position = body.translation();
     const feetY = position.y - PLAYER_HALF_HEIGHT;
 
-    if (feetY <= FLOOR_Y + 0.06) {
-      return true;
-    }
-
-    // Cast a short ray straight down from just below each foot to detect
-    // platforms underneath the player.
     const rayOrigins = [
-      { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
-      { x: position.x, y: feetY - 0.01 },
-      { x: position.x + PLAYER_HALF_WIDTH * 0.9, y: feetY - 0.01 },
+      { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY + GROUND_RAY_OFFSET },
+      { x: position.x, y: feetY + GROUND_RAY_OFFSET },
+      { x: position.x + PLAYER_HALF_WIDTH * 0.9, y: feetY + GROUND_RAY_OFFSET },
     ];
 
     for (const origin of rayOrigins) {
       const ray = new RAPIER.Ray(origin, { x: 0, y: -1 });
-      const hit = this.world.castRay(ray, 0.1, true);
-      if (hit !== null) {
+      const hit = this.world.castRay(
+        ray,
+        GROUND_RAY_LENGTH,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        body,
+        (collider) => this.staticColliderHandles.has(collider.handle),
+      );
+      if (hit) {
         return true;
       }
     }
@@ -356,31 +1089,72 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return false;
   }
 
-  private enforceHorizontalBounds(): void {
-    const minX = -ARENA_HALF_WIDTH + PLAYER_HALF_WIDTH;
-    const maxX = ARENA_HALF_WIDTH - PLAYER_HALF_WIDTH;
+  private resolvePlatformContacts(previousStates: Map<string, StepPlayerState>): void {
+    for (const [id, record] of this.players) {
+      const previousState = previousStates.get(id);
+      if (!previousState || previousState.ducking) {
+        continue;
+      }
 
-    for (const [, record] of this.players) {
+      if (previousState.vy > 0.05) {
+        continue;
+      }
+
       const position = record.body.translation();
-      if (position.x < minX || position.x > maxX) {
-        const clampedX = Math.min(Math.max(position.x, minX), maxX);
+      const currentBottom = position.y - PLAYER_HALF_HEIGHT;
+      const previousBottom = previousState.y - PLAYER_HALF_HEIGHT;
+      const playerLeft = position.x - PLAYER_HALF_WIDTH;
+      const playerRight = position.x + PLAYER_HALF_WIDTH;
+
+      let bestPlatformTop: number | null = null;
+
+      for (const platform of this.map.colliders.platforms) {
+        const platformLeft = platform.x - platform.width * 0.5;
+        const platformRight = platform.x + platform.width * 0.5;
+        if (playerRight <= platformLeft || playerLeft >= platformRight) {
+          continue;
+        }
+
+        const platformTop = platform.y + platform.height * 0.5;
+        const crossedFromAbove =
+          previousBottom >= platformTop - CONTACT_ALLOWANCE &&
+          currentBottom <= platformTop + CONTACT_ALLOWANCE;
+
+        if (!crossedFromAbove) {
+          continue;
+        }
+
+        if (bestPlatformTop === null || platformTop > bestPlatformTop) {
+          bestPlatformTop = platformTop;
+        }
+      }
+
+      if (bestPlatformTop !== null) {
         const velocity = record.body.linvel();
-        record.body.setTranslation({ x: clampedX, y: position.y }, true);
-        record.body.setLinvel({ x: 0, y: velocity.y }, true);
+        record.body.setTranslation({ x: position.x, y: bestPlatformTop + PLAYER_HALF_HEIGHT }, true);
+        record.body.setLinvel({ x: velocity.x, y: 0 }, true);
       }
     }
   }
 
-  private spawnXForPlayer(playerId: string): number {
-    return SPAWN_SLOTS[this.hashString(playerId) % SPAWN_SLOTS.length];
+  private spawnPointForPlayer(playerId: string): MapSpawnPoint {
+    if (this.map.playerSpawnPoints.length === 0) {
+      return {
+        feetY: FLOOR_Y,
+        layerName: 'fallback',
+        role: 'player_spawn',
+        tileX: 0,
+        tileY: 0,
+        x: 0,
+        y: FLOOR_Y,
+      };
+    }
+
+    return this.map.playerSpawnPoints[this.hashString(playerId) % this.map.playerSpawnPoints.length];
   }
 
   private colorForPlayer(playerId: string): number {
-    return (
-      PLAYER_COLOR_PALETTE[
-        this.hashString(playerId) % PLAYER_COLOR_PALETTE.length
-      ] ?? PLAYER_COLOR_PALETTE[0]
-    );
+    return PLAYER_COLOR_PALETTE[this.hashString(playerId) % PLAYER_COLOR_PALETTE.length] ?? PLAYER_COLOR_PALETTE[0];
   }
 
   private hashString(value: string): number {

@@ -1,3 +1,4 @@
+import type { MapManifest } from './tiledMap';
 import type { StatusTone } from './MainMenu';
 
 function getElement<T extends HTMLElement>(
@@ -15,6 +16,7 @@ export interface SettingsMenuCallbacks {
   onLeave(): void;
   onCopyShareUrl(): void;
   onClose(): void;
+  onArenaSideWallsChange(enabled: boolean): void;
 }
 
 export class SettingsMenu {
@@ -22,10 +24,13 @@ export class SettingsMenu {
   private readonly peerIdValue: HTMLElement;
   private readonly roomIdValue: HTMLElement;
   private readonly hostPeerIdValue: HTMLElement;
+  private readonly mapNameValue: HTMLElement;
+  private readonly mapSizeValue: HTMLElement;
   private readonly shareUrlInput: HTMLInputElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly copyButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
+  private readonly sideWallsToggle: HTMLInputElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -47,6 +52,8 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuHostId',
     );
+    this.mapNameValue = getElement<HTMLElement>(this.element, '#settingsMenuMapName');
+    this.mapSizeValue = getElement<HTMLElement>(this.element, '#settingsMenuMapSize');
     this.shareUrlInput = getElement<HTMLInputElement>(
       this.element,
       '#settingsMenuShareUrl',
@@ -67,10 +74,17 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuStatus',
     );
+    this.sideWallsToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuSideWallsToggle',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
     this.closeButton.addEventListener('click', () => callbacks.onClose());
+    this.sideWallsToggle.addEventListener('change', () => {
+      callbacks.onArenaSideWallsChange(this.sideWallsToggle.checked);
+    });
 
     this.element.addEventListener('click', (event) => {
       if (event.target === this.element) {
@@ -103,6 +117,11 @@ export class SettingsMenu {
     this.hostPeerIdValue.textContent = id || '-';
   }
 
+  setMap(map: MapManifest): void {
+    this.mapNameValue.textContent = map.name || '-';
+    this.mapSizeValue.textContent = `${map.width} x ${map.height}`;
+  }
+
   setShareUrl(url: string): void {
     this.shareUrlInput.value = url;
     this.copyButton.disabled = !url;
@@ -111,6 +130,10 @@ export class SettingsMenu {
   setStatus(message: string, tone: StatusTone = 'normal'): void {
     this.statusText.textContent = message;
     this.statusText.dataset.tone = tone;
+  }
+
+  setArenaSideWallsEnabled(enabled: boolean): void {
+    this.sideWallsToggle.checked = enabled;
   }
 
   destroy(): void {
@@ -136,6 +159,14 @@ export class SettingsMenu {
             <span>Host Peer ID</span>
             <output id="settingsMenuHostId">-</output>
           </label>
+          <label>
+            <span>Selected Map</span>
+            <output id="settingsMenuMapName">-</output>
+          </label>
+          <label>
+            <span>Map Size</span>
+            <output id="settingsMenuMapSize">-</output>
+          </label>
         </div>
 
         <label class="share-field">
@@ -144,6 +175,11 @@ export class SettingsMenu {
             <input id="settingsMenuShareUrl" type="text" readonly />
             <button id="settingsMenuCopyButton" type="button">Copy</button>
           </div>
+        </label>
+
+        <label class="toggle-field">
+          <input id="settingsMenuSideWallsToggle" type="checkbox" />
+          <span>Arena side walls (blocks walking off stage)</span>
         </label>
 
         <button id="settingsMenuLeaveButton" class="action-danger" type="button">Leave Room</button>
