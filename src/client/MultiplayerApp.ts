@@ -290,6 +290,7 @@ export class MultiplayerApp {
   private reconnectAttempt = 0;
   private reconnectingSignaling = false;
   private isCleaningUp = false;
+  private respawnCameraLocked = false;
 
   private unsubscribeSignalMessages: (() => void) | null = null;
   private unsubscribeSignalClose: (() => void) | null = null;
@@ -620,8 +621,10 @@ export class MultiplayerApp {
           player.id === this.peerId,
       );
       if (localPlayer) {
+        this.syncRespawnCamera(localPlayer);
         this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
       } else {
+        this.releaseRespawnCamera();
         this.healthBarOverlay.hide();
       }
     }
@@ -1549,5 +1552,28 @@ export class MultiplayerApp {
       moveX * this.cameraMoveSpeed * deltaSeconds,
       moveY * this.cameraMoveSpeed * deltaSeconds,
     );
+  }
+
+  private syncRespawnCamera(localPlayer: { eliminated: boolean; respawning: boolean }): void {
+    const shouldLock = this.cameraMode !== 'free' && (localPlayer.eliminated || localPlayer.respawning);
+
+    if (shouldLock) {
+      if (!this.respawnCameraLocked) {
+        this.renderer.lockCamera();
+        this.respawnCameraLocked = true;
+      }
+      return;
+    }
+
+    this.releaseRespawnCamera();
+  }
+
+  private releaseRespawnCamera(): void {
+    if (!this.respawnCameraLocked) {
+      return;
+    }
+
+    this.renderer.unlockCamera();
+    this.respawnCameraLocked = false;
   }
 }

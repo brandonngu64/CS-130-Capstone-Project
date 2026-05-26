@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RESPAWN_FLASH_TICKS } from './constants';
 import { GUN_COLOR, ItemKind } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
@@ -41,6 +42,7 @@ export class GameRenderer {
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
   private readonly bulletMeshes = new Map<number, THREE.Mesh>();
   private readonly gunMeshes = new Map<string, THREE.Mesh>();
+  private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement, map: TiledMapDefinition) {
@@ -89,6 +91,20 @@ export class GameRenderer {
       const material = mesh.material as THREE.MeshStandardMaterial;
       material.emissive.setHex(player.id === localPlayerId ? 0x2a9d8f : 0x000000);
       material.emissiveIntensity = player.id === localPlayerId ? 0.26 : 0;
+
+      if (player.respawnFlashTicksRemaining > 0) {
+        const flashStep = Math.max(1, Math.floor(RESPAWN_FLASH_TICKS / 24));
+        const flashVisible = Math.floor(player.respawnFlashTicksRemaining / flashStep) % 2 === 0;
+        material.opacity = flashVisible ? 1 : 0.22;
+      } else if (player.respawning) {
+        material.opacity = 0.18;
+      } else {
+        material.opacity = 1;
+      }
+
+      const isTransparent = material.opacity < 1;
+      material.transparent = isTransparent;
+      material.depthWrite = !isTransparent;
 
       if (player.heldItem !== null) {
         let gun = this.gunMeshes.get(player.id);
@@ -203,6 +219,18 @@ export class GameRenderer {
     if (mode === 'free') {
       this.freeCameraTarget.set(this.camera.position.x, this.camera.position.y);
     }
+  }
+
+  lockCamera(): void {
+    if (!this.cameraLockTarget) {
+      this.cameraLockTarget = new THREE.Vector2();
+    }
+
+    this.cameraLockTarget.set(this.camera.position.x, this.camera.position.y);
+  }
+
+  unlockCamera(): void {
+    this.cameraLockTarget = null;
   }
 
   panFreeCamera(deltaX: number, deltaY: number): void {
@@ -339,14 +367,16 @@ export class GameRenderer {
     const texture = this.textureLoader.load(tile.atlasUrl);
     this.configurePixelTexture(texture);
 
+    const isOpaque = tile.opacity >= 1;
+
     const material = new THREE.MeshBasicMaterial({
       alphaTest: 0.001,
       color: tintColor,
       map: texture,
       opacity: tile.opacity,
-      depthWrite: false,
+      depthWrite: isOpaque,
       side: THREE.DoubleSide,
-      transparent: true,
+      transparent: !isOpaque,
     });
 
     this.materialCache.set(cacheKey, { material, texture });
@@ -405,11 +435,17 @@ export class GameRenderer {
     );
     this.camera.position.z = 12;
     this.camera.zoom = THREE.MathUtils.lerp(this.camera.zoom, targetZoom, zoomLerp);
-    this.snapCameraToPixelGrid();
+    if (this.cameraMode === 'free') {
+      this.snapCameraToPixelGrid();
+    }
     this.camera.updateProjectionMatrix();
   }
 
   private getCameraTarget(state: RenderState, localPlayerId: string): THREE.Vector2 {
+    if (this.cameraLockTarget) {
+      return this.cameraTarget.set(this.cameraLockTarget.x, this.cameraLockTarget.y);
+    }
+
     if (this.cameraMode === 'free') {
       return this.cameraTarget.set(this.freeCameraTarget.x, this.freeCameraTarget.y);
     }
@@ -530,6 +566,8 @@ export class GameRenderer {
       color,
       roughness: 0.45,
       metalness: 0.1,
+      opacity: 1,
+      depthWrite: true,
     });
     return new THREE.Mesh(geometry, material);
   }

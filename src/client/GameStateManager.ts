@@ -1,39 +1,32 @@
-import type * as RAPIER from '@dimforge/rapier2d-compat';
 import {
-  ARENA_HALF_WIDTH,
-  BLAST_ZONE_BOTTOM,
-  BLAST_ZONE_SIDE_MARGIN,
   DEFAULT_STOCKS,
-  OFF_STAGE_Y,
-  PLAYER_HALF_HEIGHT,
+  RESPAWN_FLASH_TICKS,
   RESPAWN_DELAY_TICKS,
 } from './constants';
-
-type SpawnPoint = {
-  x: number;
-  y: number;
-  feetY: number;
-};
 
 /** Per-player match data kept in sync across rollback. */
 export type PlayerMatchState = {
   stocks: number;
   /** 0 = in play; >0 = dead and counting down to respawn. */
   respawnTicksRemaining: number;
+  /** 0 = normal; >0 = flashing after a respawn. */
+  respawnFlashTicksRemaining: number;
 };
 
 export type PlayerMatchSnapshot = {
   stocks: number;
   respawnTicksRemaining: number;
+  respawnFlashTicksRemaining: number;
 };
 
 export type MatchRenderInfo = {
   stocks: number;
   eliminated: boolean;
   respawning: boolean;
+  respawnFlashTicksRemaining: number;
 };
 
-const MATCH_BYTES_PER_PLAYER = 3; // uint8 stocks + uint16 respawn ticks
+const MATCH_BYTES_PER_PLAYER = 5; // uint8 stocks + uint16 respawn ticks + uint16 flash ticks
 
 export class GameStateManager {
   private readonly byPlayer = new Map<string, PlayerMatchState>();
@@ -43,6 +36,7 @@ export class GameStateManager {
       this.byPlayer.set(playerId, {
         stocks: DEFAULT_STOCKS,
         respawnTicksRemaining: 0,
+        respawnFlashTicksRemaining: 0,
       });
     }
   }
@@ -63,6 +57,44 @@ export class GameStateManager {
     return state.stocks > 0 && state.respawnTicksRemaining === 0;
   }
 
+  startRespawn(playerId: string): boolean {
+    const state = this.byPlayer.get(playerId);
+    if (!state || state.stocks === 0 || state.respawnTicksRemaining > 0) {
+      return false;
+    }
+
+    state.stocks = Math.max(0, state.stocks - 1);
+    state.respawnFlashTicksRemaining = 0;
+    if (state.stocks > 0) {
+      state.respawnTicksRemaining = RESPAWN_DELAY_TICKS;
+      return true;
+    }
+
+    state.respawnTicksRemaining = 0;
+    return false;
+  }
+
+  advanceTimers(): string[] {
+    const respawnedIds: string[] = [];
+
+    for (const [playerId, state] of this.byPlayer) {
+      if (state.respawnTicksRemaining > 0) {
+        state.respawnTicksRemaining -= 1;
+        if (state.respawnTicksRemaining === 0 && state.stocks > 0) {
+          state.respawnFlashTicksRemaining = RESPAWN_FLASH_TICKS;
+          respawnedIds.push(playerId);
+        }
+        continue;
+      }
+
+      if (state.respawnFlashTicksRemaining > 0) {
+        state.respawnFlashTicksRemaining -= 1;
+      }
+    }
+
+    return respawnedIds;
+  }
+
   getSnapshot(playerId: string): PlayerMatchSnapshot | null {
     const state = this.byPlayer.get(playerId);
     if (!state) {
@@ -71,18 +103,25 @@ export class GameStateManager {
     return {
       stocks: state.stocks,
       respawnTicksRemaining: state.respawnTicksRemaining,
+      respawnFlashTicksRemaining: state.respawnFlashTicksRemaining,
     };
   }
 
   getRenderInfo(playerId: string): MatchRenderInfo {
     const state = this.byPlayer.get(playerId);
     if (!state) {
-      return { stocks: 0, eliminated: true, respawning: false };
+      return {
+        stocks: 0,
+        eliminated: true,
+        respawning: false,
+        respawnFlashTicksRemaining: 0,
+      };
     }
     return {
       stocks: state.stocks,
       eliminated: state.stocks === 0,
       respawning: state.respawnTicksRemaining > 0,
+      respawnFlashTicksRemaining: state.respawnFlashTicksRemaining,
     };
   }
 
@@ -98,51 +137,6 @@ export class GameStateManager {
     return null;
   }
 
-  /**
-   * After physics: detect blast-zone KOs and start respawn or elimination.
-   */
-  checkBlastZone(
-    players: Map<string, { body: RAPIER.RigidBody }>,
-    spawnPointForPlayer: (playerId: string) => SpawnPoint,
-  ): void {
-    const sideLimit = ARENA_HALF_WIDTH + BLAST_ZONE_SIDE_MARGIN;
-
-    for (const [playerId, { body }] of players) {
-      const state = this.byPlayer.get(playerId);
-      if (!state || state.stocks === 0 || state.respawnTicksRemaining > 0) {
-        continue;
-      }
-
-      const { x, y } = body.translation();
-      if (y < BLAST_ZONE_BOTTOM || Math.abs(x) > sideLimit) {
-        this.onDeath(playerId, body, spawnPointForPlayer);
-      }
-    }
-  }
-
-  /**
-   * Each tick: count down respawn timers and place players back on stage.
-   */
-  tickRespawn(
-    players: Map<string, { body: RAPIER.RigidBody }>,
-    spawnPointForPlayer: (playerId: string) => SpawnPoint,
-  ): void {
-    for (const [playerId, { body }] of players) {
-      const state = this.byPlayer.get(playerId);
-      if (!state || state.respawnTicksRemaining <= 0) {
-        continue;
-      }
-
-      state.respawnTicksRemaining -= 1;
-      if (state.respawnTicksRemaining > 0) {
-        continue;
-      }
-
-      const spawnPoint = spawnPointForPlayer(playerId);
-      body.setTranslation({ x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT }, true);
-      body.setLinvel({ x: 0, y: 0 }, true);
-    }
-  }
 
   matchBytesPerPlayer(): number {
     return MATCH_BYTES_PER_PLAYER;
@@ -159,6 +153,7 @@ export class GameStateManager {
     }
     view.setUint8(offset, state.stocks);
     view.setUint16(offset + 1, state.respawnTicksRemaining, true);
+    view.setUint16(offset + 3, state.respawnFlashTicksRemaining, true);
     return offset + MATCH_BYTES_PER_PLAYER;
   }
 
@@ -169,33 +164,12 @@ export class GameStateManager {
   ): number {
     const stocks = view.getUint8(offset);
     const respawnTicksRemaining = view.getUint16(offset + 1, true);
-    this.byPlayer.set(playerId, { stocks, respawnTicksRemaining });
+    const respawnFlashTicksRemaining = view.getUint16(offset + 3, true);
+    this.byPlayer.set(playerId, {
+      stocks,
+      respawnTicksRemaining,
+      respawnFlashTicksRemaining,
+    });
     return offset + MATCH_BYTES_PER_PLAYER;
-  }
-
-  private onDeath(
-    playerId: string,
-    body: RAPIER.RigidBody,
-    spawnPointForPlayer: (playerId: string) => SpawnPoint,
-  ): void {
-    const state = this.byPlayer.get(playerId);
-    if (!state) {
-      return;
-    }
-
-    state.stocks -= 1;
-
-    if (state.stocks > 0) {
-      state.respawnTicksRemaining = RESPAWN_DELAY_TICKS;
-      const spawnPoint = spawnPointForPlayer(playerId);
-      body.setTranslation({ x: spawnPoint.x, y: OFF_STAGE_Y }, true);
-      body.setLinvel({ x: 0, y: 0 }, true);
-      return;
-    }
-
-    state.respawnTicksRemaining = 0;
-    const spawnPoint = spawnPointForPlayer(playerId);
-    body.setTranslation({ x: spawnPoint.x, y: OFF_STAGE_Y }, true);
-    body.setLinvel({ x: 0, y: 0 }, true);
   }
 }

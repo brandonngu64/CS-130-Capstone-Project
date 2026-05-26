@@ -1,6 +1,9 @@
 import * as RAPIER from '@dimforge/rapier2d-compat';
 import type { Game, PlayerId } from 'rollback-netcode';
 import {
+  BLAST_ZONE_DOWN_OFFSET,
+  BLAST_ZONE_SIDE_OFFSET,
+  BLAST_ZONE_UP_OFFSET,
   BULLET_HALF_WIDTH,
   BULLET_ID_MAX,
   BULLET_LIFETIME_TICKS,
@@ -44,6 +47,7 @@ export interface PlayerRenderState {
   stocks: number;
   eliminated: boolean;
   respawning: boolean;
+  respawnFlashTicksRemaining: number;
   health: number;
   maxHealth: number;
   heldItem: ItemKind | null;
@@ -310,6 +314,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   step(inputs: Map<PlayerId, Uint8Array>): void {
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
+    const respawnedIds = this.matchState.advanceTimers();
+    this.respawnPlayers(respawnedIds);
     this.tickDashCooldowns();
     this.tickGunCooldowns();
 
@@ -348,9 +354,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.tickBullets();
     this.world.step();
     this.resolvePlatformContacts(previousStates);
-
-    this.matchState.checkBlastZone(this.players, (playerId) => this.spawnPointForPlayer(playerId));
-    this.matchState.tickRespawn(this.players, (playerId) => this.spawnPointForPlayer(playerId));
+    this.handleBlastZoneDeaths();
   }
 
   hash(): number {
@@ -380,6 +384,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           stocks: match.stocks,
           eliminated: match.eliminated,
           respawning: match.respawning,
+          respawnFlashTicksRemaining: match.respawnFlashTicksRemaining,
           health: record.health,
           maxHealth: record.maxHealth,
           heldItem: record.heldItem,
@@ -448,7 +453,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     );
 
     const colliderDesc = RAPIER.ColliderDesc.cuboid(rect.width * 0.5, rect.height * 0.5)
-      .setFriction(1)
+      .setFriction(0)
       .setRestitution(0);
 
     if (platform) {
@@ -497,7 +502,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.world.createCollider(
       RAPIER.ColliderDesc.cuboid(PLAYER_HALF_WIDTH, PLAYER_HALF_HEIGHT)
-        .setFriction(1)
+        .setFriction(0)
         .setRestitution(0),
       body,
     );
@@ -633,6 +638,102 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
   }
 
+  private handleBlastZoneDeaths(): void {
+    for (const [id, record] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      if (!this.isOutsideBlastZone(position)) {
+        continue;
+      }
+
+      record.body.setLinvel({ x: 0, y: 0 }, true);
+      record.body.sleep();
+      this.matchState.startRespawn(id);
+    }
+  }
+
+  private respawnPlayers(respawnedIds: string[]): void {
+    const sortedRespawnedIds = [...respawnedIds].sort();
+
+    for (const playerId of sortedRespawnedIds) {
+      const record = this.players.get(playerId);
+      if (!record) {
+        continue;
+      }
+
+      const spawnPoint = this.chooseRespawnPoint(playerId);
+      record.reset();
+      record.body.setTranslation(
+        { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+        true,
+      );
+      record.body.setLinvel({ x: 0, y: 0 }, true);
+      record.body.wakeUp();
+    }
+  }
+
+  private chooseRespawnPoint(playerId: string): MapSpawnPoint {
+    if (this.map.playerSpawnPoints.length === 0) {
+      return this.spawnPointForPlayer(playerId);
+    }
+
+    const alivePlayers = Array.from(this.players.entries())
+      .filter(([otherId]) => otherId !== playerId && this.matchState.canReceiveInput(otherId))
+      .map(([, record]) => {
+        const position = record.body.translation();
+        return { x: position.x, y: position.y };
+      });
+
+    let bestSpawn = this.map.playerSpawnPoints[0];
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const spawnPoint of this.map.playerSpawnPoints) {
+      const spawnCenterY = spawnPoint.feetY + PLAYER_HALF_HEIGHT;
+      const score = alivePlayers.length === 0
+        ? Number.POSITIVE_INFINITY
+        : Math.min(
+            ...alivePlayers.map((player) => {
+              const dx = spawnPoint.x - player.x;
+              const dy = spawnCenterY - player.y;
+              return dx * dx + dy * dy;
+            }),
+          );
+
+      if (score > bestScore) {
+        bestSpawn = spawnPoint;
+        bestScore = score;
+        continue;
+      }
+
+      if (score === bestScore) {
+        const currentSortKey = `${bestSpawn.tileY}:${bestSpawn.tileX}`;
+        const nextSortKey = `${spawnPoint.tileY}:${spawnPoint.tileX}`;
+        if (nextSortKey < currentSortKey) {
+          bestSpawn = spawnPoint;
+        }
+      }
+    }
+
+    return bestSpawn;
+  }
+
+  private isOutsideBlastZone(position: { x: number; y: number }): boolean {
+    const left = position.x - PLAYER_HALF_WIDTH;
+    const right = position.x + PLAYER_HALF_WIDTH;
+    const top = position.y + PLAYER_HALF_HEIGHT;
+    const bottom = position.y - PLAYER_HALF_HEIGHT;
+
+    return (
+      left < this.map.bounds.minX - BLAST_ZONE_SIDE_OFFSET ||
+      right > this.map.bounds.maxX + BLAST_ZONE_SIDE_OFFSET ||
+      top > this.map.bounds.maxY + BLAST_ZONE_UP_OFFSET ||
+      bottom < this.map.bounds.minY - BLAST_ZONE_DOWN_OFFSET
+    );
+  }
+
   private fireBullet(owner: PlayerCharacter): void {
     let bulletId = this.nextBulletId;
     for (let i = 0; i < BULLET_ID_MAX; i += 1) {
@@ -679,9 +780,6 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const position = body.translation();
     const feetY = position.y - PLAYER_HALF_HEIGHT;
-    if (feetY <= FLOOR_Y + 0.06) {
-      return true;
-    }
 
     const rayOrigins = [
       { x: position.x - PLAYER_HALF_WIDTH * 0.9, y: feetY + GROUND_RAY_OFFSET },
