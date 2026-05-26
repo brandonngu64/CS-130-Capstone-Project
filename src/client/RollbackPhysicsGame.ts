@@ -473,7 +473,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         y: center.y,
         width: definition.hitboxHalfWidth * 2,
         height: definition.hitboxHalfHeight * 2,
-        color: definition.spriteColor,
+        color: record.color,
       });
     }
 
