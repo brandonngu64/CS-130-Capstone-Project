@@ -18,6 +18,7 @@ export interface MainMenuCallbacks {
   onJoin(): void;
   onCopyShareUrl(): void;
   onMapChange(mapId: string): void;
+  onArenaSideWallsChange(enabled: boolean): void;
 }
 
 export class MainMenu {
@@ -31,6 +32,7 @@ export class MainMenu {
   private readonly hostButton: HTMLButtonElement;
   private readonly joinButton: HTMLButtonElement;
   private readonly copyButton: HTMLButtonElement;
+  private readonly sideWallsToggle: HTMLInputElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: MainMenuCallbacks) {
@@ -71,12 +73,20 @@ export class MainMenu {
       '#mainMenuCopyButton',
     );
     this.statusText = getElement<HTMLElement>(this.element, '#mainMenuStatus');
+    this.sideWallsToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#mainMenuSideWallsToggle',
+    );
 
     this.hostButton.addEventListener('click', () => callbacks.onHost());
     this.joinButton.addEventListener('click', () => callbacks.onJoin());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
     this.mapSelect.addEventListener('change', () => {
       callbacks.onMapChange(this.mapSelect.value);
+    });
+
+    this.sideWallsToggle.addEventListener('change', () => {
+      callbacks.onArenaSideWallsChange(this.sideWallsToggle.checked);
     });
   }
 
@@ -148,6 +158,10 @@ export class MainMenu {
     this.mapSelect.disabled = !enabled;
   }
 
+  setArenaSideWallsEnabled(enabled: boolean): void {
+    this.sideWallsToggle.checked = enabled;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -204,6 +218,10 @@ export class MainMenu {
             <label>
               <span>Signaling URL</span>
               <input id="mainMenuSignalInput" type="text" />
+            </label>
+            <label class="toggle-field">
+              <input id="mainMenuSideWallsToggle" type="checkbox" />
+              <span>Arena side walls (blocks walking off stage)</span>
             </label>
           </div>
         </details>

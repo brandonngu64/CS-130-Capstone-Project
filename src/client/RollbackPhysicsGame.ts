@@ -9,6 +9,8 @@ import {
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
 } from './constants';
+import { readArenaSideWallsEnabled } from './arenaOptions';
+import { GameStateManager } from './GameStateManager';
 import { InputBits, decodeInputBits } from './input';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
@@ -19,6 +21,9 @@ export interface PlayerRenderState {
   width: number;
   height: number;
   color: number;
+  stocks: number;
+  eliminated: boolean;
+  respawning: boolean;
 }
 
 export interface RenderState {
@@ -49,14 +54,26 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly players = new Map<string, PlayerBodyRecord>();
   private readonly previousInputFlags = new Map<string, number>();
   private readonly staticColliderHandles = new Set<number>();
+  private readonly matchState = new GameStateManager();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
 
-  constructor(map: TiledMapDefinition) {
+  private sideWallsEnabled: boolean;
+
+  constructor(map: TiledMapDefinition, sideWallsEnabled = readArenaSideWallsEnabled()) {
     this.map = map;
+    this.sideWallsEnabled = sideWallsEnabled;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
+  }
+
+  areSideWallsEnabled(): boolean {
+    return this.sideWallsEnabled;
+  }
+
+  setSideWallsEnabled(enabled: boolean): void {
+    this.sideWallsEnabled = enabled;
   }
 
   serialize(): Uint8Array {
@@ -83,9 +100,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       };
     });
 
+    const matchBytes = this.matchState.matchBytesPerPlayer();
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 4 * 4 + 1;
+      byteLength += 2 + record.idBytes.length + 4 * 4 + 1 + matchBytes;
     }
 
     const buffer = new ArrayBuffer(byteLength);
@@ -113,6 +131,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset += 4;
       view.setUint8(offset, record.inputFlags & 0xff);
       offset += 1;
+
+      const id = this.textDecoder.decode(record.idBytes);
+      offset = this.matchState.writePlayer(view, offset, id);
     }
 
     return output;
@@ -155,6 +176,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const inputFlags = view.getUint8(offset);
       offset += 1;
 
+      offset = this.matchState.readPlayer(view, offset, id);
       incoming.set(id, { inputFlags, vx, vy, x, y });
     }
 
@@ -179,7 +201,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const previousStates = new Map<string, StepPlayerState>();
 
     for (const id of ids) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
       const raw = inputs.get(id as PlayerId);
+      if (!raw) {
+        continue;
+      }
+
       const inputFlags = decodeInputBits(raw);
       const record = this.players.get(id);
       if (!record) {
@@ -201,7 +231,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.world.step();
     this.resolvePlatformContacts(previousStates);
-    this.enforceHorizontalBounds();
+
+    if (this.sideWallsEnabled) {
+      this.enforceHorizontalBounds();
+    }
+
+    this.matchState.checkBlastZone(this.players, (playerId) =>
+      this.spawnPointForPlayer(playerId),
+    );
+    this.matchState.tickRespawn(this.players, (playerId) =>
+      this.spawnPointForPlayer(playerId),
+    );
   }
 
   hash(): number {
@@ -221,6 +261,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
+        const match = this.matchState.getRenderInfo(id);
         return {
           color: record.color,
           height: PLAYER_HALF_HEIGHT * 2,
@@ -228,6 +269,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           width: PLAYER_HALF_WIDTH * 2,
           x: position.x,
           y: position.y,
+          stocks: match.stocks,
+          eliminated: match.eliminated,
+          respawning: match.respawning,
         };
       });
 
@@ -241,6 +285,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.players.clear();
     this.previousInputFlags.clear();
+    this.matchState.clear();
   }
 
   private createStaticLevel(): void {
@@ -281,6 +326,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.world.removeRigidBody(record.body);
         this.players.delete(id);
         this.previousInputFlags.delete(id);
+        this.matchState.removePlayer(id);
       }
     }
 
@@ -293,6 +339,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           id,
         });
         this.previousInputFlags.set(id, 0);
+        this.matchState.ensurePlayer(id);
       }
     }
   }

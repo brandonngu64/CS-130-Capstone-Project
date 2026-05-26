@@ -10,6 +10,10 @@ import {
   type SignalMessage,
   type TickResult,
 } from 'rollback-netcode';
+import {
+  readArenaSideWallsEnabled,
+  writeArenaSideWallsEnabled,
+} from './arenaOptions';
 import { MAX_PLAYERS, TICK_RATE } from './constants';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
@@ -17,6 +21,7 @@ import { MainMenu, type StatusTone } from './MainMenu';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
+import { StockHud } from './StockHud';
 import { encodeInput } from './input';
 import { AVAILABLE_MAPS, DEFAULT_MAP_ID, loadMapDefinition } from './tiledMap';
 
@@ -227,6 +232,7 @@ export class MultiplayerApp {
   private readonly peerId: string;
   private readonly mainMenu: MainMenu;
   private readonly settingsMenu: SettingsMenu;
+  private readonly stockHud: StockHud;
 
   private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
@@ -389,6 +395,7 @@ export class MultiplayerApp {
 
     this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
     this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+  this.stockHud = new StockHud(this.viewport);
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
@@ -441,6 +448,9 @@ export class MultiplayerApp {
       },
       onMapChange: (mapId: string) => {
         this.setSelectedMap(mapId);
+  },
+  onArenaSideWallsChange: (enabled) => {
+        this.applyArenaSideWalls(enabled);
       },
     });
 
@@ -457,7 +467,12 @@ export class MultiplayerApp {
         this.settingsOpen = false;
         this.updateUiState();
       },
+      onArenaSideWallsChange: (enabled) => {
+        this.applyArenaSideWalls(enabled);
+      },
     });
+
+    this.syncArenaSideWallsUi(readArenaSideWallsEnabled());
 
     this.mainMenu.setPeerId(this.peerId);
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
@@ -552,6 +567,7 @@ export class MultiplayerApp {
     this.cleanupNetworking();
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
+    this.stockHud.destroy();
     this.renderer.dispose();
 
     if (this.game) {
@@ -575,7 +591,11 @@ export class MultiplayerApp {
     }
 
     if (this.game) {
-      this.renderer.render(this.game.getRenderState(), this.peerId);
+      const renderState = this.game.getRenderState();
+      this.renderer.render(renderState, this.peerId);
+      if (this.isInRoom() || this.connecting) {
+        this.stockHud.update(renderState.players, this.peerId);
+      }
     }
 
     this.refreshDebugValues();
@@ -1335,6 +1355,24 @@ export class MultiplayerApp {
     this.updateUiState();
   }
 
+  private syncArenaSideWallsUi(enabled: boolean): void {
+    this.mainMenu.setArenaSideWallsEnabled(enabled);
+    this.settingsMenu.setArenaSideWallsEnabled(enabled);
+  }
+
+  private applyArenaSideWalls(enabled: boolean): void {
+    writeArenaSideWallsEnabled(enabled);
+    this.syncArenaSideWallsUi(enabled);
+    this.game?.setSideWallsEnabled(enabled);
+    this.renderer.setSideWallsEnabled(enabled);
+
+    const wallLabel = enabled ? 'on' : 'off';
+    const syncHint = this.isInRoom()
+      ? ' All players in the room should use the same setting to avoid desync.'
+      : '';
+    this.setStatus(`Arena side walls ${wallLabel}.${syncHint}`);
+  }
+
   private updateUiState(): void {
     const inRoom = this.isInRoom();
     const inActiveSession = inRoom || this.connecting;
@@ -1351,6 +1389,7 @@ export class MultiplayerApp {
   this.updateCameraButton();
 
     this.gameHud.dataset.visible = inActiveSession ? 'true' : 'false';
+    this.stockHud.setVisible(inActiveSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
 
     if (this.settingsOpen && inActiveSession) {
