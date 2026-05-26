@@ -80,6 +80,15 @@ export class PlayerCharacter {
     return this.heldItem !== null;
   }
 
+  canShoot(): boolean {
+    return this.heldItem === ItemKind.Gun;
+  }
+
+  // make it so you can only punch if you don't have a weapon equipped
+  canPunch(): boolean {
+    return this.heldItem !== ItemKind.Gun;
+  }
+
   dropItem(): void {
     this.heldItem = null;
     this.heldItemExpiryTick = 0;

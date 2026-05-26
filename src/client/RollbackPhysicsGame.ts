@@ -625,7 +625,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       nextYVelocity = JUMP_SPEED;
     }
 
-    if (punchPressed && record.activeAttack === null) {
+    if (punchPressed && record.activeAttack === null && record.canPunch()) {
       const definition = getEquippedAttack(record.equippedWeapon);
       record.activeAttack = {
         kind: definition.kind,
@@ -633,7 +633,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       };
     }
 
-    if (shootPressed && record.gunFireCooldownTicks === 0) {
+    if (
+      shootPressed &&
+      record.gunFireCooldownTicks === 0 &&
+      record.canShoot()
+    ) {
       this.fireBullet(record);
       record.gunFireCooldownTicks = GUN_FIRE_COOLDOWN_TICKS;
     }
