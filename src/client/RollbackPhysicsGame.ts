@@ -4,6 +4,7 @@ import {
   BLAST_ZONE_DOWN_OFFSET,
   BLAST_ZONE_SIDE_OFFSET,
   BLAST_ZONE_UP_OFFSET,
+  BULLET_DAMAGE,
   BULLET_HALF_WIDTH,
   BULLET_ID_MAX,
   BULLET_LIFETIME_TICKS,
@@ -111,6 +112,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly players = new Map<string, PlayerCharacter>();
   private readonly previousInputFlags = new Map<string, number>();
   private readonly staticColliderHandles = new Set<number>();
+  private readonly playerColliderHandles = new Map<number, string>();
   private readonly matchState = new GameStateManager();
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
@@ -520,6 +522,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   reset(): void {
     for (const [, record] of this.players) {
+      this.unregisterPlayerColliders(record.body);
       this.world.removeRigidBody(record.body);
     }
 
@@ -564,6 +567,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (const [id, record] of this.players) {
       if (!keep.has(id)) {
+        this.unregisterPlayerColliders(record.body);
         this.world.removeRigidBody(record.body);
         this.players.delete(id);
         this.previousInputFlags.delete(id);
@@ -576,12 +580,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
-      this.players.set(
-        id,
-        new PlayerCharacter(id, this.createPlayerBody(this.spawnPointForPlayer(id)), this.colorForPlayer(id)),
-      );
+      const body = this.createPlayerBody(this.spawnPointForPlayer(id));
+      this.registerPlayerColliders(body, id);
+      this.players.set(id, new PlayerCharacter(id, body, this.colorForPlayer(id)));
       this.previousInputFlags.set(id, 0);
       this.matchState.ensurePlayer(id);
+    }
+  }
+
+  private registerPlayerColliders(body: RAPIER.RigidBody, playerId: string): void {
+    for (let i = 0; i < body.numColliders(); i += 1) {
+      this.playerColliderHandles.set(body.collider(i).handle, playerId);
+    }
+  }
+
+  private unregisterPlayerColliders(body: RAPIER.RigidBody): void {
+    for (let i = 0; i < body.numColliders(); i += 1) {
+      this.playerColliderHandles.delete(body.collider(i).handle);
     }
   }
 
@@ -714,18 +729,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const dx = bullet.vx * FIXED_STEP_SECONDS;
       const ray = new RAPIER.Ray({ x: bullet.x, y: bullet.y }, { x: Math.sign(bullet.vx), y: 0 });
-      const hit = this.world.castRay(
+      const hit = this.world.castRayAndGetNormal(
         ray,
         Math.abs(dx) + BULLET_HALF_WIDTH,
         false,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        (collider) => this.staticColliderHandles.has(collider.handle),
       );
 
       if (hit) {
+        const hitPlayerId = this.playerColliderHandles.get(hit.collider.handle);
+        if (hitPlayerId !== undefined && this.matchState.canReceiveInput(hitPlayerId)) {
+          this.players.get(hitPlayerId)?.takeDamage(BULLET_DAMAGE);
+        }
         this.bullets.delete(bulletId);
         continue;
       }
