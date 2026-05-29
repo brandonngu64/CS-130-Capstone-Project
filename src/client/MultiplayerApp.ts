@@ -240,6 +240,9 @@ export class MultiplayerApp {
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly settingsToggleButton: HTMLButtonElement;
   private readonly healthBarOverlay: HealthBarOverlay;
+  private readonly winnerBanner: HTMLElement;
+  private readonly winnerBannerTitle: HTMLElement;
+  private readonly winnerBannerSubtitle: HTMLElement;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -431,6 +434,17 @@ export class MultiplayerApp {
       '#cameraModeButton',
     );
     this.healthBarOverlay = new HealthBarOverlay(this.gameHud);
+
+    this.winnerBanner = document.createElement('div');
+    this.winnerBanner.className = 'winner-banner';
+    this.winnerBanner.dataset.visible = 'false';
+    this.winnerBannerTitle = document.createElement('div');
+    this.winnerBannerTitle.className = 'winner-banner__title';
+    this.winnerBannerSubtitle = document.createElement('div');
+    this.winnerBannerSubtitle.className = 'winner-banner__subtitle';
+    this.winnerBanner.appendChild(this.winnerBannerTitle);
+    this.winnerBanner.appendChild(this.winnerBannerSubtitle);
+    this.viewport.appendChild(this.winnerBanner);
 
     this.tickValue = requireElement<HTMLElement>(this.root, '#tickValue');
     this.confirmedTickValue = requireElement<HTMLElement>(
@@ -627,6 +641,10 @@ export class MultiplayerApp {
         this.releaseRespawnCamera();
         this.healthBarOverlay.hide();
       }
+
+      this.updateWinnerBanner(renderState);
+    } else {
+      this.winnerBanner.dataset.visible = 'false';
     }
 
     this.refreshDebugValues();
@@ -1575,5 +1593,32 @@ export class MultiplayerApp {
 
     this.renderer.unlockCamera();
     this.respawnCameraLocked = false;
+  }
+
+  private updateWinnerBanner(renderState: { winnerId: string | null; players: { id: string; color: number }[] }): void {
+    const winnerId = renderState.winnerId;
+    if (winnerId === null) {
+      this.winnerBanner.dataset.visible = 'false';
+      return;
+    }
+
+    const winner = renderState.players.find((player) => player.id === winnerId);
+    if (!winner) {
+      this.winnerBanner.dataset.visible = 'false';
+      return;
+    }
+
+    const isLocal = winnerId === this.peerId;
+    const colorHex = `#${winner.color.toString(16).padStart(6, '0')}`;
+    this.winnerBannerTitle.textContent = isLocal ? 'You Win!' : 'Defeat';
+    this.winnerBannerSubtitle.textContent = isLocal
+      ? 'Last one standing.'
+      : `${this.truncatePeerId(winnerId)} wins the match.`;
+    this.winnerBanner.style.setProperty('--winner-color', colorHex);
+    this.winnerBanner.dataset.visible = 'true';
+  }
+
+  private truncatePeerId(peerId: string): string {
+    return peerId.length > 14 ? `${peerId.slice(0, 12)}…` : peerId;
   }
 }

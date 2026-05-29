@@ -80,6 +80,7 @@ export interface RenderState {
   attacks: AttackRenderState[];
   items: ItemRenderState[];
   bullets: BulletRenderState[];
+  winnerId: string | null;
 }
 
 type StepPlayerState = {
@@ -513,11 +514,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         y: item.y,
       }));
 
+    const playerIds = Array.from(this.players.keys());
+    const winnerId = playerIds.length >= 2 ? this.matchState.getWinnerId(playerIds) : null;
+
     return {
       players,
       attacks,
       items,
       bullets,
+      winnerId,
     };
   }
 
