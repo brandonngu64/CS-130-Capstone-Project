@@ -23,6 +23,7 @@ import {
 } from './constants';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
+import type { AttackDefinition } from './attacks';
 import { InputBits, decodeInputBits } from './input';
 import { PlayerCharacter } from './PlayerCharacter';
 import {
@@ -647,6 +648,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         kind: definition.kind,
         ticksRemaining: definition.durationTicks,
       };
+      this.resolvePunchHits(id, definition);
     }
 
     if (
@@ -985,6 +987,35 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       x: playerX + definition.centerOffsetX * facing,
       y: playerY + definition.centerOffsetY,
     };
+  }
+
+  private resolvePunchHits(attackerId: string, definition: AttackDefinition): void {
+    const attacker = this.players.get(attackerId);
+    if (!attacker) {
+      return;
+    }
+
+    const position = attacker.body.translation();
+    const center = this.attackCenter(position.x, position.y, attacker.facing, definition);
+    const overlapHalfWidth = definition.hitboxHalfWidth + PLAYER_HALF_WIDTH;
+    const overlapHalfHeight = definition.hitboxHalfHeight + PLAYER_HALF_HEIGHT;
+
+    for (const [otherId, target] of this.players) {
+      if (otherId === attackerId) {
+        continue;
+      }
+      if (!this.matchState.canReceiveInput(otherId)) {
+        continue;
+      }
+
+      const targetPos = target.body.translation();
+      if (
+        Math.abs(targetPos.x - center.x) < overlapHalfWidth &&
+        Math.abs(targetPos.y - center.y) < overlapHalfHeight
+      ) {
+        target.takeDamage(definition.damage);
+      }
+    }
   }
 
   private isGrounded(body: RAPIER.RigidBody, ducking: boolean): boolean {
