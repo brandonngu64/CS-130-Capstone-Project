@@ -11,6 +11,7 @@ export enum AttackKind {
 export interface AttackDefinition {
   kind: AttackKind;
   durationTicks: number;
+  damage: number;
   hitboxHalfWidth: number;
   hitboxHalfHeight: number;
   centerOffsetX: number;
@@ -22,6 +23,7 @@ const ATTACK_DEFINITIONS: Record<AttackKind, AttackDefinition> = {
   [AttackKind.DefaultPunch]: {
     kind: AttackKind.DefaultPunch,
     durationTicks: 8,
+    damage: 15,
     hitboxHalfWidth: 0.8,
     hitboxHalfHeight: 0.25,
     centerOffsetX: PLAYER_HALF_WIDTH + 0.8,
