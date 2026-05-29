@@ -623,3 +623,46 @@ h2 {
   }
 }
 
+.winner-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 48px 72px;
+  min-width: 360px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(11, 28, 44, 0.95), rgba(11, 28, 44, 0.82));
+  border: 4px solid var(--winner-color, #ffffff);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 24px 60px rgba(11, 28, 44, 0.6),
+    0 0 80px var(--winner-color, transparent);
+  text-align: center;
+  pointer-events: none;
+  z-index: 100;
+  animation: rise-up 0.4s cubic-bezier(0.2, 1, 0.3, 1);
+}
+
+.winner-banner[data-visible='false'] {
+  display: none;
+}
+
+.winner-banner__title {
+  font-size: 3.2rem;
+  font-weight: 900;
+  color: var(--winner-color, #ffffff);
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  text-shadow:
+    0 2px 16px rgba(0, 0, 0, 0.7),
+    0 0 32px var(--winner-color, transparent);
+}
+
+.winner-banner__subtitle {
+  font-size: 1.15rem;
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
