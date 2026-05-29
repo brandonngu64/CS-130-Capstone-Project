@@ -25,6 +25,7 @@ export const BULLET_HALF_WIDTH  = 0.15;
 export const BULLET_HALF_HEIGHT = 0.08;
 export const BULLET_COLOR = 0xffe066;
 export const BULLET_ID_MAX = 255;
+export const BULLET_DAMAGE = 10;
 export const GUN_FIRE_COOLDOWN_TICKS = 15;
 
 export const PLAYER_COLOR_PALETTE = [
