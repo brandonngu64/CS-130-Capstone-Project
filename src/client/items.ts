@@ -1,5 +1,6 @@
 export enum ItemKind {
   Gun = 1,
+  PenCrossbow = 2134,
 }
 
 export interface ItemSpawnSlot {
