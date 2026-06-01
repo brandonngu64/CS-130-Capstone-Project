@@ -1,7 +1,7 @@
 import type { RigidBody } from '@dimforge/rapier2d-compat';
 import { AttackKind } from './attacks';
 import { ItemKind } from './items';
-import { PLAYER_MAX_HEALTH } from './constants';
+import { KNOCKBACK_DECAY, KNOCKBACK_MAX_SPEED, PLAYER_MAX_DAMAGE, PLAYER_MAX_HEALTH } from './constants';
 
 type ActiveAttack = {
   kind: AttackKind;
@@ -24,6 +24,8 @@ export class PlayerCharacter {
   public gunFireCooldownTicks: number;
   public reloadPending: boolean;
   public reloadPendingOnKill: boolean;
+  public knockbackVx: number;
+  public knockbackVy: number;
 
   constructor(
     id: string,
@@ -35,7 +37,7 @@ export class PlayerCharacter {
     this.body = body;
     this.color = color;
     this.maxHealth = maxHealth;
-    this.health = maxHealth;
+    this.health = 0;
     this.facing = 1;
     this.equippedWeapon = AttackKind.DefaultPunch;
     this.activeAttack = null;
@@ -46,26 +48,44 @@ export class PlayerCharacter {
     this.gunFireCooldownTicks = 0;
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
+    this.knockbackVx = 0;
+    this.knockbackVy = 0;
   }
 
   takeDamage(amount: number): number {
-    const nextHealth = Math.max(0, this.health - Math.max(0, amount));
+    const nextHealth = Math.min(PLAYER_MAX_DAMAGE, this.health + Math.max(0, amount));
     this.health = nextHealth;
     return this.health;
   }
 
   heal(amount: number): number {
-    const nextHealth = Math.min(this.maxHealth, this.health + Math.max(0, amount));
+    const nextHealth = Math.max(0, this.health - Math.max(0, amount));
     this.health = nextHealth;
     return this.health;
   }
 
   isAlive(): boolean {
-    return this.health > 0;
+    return true;
   }
 
   isDead(): boolean {
-    return !this.isAlive();
+    return false;
+  }
+
+  addKnockback(vx: number, vy: number): void {
+    this.knockbackVx = Math.max(-KNOCKBACK_MAX_SPEED, Math.min(KNOCKBACK_MAX_SPEED, this.knockbackVx + vx));
+    this.knockbackVy = Math.max(-KNOCKBACK_MAX_SPEED, Math.min(KNOCKBACK_MAX_SPEED, this.knockbackVy + vy));
+  }
+
+  tickKnockback(): void {
+    this.knockbackVx *= KNOCKBACK_DECAY;
+    this.knockbackVy *= KNOCKBACK_DECAY;
+    if (Math.abs(this.knockbackVx) < 0.01) {
+      this.knockbackVx = 0;
+    }
+    if (Math.abs(this.knockbackVy) < 0.01) {
+      this.knockbackVy = 0;
+    }
   }
 
   isAttacking(): boolean {
@@ -105,7 +125,7 @@ export class PlayerCharacter {
   }
 
   reset(): void {
-    this.health = this.maxHealth;
+    this.health = 0;
     this.facing = 1;
     this.activeAttack = null;
     this.dashTicksRemaining = 0;
@@ -115,5 +135,7 @@ export class PlayerCharacter {
     this.gunFireCooldownTicks = 0;
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
+    this.knockbackVx = 0;
+    this.knockbackVy = 0;
   }
 }

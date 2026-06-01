@@ -10,7 +10,15 @@ export const FLOOR_Y = 0;
 
 export const PLAYER_HALF_WIDTH = 0.45;
 export const PLAYER_HALF_HEIGHT = 0.9;
-export const PLAYER_MAX_HEALTH = 100;
+// Soft cap used for HUD scaling; damage itself can continue increasing.
+export const PLAYER_MAX_HEALTH = 200;
+export const PLAYER_MAX_DAMAGE = 65535;
+
+export const KNOCKBACK_BASE_SPEED_BULLET = 5.5;
+export const KNOCKBACK_BASE_SPEED_EXPLOSION = 8;
+export const KNOCKBACK_DAMAGE_SCALE = 1;
+export const KNOCKBACK_DECAY = 0.9;
+export const KNOCKBACK_MAX_SPEED = 1000;
 
 export const MOVE_SPEED = 10;
 export const JUMP_SPEED = 16;

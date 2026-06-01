@@ -12,7 +12,7 @@ export class HealthBarOverlay {
 
     this.label = document.createElement('div');
     this.label.className = 'health-bar__label';
-    this.label.innerHTML = '<span class="health-bar__title">Health</span><span class="health-bar__value">0 / 0</span>';
+    this.label.innerHTML = '<span class="health-bar__title">Damage</span><span class="health-bar__value">0%</span>';
 
     this.value = this.label.querySelector('.health-bar__value') as HTMLElement;
     this.track = document.createElement('div');
@@ -30,12 +30,12 @@ export class HealthBarOverlay {
 
   update(health: number, maxHealth: number): void {
     const safeMax = Math.max(1, maxHealth);
-    const safeHealth = Math.max(0, Math.min(health, safeMax));
-    const ratio = safeHealth / safeMax;
+    const safeHealth = Math.max(0, Math.round(health));
+    const ratio = Math.min(1, safeHealth / safeMax);
 
-    this.value.textContent = `${safeHealth} / ${safeMax}`;
+    this.value.textContent = `${safeHealth}%`;
     this.fill.style.width = `${ratio * 100}%`;
-    this.fill.dataset.low = ratio < 0.33 ? 'true' : 'false';
+    this.fill.dataset.low = ratio > 0.66 ? 'true' : 'false';
     this.root.dataset.visible = 'true';
   }
 

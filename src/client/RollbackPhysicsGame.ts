@@ -14,17 +14,21 @@ import {
   FLOOR_Y,
   GRAVITY_Y,
   JUMP_SPEED,
+  KNOCKBACK_BASE_SPEED_BULLET,
+  KNOCKBACK_BASE_SPEED_EXPLOSION,
+  KNOCKBACK_DAMAGE_SCALE,
   MOVE_SPEED,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
+  PLAYER_MAX_DAMAGE,
 } from './constants';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import type { AttackDefinition } from './attacks';
 import { InputBits, decodeInputBits } from './input';
 import { PlayerCharacter } from './PlayerCharacter';
-import { K_getWeaponDefinition } from './kyleWeapons';
+import { K_getWeaponDefinition, ProjectileType } from './kyleWeapons';
 import {
   ITEM_LIFETIME_TICKS,
   ITEM_PICKUP_RADIUS,
@@ -103,6 +107,7 @@ type Bullet = {
   reloadOnHit: boolean;
   reloadOnKill: boolean;
   projectileGravity: number;
+  projectileType: ProjectileType;
 };
 
 type ItemSlotState = {
@@ -169,6 +174,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         gunFireCooldownTicks: record.gunFireCooldownTicks,
         reloadPending: record.reloadPending,
         reloadPendingOnKill: record.reloadPendingOnKill,
+        knockbackVx: record.knockbackVx,
+        knockbackVy: record.knockbackVy,
       };
     });
 
@@ -176,13 +183,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 16 + 14 + matchBytes;
+      byteLength += 2 + record.idBytes.length + 16 + 23 + matchBytes;
     }
 
     byteLength += 4 + 1;
     for (const bullet of bulletList) {
       const ownerIdBytes = this.textEncoder.encode(bullet.ownerId);
-      byteLength += 1 + 4 + 4 + 4 + 4 + 1 + 2 + 1 + 2 + ownerIdBytes.length + 1 + 1 + 4;
+      byteLength += 1 + 4 + 4 + 4 + 4 + 1 + 2 + 1 + 2 + ownerIdBytes.length + 1 + 1 + 4 + 1;
     }
     byteLength += 1 + this.itemSlots.length * 10 + 1;
 
@@ -205,7 +212,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setFloat32(offset, record.vx, true); offset += 4;
       view.setFloat32(offset, record.vy, true); offset += 4;
       view.setUint8(offset, record.inputFlags & 0xff); offset += 1;
-      view.setUint8(offset, record.health); offset += 1;
+      view.setUint16(offset, record.health, true); offset += 2;
       view.setInt8(offset, record.facing < 0 ? -1 : 1); offset += 1;
       view.setUint8(offset, record.attackKind); offset += 1;
       view.setUint8(offset, record.attackTicksRemaining); offset += 1;
@@ -216,6 +223,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.gunFireCooldownTicks); offset += 1;
       view.setUint8(offset, record.reloadPending ? 1 : 0); offset += 1;
       view.setUint8(offset, record.reloadPendingOnKill ? 1 : 0); offset += 1;
+      view.setFloat32(offset, record.knockbackVx, true); offset += 4;
+      view.setFloat32(offset, record.knockbackVy, true); offset += 4;
 
       offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
     }
@@ -242,6 +251,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, bullet.reloadOnHit ? 1 : 0); offset += 1;
       view.setUint8(offset, bullet.reloadOnKill ? 1 : 0); offset += 1;
       view.setFloat32(offset, bullet.projectileGravity, true); offset += 4;
+      view.setUint8(offset, bullet.projectileType); offset += 1;
     }
 
     view.setUint8(offset, this.itemSlots.length);
@@ -284,6 +294,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         gunFireCooldownTicks: number;
         reloadPending: boolean;
         reloadPendingOnKill: boolean;
+        knockbackVx: number;
+        knockbackVy: number;
       }
     >();
 
@@ -299,7 +311,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const vx = view.getFloat32(offset, true); offset += 4;
       const vy = view.getFloat32(offset, true); offset += 4;
       const inputFlags = view.getUint8(offset); offset += 1;
-      const health = view.getUint8(offset); offset += 1;
+      const health = view.getUint16(offset, true); offset += 2;
       const facing = view.getInt8(offset); offset += 1;
       const attackKind = view.getUint8(offset); offset += 1;
       const attackTicksRemaining = view.getUint8(offset); offset += 1;
@@ -310,6 +322,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const gunFireCooldownTicks = view.getUint8(offset); offset += 1;
       const reloadPending = view.getUint8(offset) !== 0; offset += 1;
       const reloadPendingOnKill = view.getUint8(offset) !== 0; offset += 1;
+      const knockbackVx = view.getFloat32(offset, true); offset += 4;
+      const knockbackVy = view.getFloat32(offset, true); offset += 4;
 
       incoming.set(id, {
         x,
@@ -328,6 +342,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         gunFireCooldownTicks,
         reloadPending,
         reloadPendingOnKill,
+        knockbackVx,
+        knockbackVy,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -346,7 +362,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       record.body.setTranslation({ x: state.x, y: state.y }, true);
       record.body.setLinvel({ x: state.vx, y: state.vy }, true);
-      record.health = Math.max(0, Math.min(state.health, record.maxHealth));
+      record.health = Math.max(0, Math.min(state.health, PLAYER_MAX_DAMAGE));
       record.facing = state.facing < 0 ? -1 : 1;
       record.activeAttack =
         state.attackKind > 0 && state.attackTicksRemaining > 0
@@ -359,6 +375,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.gunFireCooldownTicks = state.gunFireCooldownTicks;
       record.reloadPending = state.reloadPending;
       record.reloadPendingOnKill = state.reloadPendingOnKill;
+      record.knockbackVx = state.knockbackVx;
+      record.knockbackVy = state.knockbackVy;
       this.previousInputFlags.set(id, state.inputFlags);
     }
 
@@ -382,6 +400,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const reloadOnHit = view.getUint8(offset) !== 0; offset += 1;
       const reloadOnKill = view.getUint8(offset) !== 0; offset += 1;
       const projectileGravity = view.getFloat32(offset, true); offset += 4;
+      const projectileType = view.getUint8(offset) as ProjectileType; offset += 1;
       this.bullets.set(id, {
         id,
         x,
@@ -395,6 +414,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         reloadOnHit,
         reloadOnKill,
         projectileGravity,
+        projectileType,
       });
     }
 
@@ -443,6 +463,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.respawnPlayers(respawnedIds);
     this.tickDashCooldowns();
     this.tickGunCooldowns();
+    this.tickKnockbackVelocities();
 
     const previousStates = new Map<string, StepPlayerState>();
 
@@ -480,24 +501,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.world.step();
     this.resolvePlatformContacts(previousStates);
     this.handleBlastZoneDeaths();
-    this.handleHealthDamage();
     this.tickHeldItems();
     this.tickItems();
-  }
-
-  // if a player's health drops to 0 or below, they should be considered dead and respawn 
-  private handleHealthDamage(): void {
-    for (const [id, record] of this.players) {
-      if (!this.matchState.canReceiveInput(id)) {
-        continue;
-      }
-
-      if (record.health <= 0) {
-        record.body.setLinvel({ x: 0, y: 0 }, true);
-        record.body.sleep();
-        this.matchState.startRespawn(id);
-      }
-    }
   }
 
   hash(): number {
@@ -708,7 +713,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const shootPressed = (inputFlags & InputBits.Shoot) !== 0 && (previousFlags & InputBits.Shoot) === 0;
 
     if (record.dashTicksRemaining > 0) {
-      body.setLinvel({ x: record.facing * DASH_SPEED, y: velocity.y }, true);
+      body.setLinvel(
+        {
+          x: record.facing * DASH_SPEED + record.knockbackVx,
+          y: velocity.y + record.knockbackVy,
+        },
+        true,
+      );
       record.dashTicksRemaining -= 1;
       this.previousInputFlags.set(id, inputFlags);
       return;
@@ -747,12 +758,18 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.facing = dashDir;
       record.dashTicksRemaining = DASH_DURATION_TICKS;
       record.dashCooldownTicks = DASH_COOLDOWN_TICKS;
-      body.setLinvel({ x: dashDir * DASH_SPEED, y: velocity.y }, true);
+      body.setLinvel({ x: dashDir * DASH_SPEED + record.knockbackVx, y: velocity.y + record.knockbackVy }, true);
       this.previousInputFlags.set(id, inputFlags);
       return;
     }
 
-    body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
+    body.setLinvel(
+      {
+        x: horizontalDir * MOVE_SPEED + record.knockbackVx,
+        y: nextYVelocity + record.knockbackVy,
+      },
+      true,
+    );
     this.previousInputFlags.set(id, inputFlags);
   }
 
@@ -769,6 +786,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (record.gunFireCooldownTicks > 0) {
         record.gunFireCooldownTicks -= 1;
       }
+    }
+  }
+
+  private tickKnockbackVelocities(): void {
+    for (const [id, record] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+      record.tickKnockback();
     }
   }
 
@@ -811,6 +837,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           const target = this.players.get(hitPlayerId);
           if (target) {
             const nextHealth = target.takeDamage(bullet.damage);
+            this.applyProjectileKnockback(target, bullet, nextHealth);
             const shooter = this.players.get(bullet.ownerId);
             if (bullet.reloadOnHit && shooter) {
               shooter.reloadPending = false;
@@ -1095,7 +1122,38 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       reloadOnHit: weapon.reloadOnHit,
       reloadOnKill: weapon.reloadOnKill,
       projectileGravity: weapon.projectileGravity,
+      projectileType: weapon.projectileType,
     });
+  }
+
+  private applyProjectileKnockback(target: PlayerCharacter, bullet: Bullet, damagePercent: number): void {
+    const direction = this.projectileKnockbackDirection(target, bullet);
+    const baseStrength =
+      bullet.projectileType === ProjectileType.Explosive
+        ? KNOCKBACK_BASE_SPEED_EXPLOSION
+        : KNOCKBACK_BASE_SPEED_BULLET;
+    const strength = baseStrength + damagePercent * KNOCKBACK_DAMAGE_SCALE;
+    target.addKnockback(direction.x * strength, direction.y * strength);
+  }
+
+  private projectileKnockbackDirection(target: PlayerCharacter, bullet: Bullet): { x: number; y: number } {
+    if (bullet.projectileType === ProjectileType.Explosive) {
+      const targetPos = target.body.translation();
+      const dx = targetPos.x - bullet.x;
+      const dy = targetPos.y - bullet.y;
+      const magnitude = Math.hypot(dx, dy);
+      if (magnitude > 0.0001) {
+        return { x: dx / magnitude, y: dy / magnitude };
+      }
+      return { x: 0, y: 1 };
+    }
+
+    const magnitude = Math.hypot(bullet.vx, bullet.vy);
+    if (magnitude > 0.0001) {
+      return { x: bullet.vx / magnitude, y: bullet.vy / magnitude };
+    }
+
+    return { x: 1, y: 0 };
   }
 
   private attackCenter(
