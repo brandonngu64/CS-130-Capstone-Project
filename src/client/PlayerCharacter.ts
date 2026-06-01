@@ -22,6 +22,8 @@ export class PlayerCharacter {
   public heldItem: ItemKind | null;
   public heldItemExpiryTick: number;
   public gunFireCooldownTicks: number;
+  public reloadPending: boolean;
+  public reloadPendingOnKill: boolean;
 
   constructor(
     id: string,
@@ -42,6 +44,8 @@ export class PlayerCharacter {
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
     this.gunFireCooldownTicks = 0;
+    this.reloadPending = false;
+    this.reloadPendingOnKill = false;
   }
 
   takeDamage(amount: number): number {
@@ -81,18 +85,23 @@ export class PlayerCharacter {
   }
 
   canShoot(): boolean {
-    return this.heldItem === ItemKind.Gun;
+    return (
+      (this.heldItem === ItemKind.Gun || this.heldItem === ItemKind.PenCrossbow)
+      && !this.reloadPending
+    );
   }
 
   // make it so you can only punch if you don't have a weapon equipped
   canPunch(): boolean {
-    return this.heldItem !== ItemKind.Gun;
+    return this.heldItem !== ItemKind.Gun && this.heldItem !== ItemKind.PenCrossbow;
   }
 
   dropItem(): void {
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
     this.gunFireCooldownTicks = 0;
+    this.reloadPending = false;
+    this.reloadPendingOnKill = false;
   }
 
   reset(): void {
@@ -104,5 +113,7 @@ export class PlayerCharacter {
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
     this.gunFireCooldownTicks = 0;
+    this.reloadPending = false;
+    this.reloadPendingOnKill = false;
   }
 }
