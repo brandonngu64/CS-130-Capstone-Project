@@ -583,6 +583,16 @@ function relayLobbyReady(
   socket: WebSocket,
   message: Extract<ClientMessage, { type: 'lobby_ready' }>,
 ): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update lobby readiness for a different peer',
+    });
+    return;
+  }
+
   const room = rooms.get(message.roomId);
   if (!room) {
     send(socket, {
