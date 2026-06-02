@@ -1146,6 +1146,8 @@ export class MultiplayerApp {
 
       this.roomId = null;
       this.hostPeerId = null;
+      this.lobbyMembers.clear();
+      this.lobbyReadyByPeer.clear();
     } finally {
       this.isCleaningUp = false;
     }
