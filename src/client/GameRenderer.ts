@@ -18,8 +18,7 @@ type CachedTileMaterial = {
   texture: THREE.Texture;
 };
 
-type CachedSpriteMaterial = {
-  material: THREE.MeshBasicMaterial;
+type CachedSpriteTexture = {
   texture: THREE.Texture;
   aspectRatio: number;
 };
@@ -46,7 +45,7 @@ export class GameRenderer {
   private readonly playerMeshes = new Map<string, PlayerSpriteMesh>();
   private readonly mapMeshes: THREE.Mesh[] = [];
   private readonly materialCache = new Map<string, CachedTileMaterial>();
-  private readonly spriteMaterialCache = new Map<string, CachedSpriteMaterial>();
+  private readonly spriteTextureCache = new Map<string, CachedSpriteTexture>();
   private readonly backdropMesh: THREE.Mesh;
   private readonly mapBounds: TiledMapDefinition['bounds'];
   private readonly baseViewHeight: number;
@@ -74,6 +73,8 @@ export class GameRenderer {
     this.camera.lookAt(0, 0, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.domElement.style.imageRendering = 'pixelated';
 
@@ -116,9 +117,11 @@ export class GameRenderer {
         state.animTick,
       );
 
-      const cachedSprite = this.getCachedSpriteMaterial(player.characterId, frame);
+      const cachedSprite = this.getCachedSpriteTexture(player.characterId, frame);
       if (playerSprite.lastFrameKey !== frameKey) {
-        playerSprite.mesh.material = cachedSprite.material;
+        const previousMaterial = playerSprite.mesh.material as THREE.MeshBasicMaterial;
+        previousMaterial.dispose();
+        playerSprite.mesh.material = this.createPlayerSpriteMaterial(cachedSprite.texture);
         playerSprite.lastFrameKey = frameKey;
       }
 
@@ -267,6 +270,7 @@ export class GameRenderer {
     for (const [, playerSprite] of this.playerMeshes) {
       this.scene.remove(playerSprite.mesh);
       playerSprite.mesh.geometry.dispose();
+      (playerSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
     }
     this.playerMeshes.clear();
 
@@ -287,11 +291,10 @@ export class GameRenderer {
     }
     this.materialCache.clear();
 
-    for (const cachedSprite of this.spriteMaterialCache.values()) {
-      cachedSprite.material.dispose();
+    for (const cachedSprite of this.spriteTextureCache.values()) {
       cachedSprite.texture.dispose();
     }
-    this.spriteMaterialCache.clear();
+    this.spriteTextureCache.clear();
 
     for (const [, mesh] of this.attackMeshes) {
       this.scene.remove(mesh);
@@ -400,6 +403,7 @@ export class GameRenderer {
   }
 
   private configurePixelTexture(texture: THREE.Texture): void {
+    texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
     texture.generateMipmaps = false;
@@ -579,12 +583,8 @@ export class GameRenderer {
   private createPlayerSpriteMesh(): PlayerSpriteMesh {
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
-      color: 0xffffff,
-      depthWrite: true,
-      side: THREE.DoubleSide,
-      transparent: true,
       visible: false,
+      toneMapped: false,
     });
     return {
       mesh: new THREE.Mesh(geometry, material),
@@ -592,12 +592,24 @@ export class GameRenderer {
     };
   }
 
-  private getCachedSpriteMaterial(
+  private createPlayerSpriteMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
+    return new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      color: 0xffffff,
+      depthWrite: true,
+      map: texture,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+      transparent: false,
+    });
+  }
+
+  private getCachedSpriteTexture(
     characterId: RenderState['players'][number]['characterId'],
     frame: string,
-  ): CachedSpriteMaterial {
+  ): CachedSpriteTexture {
     const cacheKey = `${characterId}:${frame}`;
-    const cached = this.spriteMaterialCache.get(cacheKey);
+    const cached = this.spriteTextureCache.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -605,25 +617,15 @@ export class GameRenderer {
     const texture = this.textureLoader.load(getCharacterSpriteUrl(characterId, frame));
     this.configurePixelTexture(texture);
 
-    const material = new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
-      color: 0xffffff,
-      map: texture,
-      depthWrite: true,
-      side: THREE.DoubleSide,
-      transparent: true,
-    });
-
-    const entry: CachedSpriteMaterial = {
-      material,
+    const entry: CachedSpriteTexture = {
       texture,
       aspectRatio: this.readTextureAspectRatio(texture),
     };
-    this.spriteMaterialCache.set(cacheKey, entry);
+    this.spriteTextureCache.set(cacheKey, entry);
     return entry;
   }
 
-  private resolveSpriteAspectRatio(cached: CachedSpriteMaterial): number {
+  private resolveSpriteAspectRatio(cached: CachedSpriteTexture): number {
     if (cached.aspectRatio > 0) {
       return cached.aspectRatio;
     }
