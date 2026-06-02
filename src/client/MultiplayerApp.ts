@@ -236,7 +236,6 @@ export class MultiplayerApp {
 
   private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
-  private readonly waitingOpponentNotice: HTMLElement;
   private readonly startGameButton: HTMLButtonElement;
   private readonly lobbyOverlay: HTMLElement;
   private readonly lobbyPlayersList: HTMLElement;
@@ -433,7 +432,6 @@ export class MultiplayerApp {
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
-    this.waitingOpponentNotice = requireElement<HTMLElement>(this.root, '#waitingOpponentNotice');
     this.startGameButton = requireElement<HTMLButtonElement>(this.root, '#startGameButton');
     this.lobbyOverlay = requireElement<HTMLElement>(this.root, '#lobbyOverlay');
     this.lobbyPlayersList = requireElement<HTMLElement>(this.root, '#lobbyPlayersList');
@@ -664,7 +662,6 @@ export class MultiplayerApp {
     if (this.game) {
       const renderState = this.game.getRenderState();
       this.renderer.render(renderState, this.peerId);
-      this.updateWaitingForOpponentNotice(renderState.players.length);
       if (this.isInRoom() || this.connecting) {
         this.stockHud.update(renderState.players, this.peerId);
       }
@@ -685,7 +682,6 @@ export class MultiplayerApp {
       this.updateRoundStartBanner(renderState.roundStartCountdownLabel);
     } else {
       this.winnerBanner.dataset.visible = 'false';
-      this.waitingOpponentNotice.dataset.visible = 'false';
       this.roundStartBanner.dataset.visible = 'false';
     }
 
@@ -1528,9 +1524,6 @@ export class MultiplayerApp {
     const inPlayingSession = inRoom && this.session?.state === SessionState.Playing;
 
     this.gameHud.dataset.visible = inPlayingSession ? 'true' : 'false';
-    if (!inActiveSession) {
-      this.waitingOpponentNotice.dataset.visible = 'false';
-    }
     this.stockHud.setVisible(inPlayingSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
     this.lobbyOverlay.dataset.visible = inLobby ? 'true' : 'false';
@@ -1635,9 +1628,6 @@ export class MultiplayerApp {
               <button id="settingsToggleButton" class="action-ghost" type="button">Settings</button>
               <button id="leaveButton" class="action-ghost" type="button">Leave</button>
             </div>
-          </div>
-          <div id="waitingOpponentNotice" class="waiting-opponent-notice" data-visible="false">
-            Waiting for opponent
           </div>
         </section>
 
@@ -1878,11 +1868,4 @@ export class MultiplayerApp {
       .join('');
   }
 
-  private updateWaitingForOpponentNotice(playerCount: number): void {
-    const shouldShow =
-      (this.isInRoom() || this.connecting) &&
-      this.session?.state === SessionState.Playing &&
-      playerCount === 1;
-    this.waitingOpponentNotice.dataset.visible = shouldShow ? 'true' : 'false';
-  }
 }
