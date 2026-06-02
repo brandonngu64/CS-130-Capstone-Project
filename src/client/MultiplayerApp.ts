@@ -1785,14 +1785,16 @@ export class MultiplayerApp {
   }
 
   private canHostStartGame(): boolean {
-    if (!this.areAllLobbyPlayersReady()) {
+    if (!this.shouldShowHostStartControl() || !this.session) {
       return false;
     }
-    return Boolean(
-      this.shouldShowHostStartControl() &&
-      this.session &&
-      this.lobbyMembers.size >= 2,
-    );
+
+    // Allow host to start immediately when alone in lobby.
+    if (this.lobbyMembers.size <= 1) {
+      return true;
+    }
+
+    return this.areAllLobbyPlayersReady();
   }
 
   private seedLobbyMembers(): void {
