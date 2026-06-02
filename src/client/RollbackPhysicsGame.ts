@@ -22,7 +22,11 @@ import {
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
   TICK_RATE,
+  type CharacterId,
+  characterIdFromIndex,
+  characterIdToIndex,
 } from './constants';
+import { defaultCharacterForPlayer } from './CharacterSprites';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import type { AttackDefinition } from './attacks';
@@ -53,6 +57,7 @@ export interface PlayerRenderState {
   width: number;
   height: number;
   color: number;
+  characterId: CharacterId;
   stocks: number;
   eliminated: boolean;
   respawning: boolean;
@@ -61,6 +66,7 @@ export interface PlayerRenderState {
   maxHealth: number;
   heldItem: ItemKind | null;
   facing: number;
+  vx: number;
 }
 
 export interface ItemRenderState {
@@ -83,6 +89,7 @@ export interface RenderState {
   bullets: BulletRenderState[];
   winnerId: string | null;
   roundStartCountdownLabel: string | null;
+  animTick: number;
 }
 
 type StepPlayerState = {
@@ -127,6 +134,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
   private previousConnectedPlayerCount = 0;
+  private readonly pendingCharacterIds = new Map<string, CharacterId>();
 
   constructor(map: TiledMapDefinition) {
     this.map = map;
@@ -166,6 +174,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         heldItem: record.heldItem ?? 0,
         heldItemExpiryTick: record.heldItemExpiryTick,
         gunFireCooldownTicks: record.gunFireCooldownTicks,
+        characterId: characterIdToIndex(record.characterId),
       };
     });
 
@@ -173,7 +182,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 16 + 13 + matchBytes;
+      byteLength += 2 + record.idBytes.length + 16 + 14 + matchBytes;
     }
     byteLength += 4 + 2 + 1 + bulletList.length * 11 + 1 + this.itemSlots.length * 9 + 1;
 
@@ -205,6 +214,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.heldItem); offset += 1;
       view.setUint16(offset, record.heldItemExpiryTick, true); offset += 2;
       view.setUint8(offset, record.gunFireCooldownTicks); offset += 1;
+      view.setUint8(offset, record.characterId); offset += 1;
 
       offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
     }
@@ -265,6 +275,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         heldItem: number;
         heldItemExpiryTick: number;
         gunFireCooldownTicks: number;
+        characterId: number;
       }
     >();
 
@@ -289,6 +300,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const heldItem = view.getUint8(offset); offset += 1;
       const heldItemExpiryTick = view.getUint16(offset, true); offset += 2;
       const gunFireCooldownTicks = view.getUint8(offset); offset += 1;
+      const characterId = view.getUint8(offset); offset += 1;
 
       incoming.set(id, {
         x,
@@ -305,6 +317,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         heldItem,
         heldItemExpiryTick,
         gunFireCooldownTicks,
+        characterId,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -338,6 +351,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.heldItem = state.heldItem > 0 ? (state.heldItem as ItemKind) : null;
       record.heldItemExpiryTick = state.heldItemExpiryTick;
       record.gunFireCooldownTicks = state.gunFireCooldownTicks;
+      record.characterId = characterIdFromIndex(state.characterId);
       this.previousInputFlags.set(id, state.inputFlags);
     }
 
@@ -485,6 +499,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
+        const velocity = record.body.linvel();
         const match = this.matchState.getRenderInfo(id);
 
         return {
@@ -494,6 +509,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
+          characterId: record.characterId,
           stocks: match.stocks,
           eliminated: match.eliminated,
           respawning: match.respawning,
@@ -502,6 +518,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           maxHealth: record.maxHealth,
           heldItem: record.heldItem,
           facing: record.facing,
+          vx: velocity.x,
         };
       });
 
@@ -551,7 +568,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       bullets,
       winnerId,
       roundStartCountdownLabel: this.getRoundStartCountdownLabel(),
+      animTick: this.tickCount,
     };
+  }
+
+  setCharacterSelection(playerId: string, characterId: CharacterId): void {
+    this.pendingCharacterIds.set(playerId, characterId);
+    const record = this.players.get(playerId);
+    if (record) {
+      record.characterId = characterId;
+    }
+  }
+
+  applyCharacterSelections(selections: ReadonlyMap<string, CharacterId>): void {
+    for (const [playerId, characterId] of selections) {
+      this.setCharacterSelection(playerId, characterId);
+    }
   }
 
   reset(): void {
@@ -562,6 +594,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.players.clear();
     this.previousInputFlags.clear();
+    this.pendingCharacterIds.clear();
     this.bullets.clear();
     this.nextBulletId = 1;
     this.tickCount = 0;
@@ -618,7 +651,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const body = this.createPlayerBody(this.spawnPointForPlayer(id));
       this.registerPlayerColliders(body, id);
-      this.players.set(id, new PlayerCharacter(id, body, this.colorForPlayer(id)));
+      const characterId =
+        this.pendingCharacterIds.get(id) ?? defaultCharacterForPlayer(id, sortedIds);
+      this.players.set(
+        id,
+        new PlayerCharacter(id, body, this.colorForPlayer(id), undefined, characterId),
+      );
       this.previousInputFlags.set(id, 0);
       this.matchState.ensurePlayer(id);
     }

@@ -29,6 +29,12 @@ export type ClientToServerMessage =
       roomId: string;
       peerId: string;
       ready: boolean;
+    }
+  | {
+      type: 'lobby_character_select';
+      roomId: string;
+      peerId: string;
+      characterId: string;
     };
 
 export type ServerToClientMessage =
@@ -70,6 +76,12 @@ export type ServerToClientMessage =
       roomId: string;
       peerId: string;
       ready: boolean;
+    }
+  | {
+      type: 'lobby_character_select';
+      roomId: string;
+      peerId: string;
+      characterId: string;
     };
 
 export class SignalingClient {

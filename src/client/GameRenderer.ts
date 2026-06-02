@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import {
+  getCharacterSpriteUrl,
+  resolveCharacterFrame,
+  resolveCharacterFrameKey,
+} from './CharacterSprites';
 import { RESPAWN_FLASH_TICKS } from './constants';
 import { GUN_COLOR, ItemKind } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
@@ -11,6 +16,17 @@ export type CameraMode = 'follow' | 'free' | 'action';
 type CachedTileMaterial = {
   material: THREE.MeshBasicMaterial;
   texture: THREE.Texture;
+};
+
+type CachedSpriteMaterial = {
+  material: THREE.MeshBasicMaterial;
+  texture: THREE.Texture;
+  aspectRatio: number;
+};
+
+type PlayerSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
 };
 
 // Size of a collectible item sitting on the ground
@@ -27,9 +43,10 @@ export class GameRenderer {
   private readonly camera: THREE.OrthographicCamera;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly container: HTMLElement;
-  private readonly playerMeshes = new Map<string, THREE.Mesh>();
+  private readonly playerMeshes = new Map<string, PlayerSpriteMesh>();
   private readonly mapMeshes: THREE.Mesh[] = [];
   private readonly materialCache = new Map<string, CachedTileMaterial>();
+  private readonly spriteMaterialCache = new Map<string, CachedSpriteMaterial>();
   private readonly backdropMesh: THREE.Mesh;
   private readonly mapBounds: TiledMapDefinition['bounds'];
   private readonly baseViewHeight: number;
@@ -41,7 +58,6 @@ export class GameRenderer {
   private readonly attackMeshes = new Map<string, THREE.Mesh>();
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
   private readonly bulletMeshes = new Map<number, THREE.Mesh>();
-  private readonly gunMeshes = new Map<string, THREE.Mesh>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
@@ -79,18 +95,43 @@ export class GameRenderer {
     const activeIds = new Set(state.players.map((player: RenderState['players'][number]) => player.id));
 
     for (const player of state.players) {
-      let mesh = this.playerMeshes.get(player.id);
-      if (!mesh) {
-        mesh = this.createPlayerMesh(player.width, player.height, player.color);
-        this.scene.add(mesh);
-        this.playerMeshes.set(player.id, mesh);
+      let playerSprite = this.playerMeshes.get(player.id);
+      if (!playerSprite) {
+        playerSprite = this.createPlayerSpriteMesh();
+        this.scene.add(playerSprite.mesh);
+        this.playerMeshes.set(player.id, playerSprite);
       }
 
-      mesh.position.set(player.x, player.y, 0.35);
+      const frame = resolveCharacterFrame(
+        player.facing,
+        player.heldItem,
+        player.vx,
+        state.animTick,
+      );
+      const frameKey = resolveCharacterFrameKey(
+        player.characterId,
+        player.facing,
+        player.heldItem,
+        player.vx,
+        state.animTick,
+      );
 
-      const material = mesh.material as THREE.MeshStandardMaterial;
-      material.emissive.setHex(player.id === localPlayerId ? 0x2a9d8f : 0x000000);
-      material.emissiveIntensity = player.id === localPlayerId ? 0.26 : 0;
+      const cachedSprite = this.getCachedSpriteMaterial(player.characterId, frame);
+      if (playerSprite.lastFrameKey !== frameKey) {
+        playerSprite.mesh.material = cachedSprite.material;
+        playerSprite.lastFrameKey = frameKey;
+      }
+
+      const aspectRatio = this.resolveSpriteAspectRatio(cachedSprite);
+      const displayHeight = player.height;
+      const displayWidth = displayHeight * aspectRatio;
+      playerSprite.mesh.scale.set(displayWidth, displayHeight, 1);
+
+      playerSprite.mesh.visible = true;
+
+      playerSprite.mesh.position.set(player.x, player.y, 0.35);
+
+      const material = playerSprite.mesh.material as THREE.MeshBasicMaterial;
 
       if (player.respawnFlashTicksRemaining > 0) {
         const flashStep = Math.max(1, Math.floor(RESPAWN_FLASH_TICKS / 24));
@@ -105,36 +146,13 @@ export class GameRenderer {
       const isTransparent = material.opacity < 1;
       material.transparent = isTransparent;
       material.depthWrite = !isTransparent;
-
-      if (player.heldItem !== null) {
-        let gun = this.gunMeshes.get(player.id);
-        if (!gun) {
-          gun = this.createGunMesh();
-          this.scene.add(gun);
-          this.gunMeshes.set(player.id, gun);
-        }
-        gun.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
-        gun.visible = true;
-      } else {
-        const gun = this.gunMeshes.get(player.id);
-        if (gun) gun.visible = false;
-      }
     }
 
-    for (const [id, mesh] of this.playerMeshes) {
+    for (const [id, playerSprite] of this.playerMeshes) {
       if (!activeIds.has(id)) {
-        this.scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.scene.remove(playerSprite.mesh);
+        playerSprite.mesh.geometry.dispose();
         this.playerMeshes.delete(id);
-
-        const gun = this.gunMeshes.get(id);
-        if (gun) {
-          this.scene.remove(gun);
-          gun.geometry.dispose();
-          (gun.material as THREE.MeshStandardMaterial).dispose();
-          this.gunMeshes.delete(id);
-        }
       }
     }
 
@@ -246,10 +264,9 @@ export class GameRenderer {
   dispose(): void {
     this.resizeObserver.disconnect();
 
-    for (const [, mesh] of this.playerMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    for (const [, playerSprite] of this.playerMeshes) {
+      this.scene.remove(playerSprite.mesh);
+      playerSprite.mesh.geometry.dispose();
     }
     this.playerMeshes.clear();
 
@@ -269,6 +286,12 @@ export class GameRenderer {
       cachedMaterial.texture.dispose();
     }
     this.materialCache.clear();
+
+    for (const cachedSprite of this.spriteMaterialCache.values()) {
+      cachedSprite.material.dispose();
+      cachedSprite.texture.dispose();
+    }
+    this.spriteMaterialCache.clear();
 
     for (const [, mesh] of this.attackMeshes) {
       this.scene.remove(mesh);
@@ -290,13 +313,6 @@ export class GameRenderer {
       (mesh.material as THREE.MeshStandardMaterial).dispose();
     }
     this.bulletMeshes.clear();
-
-    for (const [, mesh] of this.gunMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
-    }
-    this.gunMeshes.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -560,16 +576,68 @@ export class GameRenderer {
     }
   }
 
-  private createPlayerMesh(width: number, height: number, color: number): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(width, height, 0.7);
-    const material = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.45,
-      metalness: 0.1,
-      opacity: 1,
+  private createPlayerSpriteMesh(): PlayerSpriteMesh {
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      color: 0xffffff,
       depthWrite: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      visible: false,
     });
-    return new THREE.Mesh(geometry, material);
+    return {
+      mesh: new THREE.Mesh(geometry, material),
+      lastFrameKey: '',
+    };
+  }
+
+  private getCachedSpriteMaterial(
+    characterId: RenderState['players'][number]['characterId'],
+    frame: string,
+  ): CachedSpriteMaterial {
+    const cacheKey = `${characterId}:${frame}`;
+    const cached = this.spriteMaterialCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const texture = this.textureLoader.load(getCharacterSpriteUrl(characterId, frame));
+    this.configurePixelTexture(texture);
+
+    const material = new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      color: 0xffffff,
+      map: texture,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+    });
+
+    const entry: CachedSpriteMaterial = {
+      material,
+      texture,
+      aspectRatio: this.readTextureAspectRatio(texture),
+    };
+    this.spriteMaterialCache.set(cacheKey, entry);
+    return entry;
+  }
+
+  private resolveSpriteAspectRatio(cached: CachedSpriteMaterial): number {
+    if (cached.aspectRatio > 0) {
+      return cached.aspectRatio;
+    }
+
+    cached.aspectRatio = this.readTextureAspectRatio(cached.texture);
+    return cached.aspectRatio > 0 ? cached.aspectRatio : 1;
+  }
+
+  private readTextureAspectRatio(texture: THREE.Texture): number {
+    const image = texture.image as { width?: number; height?: number } | undefined;
+    if (image?.width && image?.height) {
+      return image.width / image.height;
+    }
+    return 0;
   }
 
   private createAttackMesh(width: number, height: number, color: number): THREE.Mesh {
@@ -590,18 +658,6 @@ export class GameRenderer {
       metalness: 0.7,
       emissive: new THREE.Color(GUN_COLOR),
       emissiveIntensity: 0.15,
-    });
-    return new THREE.Mesh(geometry, material);
-  }
-
-  private createGunMesh(): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(0.35, 0.35, 0.18);
-    const material = new THREE.MeshStandardMaterial({
-      color: GUN_COLOR,
-      roughness: 0.3,
-      metalness: 0.8,
-      emissive: new THREE.Color(GUN_COLOR),
-      emissiveIntensity: 0.3,
     });
     return new THREE.Mesh(geometry, material);
   }

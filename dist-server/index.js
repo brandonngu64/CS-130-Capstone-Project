@@ -71,6 +71,12 @@ websocketServer.on('connection', (socket) => {
             case 'signal':
                 relaySignal(socket, message);
                 break;
+            case 'lobby_ready':
+                relayLobbyReady(socket, message);
+                break;
+            case 'lobby_character_select':
+                relayLobbyCharacterSelect(socket, message);
+                break;
             default:
                 break;
         }
@@ -376,6 +382,74 @@ function relaySignal(socket, message) {
         roomId: message.roomId,
         fromPeerId: message.fromPeerId,
         signal: message.signal,
+    });
+}
+function relayLobbyReady(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot update lobby readiness for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room) {
+        send(socket, {
+            type: 'room_error',
+            code: 'ROOM_NOT_FOUND',
+            message: 'Cannot update lobby: room does not exist',
+        });
+        return;
+    }
+    if (!room.members.has(message.peerId)) {
+        send(socket, {
+            type: 'room_error',
+            code: 'NOT_IN_ROOM',
+            message: 'Cannot update lobby while outside this room',
+        });
+        return;
+    }
+    broadcastToRoom(room, {
+        type: 'lobby_ready',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        ready: message.ready,
+    });
+}
+function relayLobbyCharacterSelect(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot update character selection for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room) {
+        send(socket, {
+            type: 'room_error',
+            code: 'ROOM_NOT_FOUND',
+            message: 'Cannot update character: room does not exist',
+        });
+        return;
+    }
+    if (!room.members.has(message.peerId)) {
+        send(socket, {
+            type: 'room_error',
+            code: 'NOT_IN_ROOM',
+            message: 'Cannot update character while outside this room',
+        });
+        return;
+    }
+    broadcastToRoom(room, {
+        type: 'lobby_character_select',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        characterId: message.characterId,
     });
 }
 function removePeerFromCurrentRoom(peerId) {
