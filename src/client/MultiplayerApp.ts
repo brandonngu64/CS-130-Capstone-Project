@@ -236,6 +236,7 @@ export class MultiplayerApp {
 
   private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
+  private readonly waitingOpponentNotice: HTMLElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly settingsToggleButton: HTMLButtonElement;
@@ -421,6 +422,7 @@ export class MultiplayerApp {
 
     this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
+    this.waitingOpponentNotice = requireElement<HTMLElement>(this.root, '#waitingOpponentNotice');
     this.leaveButton = requireElement<HTMLButtonElement>(
       this.root,
       '#leaveButton',
@@ -626,6 +628,7 @@ export class MultiplayerApp {
     if (this.game) {
       const renderState = this.game.getRenderState();
       this.renderer.render(renderState, this.peerId);
+      this.updateWaitingForOpponentNotice(renderState.players.length);
       if (this.isInRoom() || this.connecting) {
         this.stockHud.update(renderState.players, this.peerId);
       }
@@ -645,6 +648,7 @@ export class MultiplayerApp {
       this.updateWinnerBanner(renderState);
     } else {
       this.winnerBanner.dataset.visible = 'false';
+      this.waitingOpponentNotice.dataset.visible = 'false';
     }
 
     this.refreshDebugValues();
@@ -1429,6 +1433,9 @@ export class MultiplayerApp {
   this.updateCameraButton();
 
     this.gameHud.dataset.visible = inActiveSession ? 'true' : 'false';
+    if (!inActiveSession) {
+      this.waitingOpponentNotice.dataset.visible = 'false';
+    }
     this.stockHud.setVisible(inActiveSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
 
@@ -1493,6 +1500,9 @@ export class MultiplayerApp {
               <button id="settingsToggleButton" class="action-ghost" type="button">Settings</button>
               <button id="leaveButton" class="action-ghost" type="button">Leave</button>
             </div>
+          </div>
+          <div id="waitingOpponentNotice" class="waiting-opponent-notice" data-visible="false">
+            Waiting for opponent
           </div>
         </section>
 
@@ -1620,5 +1630,10 @@ export class MultiplayerApp {
 
   private truncatePeerId(peerId: string): string {
     return peerId.length > 14 ? `${peerId.slice(0, 12)}…` : peerId;
+  }
+
+  private updateWaitingForOpponentNotice(playerCount: number): void {
+    const shouldShow = (this.isInRoom() || this.connecting) && playerCount === 1;
+    this.waitingOpponentNotice.dataset.visible = shouldShow ? 'true' : 'false';
   }
 }
