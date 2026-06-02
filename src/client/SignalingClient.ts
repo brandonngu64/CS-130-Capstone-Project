@@ -23,6 +23,12 @@ export type ClientToServerMessage =
       fromPeerId: string;
       toPeerId: string;
       signal: SignalMessage;
+    }
+  | {
+      type: 'lobby_ready';
+      roomId: string;
+      peerId: string;
+      ready: boolean;
     };
 
 export type ServerToClientMessage =
@@ -58,6 +64,12 @@ export type ServerToClientMessage =
       type: 'room_error';
       code: string;
       message: string;
+    }
+  | {
+      type: 'lobby_ready';
+      roomId: string;
+      peerId: string;
+      ready: boolean;
     };
 
 export class SignalingClient {

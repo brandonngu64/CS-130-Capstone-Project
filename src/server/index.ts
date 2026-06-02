@@ -36,6 +36,12 @@ type ClientMessage =
       fromPeerId: string;
       toPeerId: string;
       signal: SignalMessage;
+    }
+  | {
+      type: 'lobby_ready';
+      roomId: string;
+      peerId: string;
+      ready: boolean;
     };
 
 type ServerMessage =
@@ -71,6 +77,12 @@ type ServerMessage =
       type: 'room_error';
       code: string;
       message: string;
+    }
+  | {
+      type: 'lobby_ready';
+      roomId: string;
+      peerId: string;
+      ready: boolean;
     };
 
 type Room = {
@@ -172,6 +184,9 @@ websocketServer.on('connection', (socket) => {
         break;
       case 'signal':
         relaySignal(socket, message);
+        break;
+      case 'lobby_ready':
+        relayLobbyReady(socket, message);
         break;
       default:
         break;
@@ -561,6 +576,47 @@ function relaySignal(
     roomId: message.roomId,
     fromPeerId: message.fromPeerId,
     signal: message.signal,
+  });
+}
+
+function relayLobbyReady(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_ready' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update lobby readiness for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room) {
+    send(socket, {
+      type: 'room_error',
+      code: 'ROOM_NOT_FOUND',
+      message: 'Cannot update lobby: room does not exist',
+    });
+    return;
+  }
+
+  if (!room.members.has(message.peerId)) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_IN_ROOM',
+      message: 'Cannot update lobby while outside this room',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_ready',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    ready: message.ready,
   });
 }
 

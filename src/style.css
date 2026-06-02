@@ -247,6 +247,98 @@ h2 {
   display: none;
 }
 
+.lobby-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(
+    180deg,
+    rgba(5, 18, 32, 0.58),
+    rgba(5, 18, 32, 0.8)
+  );
+  backdrop-filter: blur(4px);
+}
+
+.lobby-overlay[data-visible='false'] {
+  display: none;
+}
+
+.lobby-card {
+  width: min(560px, 100%);
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  padding: 24px 22px;
+  border-radius: 18px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  box-shadow: var(--panel-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lobby-players-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lobby-player-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(50, 81, 98, 0.2);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.lobby-player-card[data-ready='true'] {
+  border-color: rgba(11, 127, 120, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(11, 127, 120, 0.2);
+}
+
+.lobby-player-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lobby-player-meta strong {
+  font-size: 0.92rem;
+}
+
+.lobby-player-meta span {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.lobby-player-ready {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: #2f3f4f;
+}
+
+.lobby-player-card[data-ready='true'] .lobby-player-ready {
+  color: var(--primary-strong);
+}
+
+.lobby-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lobby-actions button {
+  min-width: 120px;
+}
+
 .main-menu {
   z-index: 2;
 }
@@ -664,5 +756,30 @@ h2 {
   color: rgba(255, 255, 255, 0.92);
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+
+.round-start-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 26px;
+  border-radius: 18px;
+  background: rgba(9, 16, 28, 0.86);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+  font-size: clamp(2.2rem, 7vw, 4.4rem);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+  z-index: 95;
+}
+
+.round-start-banner[data-visible='false'] {
+  display: none;
 }
 
