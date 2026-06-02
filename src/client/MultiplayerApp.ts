@@ -763,8 +763,11 @@ export class MultiplayerApp {
       if (response.type === 'room_error') {
         throw new Error(response.message);
       }
+      if (response.type !== 'room_hosted') {
+        throw new Error('Unexpected signaling response while hosting room');
+      }
 
-      this.setRoomState(roomId, this.peerId, [this.peerId]);
+      this.setRoomState(roomId, this.peerId, response.members);
       this.recoveryState = {
         mode: 'host',
         mapId: this.selectedMapId,
@@ -1232,8 +1235,11 @@ export class MultiplayerApp {
         if (response.type === 'room_error') {
           throw new Error(response.message);
         }
+        if (response.type !== 'room_hosted') {
+          throw new Error('Unexpected signaling response while recovering host room');
+        }
 
-        this.setRoomState(recoveryState.roomId, this.peerId, [this.peerId]);
+        this.setRoomState(recoveryState.roomId, this.peerId, response.members);
         this.recoveryState = {
           ...recoveryState,
           hostPeerId: this.peerId,
