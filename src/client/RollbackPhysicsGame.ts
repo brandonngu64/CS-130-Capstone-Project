@@ -436,6 +436,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
 
       if (record.health <= 0) {
+        if (!this.hasOpponentInMatch()) {
+          this.recoverSoloPlayer(record);
+          continue;
+        }
         record.body.setLinvel({ x: 0, y: 0 }, true);
         record.body.sleep();
         this.matchState.startRespawn(id);
@@ -888,6 +892,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
+      if (!this.hasOpponentInMatch()) {
+        this.recoverSoloPlayer(record);
+        continue;
+      }
+
       record.body.setLinvel({ x: 0, y: 0 }, true);
       record.body.sleep();
       this.matchState.startRespawn(id);
@@ -1141,6 +1150,33 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   private colorForPlayer(playerId: string): number {
     return PLAYER_COLOR_PALETTE[this.hashString(playerId) % PLAYER_COLOR_PALETTE.length] ?? PLAYER_COLOR_PALETTE[0];
+  }
+
+  private hasOpponentInMatch(): boolean {
+    let activePlayers = 0;
+    for (const [id] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+      activePlayers += 1;
+      if (activePlayers >= 2) {
+        return true;
+      }
+    }
+    // If there is only one active player, it must be the local solo player
+    // who should not lose stocks while waiting for opponents.
+    return false;
+  }
+
+  private recoverSoloPlayer(record: PlayerCharacter): void {
+    const spawnPoint = this.spawnPointForPlayer(record.id);
+    record.health = record.maxHealth;
+    record.body.setTranslation(
+      { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+      true,
+    );
+    record.body.setLinvel({ x: 0, y: 0 }, true);
+    record.body.wakeUp();
   }
 
   private hashString(value: string): number {
