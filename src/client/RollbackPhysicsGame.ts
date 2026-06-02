@@ -21,6 +21,7 @@ import {
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
+  TICK_RATE,
 } from './constants';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
@@ -81,6 +82,7 @@ export interface RenderState {
   items: ItemRenderState[];
   bullets: BulletRenderState[];
   winnerId: string | null;
+  roundStartCountdownLabel: string | null;
 }
 
 type StepPlayerState = {
@@ -107,6 +109,7 @@ type ItemSlotState = {
 const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
+const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly map: TiledMapDefinition;
@@ -122,6 +125,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly itemSlots: ItemSlotState[] = [];
   private nextBulletId = 1;
   private tickCount = 0;
+  private roundStartCountdownTicks = 0;
+  private previousConnectedPlayerCount = 0;
 
   constructor(map: TiledMapDefinition) {
     this.map = map;
@@ -170,7 +175,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (const record of records) {
       byteLength += 2 + record.idBytes.length + 16 + 13 + matchBytes;
     }
-    byteLength += 4 + 1 + bulletList.length * 11 + 1 + this.itemSlots.length * 9 + 1;
+    byteLength += 4 + 2 + 1 + bulletList.length * 11 + 1 + this.itemSlots.length * 9 + 1;
 
     const buffer = new ArrayBuffer(byteLength);
     const view = new DataView(buffer);
@@ -206,6 +211,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     view.setUint32(offset, this.tickCount, true);
     offset += 4;
+    view.setUint8(offset, this.roundStartCountdownTicks & 0xff);
+    offset += 1;
+    view.setUint8(offset, this.previousConnectedPlayerCount & 0xff);
+    offset += 1;
 
     view.setUint8(offset, bulletList.length);
     offset += 1;
@@ -305,6 +314,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.tickCount = view.getUint32(offset, true);
     offset += 4;
+    this.roundStartCountdownTicks = view.getUint8(offset);
+    offset += 1;
+    this.previousConnectedPlayerCount = view.getUint8(offset);
+    offset += 1;
 
     for (const [id, state] of incoming) {
       const record = this.players.get(id);
@@ -382,6 +395,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
+    this.handleRoundStartIfNeeded();
+
+    if (this.roundStartCountdownTicks > 0) {
+      this.roundStartCountdownTicks -= 1;
+      if (this.roundStartCountdownTicks === 0) {
+        this.wakeActivePlayers();
+      }
+      return;
+    }
+
     const respawnedIds = this.matchState.advanceTimers();
     this.respawnPlayers(respawnedIds);
     this.tickDashCooldowns();
@@ -527,6 +550,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       items,
       bullets,
       winnerId,
+      roundStartCountdownLabel: this.getRoundStartCountdownLabel(),
     };
   }
 
@@ -541,6 +565,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.bullets.clear();
     this.nextBulletId = 1;
     this.tickCount = 0;
+    this.roundStartCountdownTicks = 0;
+    this.previousConnectedPlayerCount = 0;
     this.matchState.clear();
     this.initializeItemSlots();
   }
@@ -1150,6 +1176,66 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   private colorForPlayer(playerId: string): number {
     return PLAYER_COLOR_PALETTE[this.hashString(playerId) % PLAYER_COLOR_PALETTE.length] ?? PLAYER_COLOR_PALETTE[0];
+  }
+
+  private handleRoundStartIfNeeded(): void {
+    const connectedPlayerCount = this.players.size;
+    if (
+      this.roundStartCountdownTicks === 0 &&
+      this.previousConnectedPlayerCount < 2 &&
+      connectedPlayerCount >= 2
+    ) {
+      this.startRoundStartCountdown();
+    }
+    this.previousConnectedPlayerCount = connectedPlayerCount;
+  }
+
+  private startRoundStartCountdown(): void {
+    this.roundStartCountdownTicks = ROUND_START_COUNTDOWN_TOTAL_TICKS;
+    this.bullets.clear();
+
+    for (const [id, record] of this.players) {
+      if (this.matchState.getRenderInfo(id).eliminated) {
+        continue;
+      }
+      this.matchState.resetRespawnState(id);
+      const spawnPoint = this.spawnPointForPlayer(id);
+      record.activeAttack = null;
+      record.health = record.maxHealth;
+      record.body.setTranslation(
+        { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+        true,
+      );
+      record.body.setLinvel({ x: 0, y: 0 }, true);
+      record.body.sleep();
+    }
+  }
+
+  private wakeActivePlayers(): void {
+    for (const [id, record] of this.players) {
+      if (this.matchState.getRenderInfo(id).eliminated) {
+        continue;
+      }
+      record.body.wakeUp();
+    }
+  }
+
+  private getRoundStartCountdownLabel(): string | null {
+    if (this.roundStartCountdownTicks <= 0) {
+      return null;
+    }
+
+    const oneSecond = TICK_RATE;
+    if (this.roundStartCountdownTicks > oneSecond * 3) {
+      return '3';
+    }
+    if (this.roundStartCountdownTicks > oneSecond * 2) {
+      return '2';
+    }
+    if (this.roundStartCountdownTicks > oneSecond) {
+      return '1';
+    }
+    return 'GO!';
   }
 
   private hasOpponentInMatch(): boolean {

@@ -244,6 +244,7 @@ export class MultiplayerApp {
   private readonly winnerBanner: HTMLElement;
   private readonly winnerBannerTitle: HTMLElement;
   private readonly winnerBannerSubtitle: HTMLElement;
+  private readonly roundStartBanner: HTMLElement;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -448,6 +449,11 @@ export class MultiplayerApp {
     this.winnerBanner.appendChild(this.winnerBannerSubtitle);
     this.viewport.appendChild(this.winnerBanner);
 
+    this.roundStartBanner = document.createElement('div');
+    this.roundStartBanner.className = 'round-start-banner';
+    this.roundStartBanner.dataset.visible = 'false';
+    this.viewport.appendChild(this.roundStartBanner);
+
     this.tickValue = requireElement<HTMLElement>(this.root, '#tickValue');
     this.confirmedTickValue = requireElement<HTMLElement>(
       this.root,
@@ -646,9 +652,11 @@ export class MultiplayerApp {
       }
 
       this.updateWinnerBanner(renderState);
+      this.updateRoundStartBanner(renderState.roundStartCountdownLabel);
     } else {
       this.winnerBanner.dataset.visible = 'false';
       this.waitingOpponentNotice.dataset.visible = 'false';
+      this.roundStartBanner.dataset.visible = 'false';
     }
 
     this.refreshDebugValues();
@@ -1626,6 +1634,16 @@ export class MultiplayerApp {
       : `${this.truncatePeerId(winnerId)} wins the match.`;
     this.winnerBanner.style.setProperty('--winner-color', colorHex);
     this.winnerBanner.dataset.visible = 'true';
+  }
+
+  private updateRoundStartBanner(label: string | null): void {
+    if (label === null) {
+      this.roundStartBanner.dataset.visible = 'false';
+      return;
+    }
+
+    this.roundStartBanner.textContent = label;
+    this.roundStartBanner.dataset.visible = 'true';
   }
 
   private truncatePeerId(peerId: string): string {
