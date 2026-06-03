@@ -39,7 +39,7 @@ import {
   ItemKind,
   WEAPON_DEFINITIONS,
 } from './items';
-import type { WeaponDefinition, WorldItem } from './items';
+import type { WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
 export interface AttackRenderState {
