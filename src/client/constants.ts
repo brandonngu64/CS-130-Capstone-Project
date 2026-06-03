@@ -40,3 +40,27 @@ export const PLAYER_COLOR_PALETTE = [
 export const DEFAULT_STOCKS = 3;
 export const RESPAWN_DELAY_TICKS = 120;
 export const RESPAWN_FLASH_TICKS = TICK_RATE * 5;
+
+export const CHARACTER_IDS = ['eggert', 'nachenburg', 'sahai', 'smallberg'] as const;
+export type CharacterId = (typeof CHARACTER_IDS)[number];
+export const DEFAULT_CHARACTER_ID: CharacterId = 'eggert';
+
+export const CHARACTER_DISPLAY_NAMES: Record<CharacterId, string> = {
+  eggert: 'Eggert',
+  nachenburg: 'Nachenburg',
+  sahai: 'Sahai',
+  smallberg: 'Smallberg',
+};
+
+export function isCharacterId(value: string): value is CharacterId {
+  return (CHARACTER_IDS as readonly string[]).includes(value);
+}
+
+export function characterIdToIndex(characterId: CharacterId): number {
+  return CHARACTER_IDS.indexOf(characterId);
+}
+
+export function characterIdFromIndex(index: number): CharacterId {
+  const normalized = ((index % CHARACTER_IDS.length) + CHARACTER_IDS.length) % CHARACTER_IDS.length;
+  return CHARACTER_IDS[normalized];
+}

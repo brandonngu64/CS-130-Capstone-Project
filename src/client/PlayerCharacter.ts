@@ -1,5 +1,7 @@
 import type { RigidBody } from '@dimforge/rapier2d-compat';
 import { AttackKind } from './attacks';
+import type { CharacterId } from './constants';
+import { DEFAULT_CHARACTER_ID } from './constants';
 import { ItemKind } from './items';
 import { PLAYER_MAX_HEALTH } from './constants';
 
@@ -13,6 +15,7 @@ export class PlayerCharacter {
   public readonly body: RigidBody;
   public readonly color: number;
   public readonly maxHealth: number;
+  public characterId: CharacterId;
   public health: number;
   public facing: number;
   public equippedWeapon: AttackKind;
@@ -28,11 +31,13 @@ export class PlayerCharacter {
     body: RigidBody,
     color: number,
     maxHealth = PLAYER_MAX_HEALTH,
+    characterId: CharacterId = DEFAULT_CHARACTER_ID,
   ) {
     this.id = id;
     this.body = body;
     this.color = color;
     this.maxHealth = maxHealth;
+    this.characterId = characterId;
     this.health = maxHealth;
     this.facing = 1;
     this.equippedWeapon = AttackKind.DefaultPunch;

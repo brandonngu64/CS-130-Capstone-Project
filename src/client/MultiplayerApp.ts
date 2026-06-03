@@ -10,7 +10,15 @@ import {
   type SignalMessage,
   type TickResult,
 } from 'rollback-netcode';
-import { MAX_PLAYERS, TICK_RATE } from './constants';
+import {
+  CHARACTER_DISPLAY_NAMES,
+  CHARACTER_IDS,
+  MAX_PLAYERS,
+  TICK_RATE,
+  type CharacterId,
+  isCharacterId,
+} from './constants';
+import { defaultCharacterForPlayer, getCharacterPreviewUrl } from './CharacterSprites';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
 import { HealthBarOverlay } from './HealthBarOverlay';
@@ -239,6 +247,7 @@ export class MultiplayerApp {
   private readonly startGameButton: HTMLButtonElement;
   private readonly lobbyOverlay: HTMLElement;
   private readonly lobbyPlayersList: HTMLElement;
+  private readonly lobbyCharacterGrid: HTMLElement;
   private readonly lobbyReadyButton: HTMLButtonElement;
   private readonly lobbyLeaveButton: HTMLButtonElement;
   private readonly lobbyCopyButton: HTMLButtonElement;
@@ -271,6 +280,7 @@ export class MultiplayerApp {
   private hostPeerId: string | null = null;
   private readonly lobbyMembers = new Set<string>();
   private readonly lobbyReadyByPeer = new Map<string, boolean>();
+  private readonly lobbyCharacterByPeer = new Map<string, CharacterId>();
   private currentShareUrl = '';
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
@@ -435,6 +445,7 @@ export class MultiplayerApp {
     this.startGameButton = requireElement<HTMLButtonElement>(this.root, '#startGameButton');
     this.lobbyOverlay = requireElement<HTMLElement>(this.root, '#lobbyOverlay');
     this.lobbyPlayersList = requireElement<HTMLElement>(this.root, '#lobbyPlayersList');
+    this.lobbyCharacterGrid = requireElement<HTMLElement>(this.root, '#lobbyCharacterGrid');
     this.lobbyReadyButton = requireElement<HTMLButtonElement>(this.root, '#lobbyReadyButton');
     this.lobbyLeaveButton = requireElement<HTMLButtonElement>(this.root, '#lobbyLeaveButton');
     this.lobbyCopyButton = requireElement<HTMLButtonElement>(this.root, '#lobbyCopyButton');
@@ -558,6 +569,18 @@ export class MultiplayerApp {
     });
     this.lobbyCopyButton.addEventListener('click', () => {
       void this.copyShareLink();
+    });
+    this.lobbyCharacterGrid.addEventListener('click', (event) => {
+      const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
+        '[data-character-id]',
+      );
+      if (!target || target.disabled) {
+        return;
+      }
+      const characterId = target.dataset.characterId;
+      if (characterId && isCharacterId(characterId)) {
+        this.selectLocalCharacter(characterId);
+      }
     });
 
     window.addEventListener('keydown', this.onKeyDown, { passive: false });
@@ -896,6 +919,7 @@ export class MultiplayerApp {
     this.currentShareUrl = '';
     this.lobbyMembers.clear();
     this.lobbyReadyByPeer.clear();
+    this.lobbyCharacterByPeer.clear();
     this.mainMenu.setShareUrl('');
     this.mainMenu.setRoomId('');
     this.mainMenu.setHostPeerId('');
@@ -1023,6 +1047,7 @@ export class MultiplayerApp {
       this.setStatus(`Player joined: ${player.id}`);
       this.lobbyMembers.add(player.id);
       this.lobbyReadyByPeer.set(player.id, false);
+      this.assignDefaultCharacterIfMissing(player.id);
       this.updateUiState();
     });
 
@@ -1030,6 +1055,7 @@ export class MultiplayerApp {
       this.setStatus(`Player left cleanly: ${player.id}`);
       this.lobbyMembers.delete(player.id);
       this.lobbyReadyByPeer.delete(player.id);
+      this.lobbyCharacterByPeer.delete(player.id);
       this.updateUiState();
     });
 
@@ -1037,10 +1063,12 @@ export class MultiplayerApp {
       this.setStatus(`Player disconnected abruptly and was removed: ${playerId}`);
       this.lobbyMembers.delete(playerId);
       this.lobbyReadyByPeer.delete(playerId);
+      this.lobbyCharacterByPeer.delete(playerId);
       this.updateUiState();
     });
 
     this.session.on('gameStart', () => {
+      this.applyLobbyCharactersToGame();
       this.setStatus('Game started. Rollback simulation is active.');
     });
 
@@ -1144,6 +1172,7 @@ export class MultiplayerApp {
       this.hostPeerId = null;
       this.lobbyMembers.clear();
       this.lobbyReadyByPeer.clear();
+      this.lobbyCharacterByPeer.clear();
     } finally {
       this.isCleaningUp = false;
     }
@@ -1329,6 +1358,8 @@ export class MultiplayerApp {
         this.setStatus(`Peer joined room: ${message.peerId}`);
         this.lobbyMembers.add(message.peerId);
         this.lobbyReadyByPeer.set(message.peerId, false);
+        this.assignDefaultCharacterIfMissing(message.peerId);
+        this.broadcastLocalCharacterSelection();
         this.updateUiState();
         break;
 
@@ -1336,6 +1367,7 @@ export class MultiplayerApp {
         this.setStatus(`Peer left room: ${message.peerId}`);
         this.lobbyMembers.delete(message.peerId);
         this.lobbyReadyByPeer.delete(message.peerId);
+        this.lobbyCharacterByPeer.delete(message.peerId);
         this.updateUiState();
         break;
 
@@ -1348,7 +1380,9 @@ export class MultiplayerApp {
           if (!this.lobbyReadyByPeer.has(member)) {
             this.lobbyReadyByPeer.set(member, false);
           }
+          this.assignDefaultCharacterIfMissing(member);
         }
+        this.ensureLocalCharacterSelection();
         this.updateUiState();
         break;
 
@@ -1358,12 +1392,22 @@ export class MultiplayerApp {
           if (!this.lobbyReadyByPeer.has(member)) {
             this.lobbyReadyByPeer.set(member, false);
           }
+          this.assignDefaultCharacterIfMissing(member);
         }
+        this.ensureLocalCharacterSelection();
         this.updateUiState();
         break;
 
       case 'lobby_ready':
         this.lobbyReadyByPeer.set(message.peerId, message.ready);
+        this.updateUiState();
+        break;
+
+      case 'lobby_character_select':
+        if (isCharacterId(message.characterId)) {
+          this.lobbyCharacterByPeer.set(message.peerId, message.characterId);
+          this.game?.setCharacterSelection(message.peerId, message.characterId);
+        }
         this.updateUiState();
         break;
 
@@ -1421,6 +1465,7 @@ export class MultiplayerApp {
     }
     this.lobbyMembers.add(this.peerId);
     this.seedLobbyMembers();
+    this.ensureLocalCharacterSelection();
 
     this.publishShareUrl(roomId, hostPeerId);
   }
@@ -1527,6 +1572,7 @@ export class MultiplayerApp {
     this.stockHud.setVisible(inPlayingSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
     this.lobbyOverlay.dataset.visible = inLobby ? 'true' : 'false';
+    this.renderCharacterPicker();
     this.renderLobbyPlayers();
     this.lobbyRoomIdValue.textContent = this.roomId ?? '-';
     this.lobbyShareUrlValue.value = this.currentShareUrl;
@@ -1598,7 +1644,10 @@ export class MultiplayerApp {
             <div class="lobby-card">
               <p class="overlay-eyebrow">Lobby</p>
               <h2 class="overlay-title--small">Waiting Room</h2>
-              <p class="overlay-subtitle">Character select will plug in here next.</p>
+              <div class="lobby-character-select">
+                <span class="lobby-section-label">Choose Your Character</span>
+                <div id="lobbyCharacterGrid" class="lobby-character-grid"></div>
+              </div>
               <label>
                 <span>Lobby ID</span>
                 <output id="lobbyRoomIdValue">-</output>
@@ -1771,6 +1820,7 @@ export class MultiplayerApp {
     if (!this.canHostStartGame() || !this.session || !this.roomId) {
       return;
     }
+    this.applyLobbyCharactersToGame();
     this.session.start();
     this.setStatus(`Match started in room ${this.roomId}.`);
     this.updateUiState();
@@ -1857,17 +1907,121 @@ export class MultiplayerApp {
         const isHost = playerId === this.hostPeerId;
         const isLocal = playerId === this.peerId;
         const role = isHost ? 'Host' : 'Player';
+        const characterId =
+          this.lobbyCharacterByPeer.get(playerId) ??
+          defaultCharacterForPlayer(playerId, ids);
+        const characterName = CHARACTER_DISPLAY_NAMES[characterId];
         return `
           <article class="lobby-player-card" data-ready="${ready ? 'true' : 'false'}">
             <div class="lobby-player-meta">
               <strong>${this.truncatePeerId(playerId)}${isLocal ? ' (You)' : ''}</strong>
-              <span>${role}</span>
+              <span>${role} · ${characterName}</span>
             </div>
             <span class="lobby-player-ready">${ready ? 'Ready' : 'Not Ready'}</span>
           </article>
         `;
       })
       .join('');
+  }
+
+  private renderCharacterPicker(): void {
+    if (!this.isInRoom() || this.session?.state !== SessionState.Lobby) {
+      this.lobbyCharacterGrid.innerHTML = '';
+      return;
+    }
+
+    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
+    const localSelection = this.getLocalCharacterSelection(sortedMembers);
+
+    this.lobbyCharacterGrid.innerHTML = CHARACTER_IDS.map((characterId) => {
+      const isSelected = localSelection === characterId;
+      const previewUrl = getCharacterPreviewUrl(characterId);
+
+      return `
+        <button
+          type="button"
+          class="lobby-character-option${isSelected ? ' lobby-character-option--selected' : ''}"
+          data-character-id="${characterId}"
+          aria-pressed="${isSelected ? 'true' : 'false'}"
+        >
+          <img src="${previewUrl}" alt="${CHARACTER_DISPLAY_NAMES[characterId]} idle sprite" />
+          <span class="lobby-character-name">${CHARACTER_DISPLAY_NAMES[characterId]}</span>
+        </button>
+      `;
+    }).join('');
+  }
+
+  private getLocalCharacterSelection(sortedMembers: string[]): CharacterId {
+    return (
+      this.lobbyCharacterByPeer.get(this.peerId) ??
+      defaultCharacterForPlayer(this.peerId, sortedMembers)
+    );
+  }
+
+  private assignDefaultCharacterIfMissing(playerId: string): void {
+    if (this.lobbyCharacterByPeer.has(playerId)) {
+      return;
+    }
+
+    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
+    const defaultCharacter = defaultCharacterForPlayer(playerId, sortedMembers);
+    this.lobbyCharacterByPeer.set(playerId, defaultCharacter);
+    this.game?.setCharacterSelection(playerId, defaultCharacter);
+  }
+
+  private ensureLocalCharacterSelection(): void {
+    if (!this.isInRoom()) {
+      return;
+    }
+
+    if (!this.lobbyCharacterByPeer.has(this.peerId)) {
+      this.assignDefaultCharacterIfMissing(this.peerId);
+      this.broadcastLocalCharacterSelection();
+    }
+  }
+
+  private selectLocalCharacter(characterId: CharacterId): void {
+    if (!this.roomId || !this.signaling || !this.isInRoom() || this.session?.state !== SessionState.Lobby) {
+      return;
+    }
+
+    this.lobbyCharacterByPeer.set(this.peerId, characterId);
+    this.game?.setCharacterSelection(this.peerId, characterId);
+    this.broadcastLocalCharacterSelection();
+    this.updateUiState();
+  }
+
+  private broadcastLocalCharacterSelection(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
+
+    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
+    const characterId = this.getLocalCharacterSelection(sortedMembers);
+    this.lobbyCharacterByPeer.set(this.peerId, characterId);
+    this.game?.setCharacterSelection(this.peerId, characterId);
+
+    this.signaling.send({
+      type: 'lobby_character_select',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      characterId,
+    });
+  }
+
+  private applyLobbyCharactersToGame(): void {
+    if (!this.game) {
+      return;
+    }
+
+    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
+    for (const playerId of sortedMembers) {
+      if (!this.lobbyCharacterByPeer.has(playerId)) {
+        this.assignDefaultCharacterIfMissing(playerId);
+      }
+    }
+
+    this.game.applyCharacterSelections(this.lobbyCharacterByPeer);
   }
 
 }
