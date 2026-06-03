@@ -1,6 +1,7 @@
 export enum ItemKind {
   Gun = 1,
   EthernetWhip = 2,
+  Finals = 3,
 }
 
 export type WeaponKind = 'projectile' | 'melee';
@@ -19,6 +20,9 @@ export interface WeaponDefinition {
   windupTicks?: number;
   lashTicks?: number;
   recoilTicks?: number;
+  // projectile only
+  projectileSpeed?: number;
+  projectileLifetimeTicks?: number;
 }
 
 export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
@@ -37,7 +41,16 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
       return (this.windupTicks ?? 0) + (this.lashTicks ?? 0) + (this.recoilTicks ?? 0);
     },
   },
+  [ItemKind.Finals]: {
+    kind: 'projectile',
+    damage: 4,
+    cooldownTicks: 6,
+    projectileSpeed: 32,
+    projectileLifetimeTicks: 90,
+  },
 };
+
+export const FINALS_COLOR = 0xf4a261;
 
 export type WhipPhase = 'windup' | 'lash' | 'recoil';
 
