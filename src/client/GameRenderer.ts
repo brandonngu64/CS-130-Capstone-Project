@@ -123,7 +123,7 @@ export class GameRenderer {
           this.scene.add(laser);
           this.laserSightMeshes.set(player.id, laser);
         }
-        laser.position.set(player.x, player.y + 0.2, 0.75);
+        laser.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.30);
         laser.rotation.z = player.facing === -1 ? Math.PI : 0;
         laser.visible = player.heldItem === ItemKind.PenCrossbow;
       } else {

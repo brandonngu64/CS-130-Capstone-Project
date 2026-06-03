@@ -120,6 +120,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly players = new Map<string, PlayerCharacter>();
   private readonly previousInputFlags = new Map<string, number>();
   private readonly staticColliderHandles = new Set<number>();
+  private readonly platformColliderHandles = new Set<number>();
   private readonly playerColliderHandles = new Map<number, string>();
   private readonly matchState = new GameStateManager();
   private readonly textEncoder = new TextEncoder();
@@ -623,6 +624,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const collider = this.world.createCollider(colliderDesc, body);
     this.staticColliderHandles.add(collider.handle);
+    if (platform) {
+      this.platformColliderHandles.add(collider.handle);
+    }
   }
 
   private syncPlayers(sortedIds: string[]): void {
@@ -803,6 +807,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         ray,
         Math.abs(dx) + BULLET_HALF_WIDTH,
         false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (collider) => !this.platformColliderHandles.has(collider.handle),
       );
 
       if (hit) {
@@ -1079,13 +1088,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.nextBulletId = (bulletId % BULLET_ID_MAX) + 1;
 
-    const position = owner.body.translation();
-    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05);
+    const BULLET_SPAWN_VERTICAL_OFFSET = 0.22;
+    //const BULLET_SPAWN_FORWARD_OFFSET = 0.30;
+
+    const position = owner.body.translation();  
+    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.01);
 
     this.bullets.set(bulletId, {
       id: bulletId,
       x: spawnX,
-      y: position.y,
+      y: position.y + BULLET_SPAWN_VERTICAL_OFFSET,
       vx: owner.facing * weapon.projectileSpeed,
       vy: 0,
       ticksRemaining: BULLET_LIFETIME_TICKS,

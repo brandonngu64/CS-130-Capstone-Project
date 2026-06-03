@@ -53,7 +53,7 @@ export const PenCrossbow: K_Weapon = {
   kind: ItemKind.PenCrossbow,
   damage: 80,
   ammo: 1,
-  fireRate: 10,
+  fireRate: 0.1,
 
   projectileSpeed: 100,
   projectileSprite: projectileSprite.Pencil,
