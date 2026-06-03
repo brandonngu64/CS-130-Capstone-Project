@@ -80,56 +80,10 @@ export function K_getWeaponDefinition(kind: ItemKind): K_Weapon {
   return weapon;
 }
 
-const CROSSBOW_TEXTURE_URL = new URL('../assets/k_weapon_sprites/Crossbow.png', import.meta.url).href;
-const CROSSBOW_PROJECTILE_TEXTURE_URL = new URL('../assets/k_weapon_sprites/fountainPenProj.png', import.meta.url).href;
-
 const DEFAULT_PROJECTILE_WIDTH = 0.35;
 const DEFAULT_PROJECTILE_HEIGHT = 0.14;
 const DEFAULT_ITEM_WIDTH = 0.5;
 const DEFAULT_ITEM_HEIGHT = 0.25;
-const CROSSBOW_WEAPON_WIDTH = 0.7;
-const CROSSBOW_WEAPON_HEIGHT = 0.25;
-const CROSSBOW_PROJECTILE_WIDTH = 0.6;
-const CROSSBOW_PROJECTILE_HEIGHT = 0.16;
-
-function createCrossbowMesh(textureLoader: THREE.TextureLoader): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(CROSSBOW_WEAPON_WIDTH, CROSSBOW_WEAPON_HEIGHT);
-  const texture = textureLoader.load(CROSSBOW_TEXTURE_URL);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.renderOrder = 1;
-  return mesh;
-}
-
-function createDroppedCrossbowMesh(textureLoader: THREE.TextureLoader): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(DEFAULT_ITEM_WIDTH, DEFAULT_ITEM_HEIGHT);
-  const texture = textureLoader.load(CROSSBOW_TEXTURE_URL);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: true,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.renderOrder = 1;
-  return mesh;
-}
-
-function createCrossbowProjectileMesh(textureLoader: THREE.TextureLoader): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(CROSSBOW_PROJECTILE_WIDTH, CROSSBOW_PROJECTILE_HEIGHT);
-  const texture = textureLoader.load(CROSSBOW_PROJECTILE_TEXTURE_URL);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.renderOrder = 1;
-  return mesh;
-}
 
 function createGenericItemMesh(): THREE.Mesh {
   const geometry = new THREE.BoxGeometry(DEFAULT_ITEM_WIDTH, DEFAULT_ITEM_HEIGHT, 0.25);
@@ -168,25 +122,38 @@ function createGenericGunMesh(): THREE.Mesh {
 }
 
 export function K_createWeaponMesh(kind: ItemKind, textureLoader: THREE.TextureLoader): THREE.Mesh {
-  if (kind === ItemKind.PenCrossbow) {
-    return createCrossbowMesh(textureLoader);
-  }
+  // Refactor note: weapon-specific visual meshes were removed. All weapons currently reuse the
+  // legacy generic gun mesh path until a dedicated visual is intentionally added back.
+  void kind;
+  void textureLoader;
   return createGenericGunMesh();
 }
 
 export function K_createDroppedItemMesh(kind: ItemKind, textureLoader: THREE.TextureLoader): THREE.Mesh {
-  if (kind === ItemKind.PenCrossbow) {
-    return createDroppedCrossbowMesh(textureLoader);
-  }
+  // Refactor note: dropped crossbow mesh override removed so dropped weapons share old generic visuals.
+  void kind;
+  void textureLoader;
   return createGenericItemMesh();
 }
 
 export function K_createProjectileMesh(kind: ItemKind, textureLoader: THREE.TextureLoader): THREE.Mesh {
-  if (kind === ItemKind.PenCrossbow) {
-    return createCrossbowProjectileMesh(textureLoader);
-  }
+  // Refactor note: crossbow projectile texture mesh removed; projectiles now use the existing generic mesh.
+  // If a future weapon needs a custom projectile visual, add it here with a dedicated helper function.
+  void kind;
+  void textureLoader;
   return createGenericProjectileMesh();
 }
+
+/*
+ * Guide: adding a new weapon with minimal renderer changes
+ * 1) Add a new entry in `K_Weapon` definitions (`WEAPON_DEFINITIONS`) with gameplay values only.
+ * 2) Reuse generic meshes by default through:
+ *    - `K_createWeaponMesh`
+ *    - `K_createDroppedItemMesh`
+ *    - `K_createProjectileMesh`
+ * 3) Only add custom mesh helpers when required for readability/game feel, and keep fallbacks to generic meshes.
+ * 4) Keep all exported `K_` function names/signatures unchanged to avoid integration interference.
+ */
 
 export function K_renderLaserSight(x: number, y: number, facing: number, length = 100): THREE.Line {
   const points = [
