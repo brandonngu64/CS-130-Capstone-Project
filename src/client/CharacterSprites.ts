@@ -4,9 +4,17 @@ import {
   DEFAULT_CHARACTER_ID,
   isCharacterId,
 } from './constants';
-import type { ItemKind } from './items';
+import { ItemKind, getWhipPhase } from './items';
+import type { WeaponDefinition } from './items';
 
 const SPRITE_MODULES = import.meta.glob('../assets/characters/**/*.png', {
+  eager: true,
+  import: 'default',
+}) as Record<string, string>;
+
+// Weapon sprites live at assets/weapons/{weaponName}/{frame}.png
+// and are shared across all characters.
+const WEAPON_SPRITE_MODULES = import.meta.glob('../assets/weapons/**/*.png', {
   eager: true,
   import: 'default',
 }) as Record<string, string>;
@@ -14,8 +22,18 @@ const SPRITE_MODULES = import.meta.glob('../assets/characters/**/*.png', {
 const WALK_ANIMATION_FRAME_TICKS = 8;
 const WALK_VELOCITY_THRESHOLD = 0.35;
 
+// Maps ItemKind to the weapon's sprite folder name.
+// Add new holdable weapons here.
+export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
+  [ItemKind.EthernetWhip]: 'ethernet_whip',
+};
+
 function spritePath(characterId: CharacterId, frame: string): string {
   return `../assets/characters/${characterId}/${frame}.png`;
+}
+
+function weaponSpritePath(weaponName: string, frame: string): string {
+  return `../assets/weapons/${weaponName}/${frame}.png`;
 }
 
 export function getCharacterSpriteUrl(characterId: CharacterId, frame: string): string {
@@ -26,10 +44,22 @@ export function getCharacterSpriteUrl(characterId: CharacterId, frame: string): 
   return url;
 }
 
+export function getWeaponSpriteUrl(weaponName: string, frame: string): string {
+  const url = WEAPON_SPRITE_MODULES[weaponSpritePath(weaponName, frame)];
+  if (!url) {
+    throw new Error(`Missing weapon sprite: ${weaponName}/${frame}.png`);
+  }
+  return url;
+}
+
 export function getCharacterPreviewUrl(characterId: CharacterId): string {
   return getCharacterSpriteUrl(characterId, 'idle_r');
 }
 
+/**
+ * Resolves the character body frame — the whip is rendered as a separate
+ * mesh so the body frame does not change during a whip attack.
+ */
 export function resolveCharacterFrame(
   facing: number,
   heldItem: ItemKind | null,
@@ -59,6 +89,30 @@ export function resolveCharacterFrameKey(
 ): string {
   const frame = resolveCharacterFrame(facing, heldItem, vx, animTick);
   return `${characterId}:${frame}`;
+}
+
+/**
+ * Resolves the whip sprite frame name based on the current attack phase.
+ * Returns the idle frame when no attack is active (ticksRemaining === 0).
+ *
+ * Frame files expected at:
+ *   assets/weapons/ethernet_whip/idle_r.png
+ *   assets/weapons/ethernet_whip/windup_r.png
+ *   assets/weapons/ethernet_whip/lash_r.png
+ *   assets/weapons/ethernet_whip/recoil_r.png
+ *   (and matching _l variants for left-facing)
+ */
+export function resolveWhipFrame(
+  facing: number,
+  def: WeaponDefinition,
+  ticksRemaining: number,
+): string {
+  const direction = facing < 0 ? 'l' : 'r';
+  if (ticksRemaining > 0) {
+    const phase = getWhipPhase(def, ticksRemaining);
+    return `${phase}_${direction}`; // e.g. windup_r, lash_l
+  }
+  return `idle_${direction}`;
 }
 
 export function normalizeCharacterId(value: string | null | undefined): CharacterId {

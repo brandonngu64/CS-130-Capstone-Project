@@ -1,11 +1,14 @@
 import * as THREE from 'three';
 import {
   getCharacterSpriteUrl,
+  getWeaponSpriteUrl,
   resolveCharacterFrame,
   resolveCharacterFrameKey,
+  resolveWhipFrame,
+  WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
 import { RESPAWN_FLASH_TICKS } from './constants';
-import { GUN_COLOR, ItemKind } from './items';
+import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS, WHIP_COLOR } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
@@ -28,6 +31,11 @@ type PlayerSpriteMesh = {
   lastFrameKey: string;
 };
 
+type WeaponSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+};
+
 // Size of a collectible item sitting on the ground
 const ITEM_GUN_WIDTH  = 0.5;
 const ITEM_GUN_HEIGHT = 0.25;
@@ -37,12 +45,16 @@ const BULLET_W = 0.3;
 const BULLET_H = 0.16;
 const BULLET_D = 0.16;
 
+// How far from the player centre the whip sprite is anchored
+const WHIP_OFFSET_X = 0.5;
+
 export class GameRenderer {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly container: HTMLElement;
   private readonly playerMeshes = new Map<string, PlayerSpriteMesh>();
+  private readonly weaponSpriteMeshes = new Map<string, WeaponSpriteMesh>();
   private readonly mapMeshes: THREE.Mesh[] = [];
   private readonly materialCache = new Map<string, CachedTileMaterial>();
   private readonly spriteTextureCache = new Map<string, CachedSpriteTexture>();
@@ -131,7 +143,6 @@ export class GameRenderer {
       playerSprite.mesh.scale.set(displayWidth, displayHeight, 1);
 
       playerSprite.mesh.visible = true;
-
       playerSprite.mesh.position.set(player.x, player.y, 0.35);
 
       const material = playerSprite.mesh.material as THREE.MeshBasicMaterial;
@@ -156,6 +167,80 @@ export class GameRenderer {
         this.scene.remove(playerSprite.mesh);
         playerSprite.mesh.geometry.dispose();
         this.playerMeshes.delete(id);
+      }
+    }
+
+    // --- Weapon sprites (whip etc.) ---
+    for (const player of state.players) {
+      const weaponName = player.heldItem !== null
+        ? WEAPON_SPRITE_NAMES[player.heldItem]
+        : undefined;
+
+      if (!weaponName) {
+        // Remove stale weapon mesh if player no longer holds a sprite-weapon
+        const stale = this.weaponSpriteMeshes.get(player.id);
+        if (stale) {
+          this.scene.remove(stale.mesh);
+          stale.mesh.geometry.dispose();
+          (stale.mesh.material as THREE.MeshBasicMaterial).dispose();
+          this.weaponSpriteMeshes.delete(player.id);
+        }
+        continue;
+      }
+
+      const def = player.heldItem !== null ? WEAPON_DEFINITIONS[player.heldItem] : undefined;
+      if (!def) continue;
+
+      const ticksRemaining = player.activeWeaponAttack?.ticksRemaining ?? 0;
+      const whipFrame = resolveWhipFrame(player.facing, def, ticksRemaining);
+      const whipFrameKey = `${player.id}:${weaponName}:${whipFrame}`;
+
+      let weaponSprite = this.weaponSpriteMeshes.get(player.id);
+      if (!weaponSprite) {
+        weaponSprite = this.createWeaponSpriteMesh();
+        this.scene.add(weaponSprite.mesh);
+        this.weaponSpriteMeshes.set(player.id, weaponSprite);
+      }
+
+      if (weaponSprite.lastFrameKey !== whipFrameKey) {
+        const cachedTex = this.getWeaponSpriteTexture(weaponName, whipFrame);
+        const prev = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
+        prev.dispose();
+        weaponSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+        weaponSprite.lastFrameKey = whipFrameKey;
+      }
+
+      const cachedTex = this.getWeaponSpriteTexture(weaponName, whipFrame);
+      const aspect = this.resolveSpriteAspectRatio(cachedTex);
+      const displayHeight = player.height;
+      const displayWidth = displayHeight * aspect;
+
+      // Flip horizontally when facing left so the whip points the right way
+      weaponSprite.mesh.scale.set(displayWidth * player.facing, displayHeight, 1);
+      weaponSprite.mesh.position.set(
+        player.x + player.facing * WHIP_OFFSET_X,
+        player.y,
+        0.36, // just in front of the player sprite
+      );
+
+      // Match player opacity during respawn flash
+      const playerMesh = this.playerMeshes.get(player.id);
+      const playerOpacity = playerMesh
+        ? (playerMesh.mesh.material as THREE.MeshBasicMaterial).opacity
+        : 1;
+      const wMat = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
+      wMat.opacity = playerOpacity;
+      wMat.transparent = playerOpacity < 1;
+      wMat.depthWrite = playerOpacity >= 1;
+    }
+
+    // Clean up weapon meshes for players who left
+    for (const [id, weaponSprite] of this.weaponSpriteMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(weaponSprite.mesh);
+        weaponSprite.mesh.geometry.dispose();
+        (weaponSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
+        this.weaponSpriteMeshes.delete(id);
       }
     }
 
@@ -191,7 +276,7 @@ export class GameRenderer {
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
-      // Bob gently up and down so items are easy to spot.
+      // Bob gently up and down so items are easy to spot
       const bob = Math.sin(Date.now() / 400) * 0.08;
       mesh.position.set(item.x, item.y + bob, 0.35);
     }
@@ -273,6 +358,13 @@ export class GameRenderer {
       (playerSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
     }
     this.playerMeshes.clear();
+
+    for (const [, weaponSprite] of this.weaponSpriteMeshes) {
+      this.scene.remove(weaponSprite.mesh);
+      weaponSprite.mesh.geometry.dispose();
+      (weaponSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
+    }
+    this.weaponSpriteMeshes.clear();
 
     this.scene.remove(this.backdropMesh);
     this.backdropMesh.geometry.dispose();
@@ -592,6 +684,20 @@ export class GameRenderer {
     };
   }
 
+  private createWeaponSpriteMesh(): WeaponSpriteMesh {
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      transparent: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+    });
+    return {
+      mesh: new THREE.Mesh(geometry, material),
+      lastFrameKey: '',
+    };
+  }
+
   private createPlayerSpriteMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
     return new THREE.MeshBasicMaterial({
       alphaTest: 0.001,
@@ -615,6 +721,22 @@ export class GameRenderer {
     }
 
     const texture = this.textureLoader.load(getCharacterSpriteUrl(characterId, frame));
+    this.configurePixelTexture(texture);
+
+    const entry: CachedSpriteTexture = {
+      texture,
+      aspectRatio: this.readTextureAspectRatio(texture),
+    };
+    this.spriteTextureCache.set(cacheKey, entry);
+    return entry;
+  }
+
+  private getWeaponSpriteTexture(weaponName: string, frame: string): CachedSpriteTexture {
+    const cacheKey = `weapon:${weaponName}:${frame}`;
+    const cached = this.spriteTextureCache.get(cacheKey);
+    if (cached) return cached;
+
+    const texture = this.textureLoader.load(getWeaponSpriteUrl(weaponName, frame));
     this.configurePixelTexture(texture);
 
     const entry: CachedSpriteTexture = {
@@ -652,13 +774,14 @@ export class GameRenderer {
     return new THREE.Mesh(geometry, material);
   }
 
-  private createItemMesh(_kind: ItemKind): THREE.Mesh {
+  private createItemMesh(kind: ItemKind): THREE.Mesh {
     const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
+    const color = kind === ItemKind.EthernetWhip ? WHIP_COLOR : GUN_COLOR;
     const material = new THREE.MeshStandardMaterial({
-      color: GUN_COLOR,
+      color,
       roughness: 0.3,
       metalness: 0.7,
-      emissive: new THREE.Color(GUN_COLOR),
+      emissive: new THREE.Color(color),
       emissiveIntensity: 0.15,
     });
     return new THREE.Mesh(geometry, material);
