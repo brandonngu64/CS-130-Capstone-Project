@@ -10,7 +10,7 @@ export default defineConfig({
         ws: true,
       },
     },
-    allowedHosts: ['.ngrok-free.app', '.ngrok.app', '.ngrok.io', '.ngrok-free.dev'],
+    allowedHosts: ['.ngrok-free.app', '.ngrok.app', '.ngrok.io', '.ngrok-free.dev', '.compute.amazonaws.com'],
   },
   preview: {
     host: '0.0.0.0',
