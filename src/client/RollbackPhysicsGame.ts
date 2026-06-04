@@ -41,7 +41,7 @@ import {
 import type { WeaponDefinition, WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
-const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.mp3', import.meta.url).href;
+const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).href;
 
 export interface AttackRenderState {
   id: string;
@@ -868,7 +868,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (attackPressed && record.activeAttack === null && record.canPunch()) {
       const definition = getEquippedAttack(record.equippedWeapon);
-      const punchSound = new Audio(PUNCH_SOUND_URL);
+            const punchSound = new Audio(PUNCH_SOUND_URL);
       record.activeAttack = {
         kind: definition.kind,
         ticksRemaining: definition.durationTicks,

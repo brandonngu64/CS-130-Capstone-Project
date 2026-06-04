@@ -67,6 +67,8 @@ const SIGNALING_RECONNECT_MAX_DELAY_MS = 10000;
 const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 
+const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
+
 function requireElement<T extends HTMLElement>(
   parent: ParentNode,
   selector: string,
@@ -261,6 +263,7 @@ export class MultiplayerApp {
   private readonly winnerBannerTitle: HTMLElement;
   private readonly winnerBannerSubtitle: HTMLElement;
   private readonly roundStartBanner: HTMLElement;
+  private readonly gameThemeAudio: HTMLAudioElement;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -324,6 +327,7 @@ export class MultiplayerApp {
   private lastFrameTimeMs = 0;
   private accumulatedTimeMs = 0;
   private connecting = false;
+  private themeStarted = false;
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'KeyC') {
@@ -582,6 +586,11 @@ export class MultiplayerApp {
     this.updateUiState();
     this.refreshDebugValues();
     this.setStatus('Initializing Rapier runtime...');
+
+    // Initialize looping game theme (will play when game starts)
+    this.gameThemeAudio = new Audio(GAME_THEME_URL);
+    this.gameThemeAudio.loop = true;
+    this.gameThemeAudio.volume = 0.5;
   }
 
   async start(): Promise<void> {
@@ -669,6 +678,19 @@ export class MultiplayerApp {
     while (this.accumulatedTimeMs >= this.fixedStepMs) {
       this.tickSimulation();
       this.accumulatedTimeMs -= this.fixedStepMs;
+    }
+
+    // Start theme when game transitions to Playing state
+    const isPlaying = this.session?.state === SessionState.Playing;
+    if (isPlaying && !this.themeStarted) {
+      this.themeStarted = true;
+      void this.gameThemeAudio.play().catch((err) => {
+        console.warn('Game theme could not play:', err);
+      });
+    } else if (!isPlaying && this.themeStarted) {
+      this.themeStarted = false;
+      this.gameThemeAudio.pause();
+      this.gameThemeAudio.currentTime = 0;
     }
 
     if (this.cameraMode === 'free') {
