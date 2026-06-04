@@ -41,6 +41,8 @@ import {
 import type { WeaponDefinition, WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
+const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).href;
+
 export interface AttackRenderState {
   id: string;
   x: number;
@@ -866,10 +868,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (attackPressed && record.activeAttack === null && record.canPunch()) {
       const definition = getEquippedAttack(record.equippedWeapon);
+            const punchSound = new Audio(PUNCH_SOUND_URL);
       record.activeAttack = {
         kind: definition.kind,
         ticksRemaining: definition.durationTicks,
       };
+      punchSound.volume = 0.5;
+      punchSound.currentTime = 0; // rewind so it can replay quickly
+      void punchSound.play().catch((err) => {
+        console.warn('Sound could not play:', err);
+      });
       this.resolvePunchHits(id, definition);
     }
 
