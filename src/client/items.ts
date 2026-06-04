@@ -53,7 +53,7 @@ export const WEAPON_SPRITE_CONFIG: Partial<Record<ItemKind, WeaponSpriteConfig>>
     heldHeightRatio: 0.22,
     heldOffsetX: 0.55,
     heldOffsetY: 0.15,
-    pickupDisplayHeight: 0.84,
+    pickupDisplayHeight: 0.52,
     projectileScaleX: 2.4,
     projectileScaleY: 0.75,
   },
