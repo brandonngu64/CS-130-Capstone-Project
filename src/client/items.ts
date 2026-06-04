@@ -84,7 +84,7 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   },
   [ItemKind.BinaryBeam]: {
     kind: 'projectile',
-    damage: 20,
+    damage: 15,
     cooldownTicks: 28,
     projectileSpeed: 24,
     projectileLifetimeTicks: 72,
