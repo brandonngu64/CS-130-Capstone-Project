@@ -7,11 +7,12 @@ import {
   resolveCharacterFrame,
   resolveCharacterFrameKey,
   resolvePunchSpriteVariant,
+  getEthernetWhipBottomInset,
   resolveWhipFrame,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
-import { RESPAWN_FLASH_TICKS } from './constants';
-import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS, WHIP_COLOR } from './items';
+import { PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
+import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
@@ -27,6 +28,8 @@ type CachedTileMaterial = {
 type CachedSpriteTexture = {
   texture: THREE.Texture;
   aspectRatio: number;
+  pixelWidth: number;
+  pixelHeight: number;
 };
 
 type PlayerSpriteMesh = {
@@ -48,13 +51,79 @@ type AttackSpriteMesh = {
 const ITEM_GUN_WIDTH  = 0.5;
 const ITEM_GUN_HEIGHT = 0.25;
 const ITEM_GUN_DEPTH  = 0.25;
+const WHIP_ITEM_Y_OFFSET = -0.28;
 
 const BULLET_W = 0.3;
 const BULLET_H = 0.16;
 const BULLET_D = 0.16;
 
-// How far from the player centre the whip sprite is anchored
-const WHIP_OFFSET_X = 0.5;
+// Whip art: handle near bottom-left of texture (facing-right unmirrored art).
+const WHIP_HANDLE_TEXTURE_X = -0.35;
+const WHIP_HANDLE_TEXTURE_Y = -0.15;
+// Target grip point on the hold pose (from player centre).
+const WHIP_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.72;
+const WHIP_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.06;
+
+function resolveWhipHoldPosition(
+  playerX: number,
+  playerY: number,
+  facing: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  return {
+    x: playerX + facing * (
+      WHIP_HAND_OFFSET_X - WHIP_HANDLE_TEXTURE_X * displayWidth
+    ),
+    y: playerY + WHIP_HAND_OFFSET_Y - WHIP_HANDLE_TEXTURE_Y * displayHeight,
+  };
+}
+
+/** Bottom corner on the side toward the player (matches mirrored plane scale). */
+function whipNearPlayerCornerOffset(
+  facing: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  return {
+    x: -facing * displayWidth * 0.5,
+    y: -displayHeight * 0.5,
+  };
+}
+
+function whipNearPlayerCorner(
+  meshX: number,
+  meshY: number,
+  facing: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  const offset = whipNearPlayerCornerOffset(facing, displayWidth, displayHeight);
+  return { x: meshX + offset.x, y: meshY + offset.y };
+}
+
+/** World Y of the lowest visible pixel row in the texture. */
+function whipVisibleBottomY(
+  meshY: number,
+  displayHeight: number,
+  bottomInsetRatio: number,
+): number {
+  return meshY + displayHeight * (bottomInsetRatio - 0.5);
+}
+
+function resolveWhipMeshPosition(
+  idleNearCornerX: number,
+  idleVisibleBottomY: number,
+  facing: number,
+  frameWidth: number,
+  frameHeight: number,
+  frameBottomInset: number,
+): { x: number; y: number } {
+  return {
+    x: idleNearCornerX + facing * frameWidth * 0.5,
+    y: idleVisibleBottomY - frameHeight * (frameBottomInset - 0.5),
+  };
+}
 
 export class GameRenderer {
   private readonly scene: THREE.Scene;
@@ -200,7 +269,7 @@ export class GameRenderer {
       if (!def) continue;
 
       const ticksRemaining = player.activeWeaponAttack?.ticksRemaining ?? 0;
-      const whipFrame = resolveWhipFrame(player.facing, def, ticksRemaining);
+      const whipFrame = resolveWhipFrame(def, ticksRemaining);
       const whipFrameKey = `${player.id}:${weaponName}:${whipFrame}`;
 
       let weaponSprite = this.weaponSpriteMeshes.get(player.id);
@@ -218,18 +287,42 @@ export class GameRenderer {
         weaponSprite.lastFrameKey = whipFrameKey;
       }
 
-      const cachedTex = this.getWeaponSpriteTexture(weaponName, whipFrame);
-      const aspect = this.resolveSpriteAspectRatio(cachedTex);
-      const displayHeight = player.height;
-      const displayWidth = displayHeight * aspect;
+      const idleSize = this.resolveWhipDisplaySize(weaponName, 'idle', player.height);
+      const frameSize = this.resolveWhipDisplaySize(weaponName, whipFrame, player.height);
 
-      // Flip horizontally when facing left so the whip points the right way
-      weaponSprite.mesh.scale.set(displayWidth * player.facing, displayHeight, 1);
-      weaponSprite.mesh.position.set(
-        player.x + player.facing * WHIP_OFFSET_X,
-        player.y,
-        0.36, // just in front of the player sprite
+      weaponSprite.mesh.scale.set(
+        frameSize.displayWidth * player.facing,
+        frameSize.displayHeight,
+        1,
       );
+      const idleAnchor = resolveWhipHoldPosition(
+        player.x,
+        player.y,
+        player.facing,
+        idleSize.displayWidth,
+        idleSize.displayHeight,
+      );
+      const idleNearCorner = whipNearPlayerCorner(
+        idleAnchor.x,
+        idleAnchor.y,
+        player.facing,
+        idleSize.displayWidth,
+        idleSize.displayHeight,
+      );
+      const idleVisibleBottom = whipVisibleBottomY(
+        idleAnchor.y,
+        idleSize.displayHeight,
+        getEthernetWhipBottomInset('idle'),
+      );
+      const whipPos = resolveWhipMeshPosition(
+        idleNearCorner.x,
+        idleVisibleBottom,
+        player.facing,
+        frameSize.displayWidth,
+        frameSize.displayHeight,
+        getEthernetWhipBottomInset(whipFrame),
+      );
+      weaponSprite.mesh.position.set(whipPos.x, whipPos.y, 0.36);
 
       // Match player opacity during respawn flash
       const playerMesh = this.playerMeshes.get(player.id);
@@ -321,14 +414,15 @@ export class GameRenderer {
       }
       // Bob gently up and down so items are easy to spot
       const bob = Math.sin(Date.now() / 400) * 0.08;
-      mesh.position.set(item.x, item.y + bob, 0.35);
+      const centerLift = (mesh.userData.itemCenterLift as number | undefined) ?? 0;
+      mesh.position.set(item.x, item.y + bob + centerLift, 0.35);
     }
 
     for (const [id, mesh] of this.itemMeshes) {
       if (!activeItemIds.has(id)) {
         this.scene.remove(mesh);
         mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        (mesh.material as THREE.Material).dispose();
         this.itemMeshes.delete(id);
       }
     }
@@ -441,7 +535,7 @@ export class GameRenderer {
     for (const [, mesh] of this.itemMeshes) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+      (mesh.material as THREE.Material).dispose();
     }
     this.itemMeshes.clear();
 
@@ -766,10 +860,7 @@ export class GameRenderer {
     const texture = this.textureLoader.load(getCharacterSpriteUrl(characterId, frame));
     this.configurePixelTexture(texture);
 
-    const entry: CachedSpriteTexture = {
-      texture,
-      aspectRatio: this.readTextureAspectRatio(texture),
-    };
+    const entry = this.createCachedSpriteTexture(texture);
     this.spriteTextureCache.set(cacheKey, entry);
     return entry;
   }
@@ -782,12 +873,49 @@ export class GameRenderer {
     const texture = this.textureLoader.load(getWeaponSpriteUrl(weaponName, frame));
     this.configurePixelTexture(texture);
 
-    const entry: CachedSpriteTexture = {
-      texture,
-      aspectRatio: this.readTextureAspectRatio(texture),
-    };
+    const entry = this.createCachedSpriteTexture(texture);
     this.spriteTextureCache.set(cacheKey, entry);
     return entry;
+  }
+
+  /** Idle-sized in world units; attack frames scale by source pixel size vs idle. */
+  private resolveWhipDisplaySize(
+    weaponName: string,
+    frame: string,
+    playerHeight: number,
+  ): { displayWidth: number; displayHeight: number } {
+    const idleCached = this.getWeaponSpriteTexture(weaponName, 'idle');
+    const frameCached = this.getWeaponSpriteTexture(weaponName, frame);
+    const idlePixelHeight = idleCached.pixelHeight > 0
+      ? idleCached.pixelHeight
+      : this.readTexturePixelSize(idleCached.texture).height;
+    const framePixelHeight = frameCached.pixelHeight > 0
+      ? frameCached.pixelHeight
+      : this.readTexturePixelSize(frameCached.texture).height;
+    const pixelScale = idlePixelHeight > 0 && framePixelHeight > 0
+      ? framePixelHeight / idlePixelHeight
+      : 1;
+    const displayHeight = playerHeight * pixelScale;
+    const aspect = this.resolveSpriteAspectRatio(frameCached);
+    return { displayWidth: displayHeight * aspect, displayHeight };
+  }
+
+  private createCachedSpriteTexture(texture: THREE.Texture): CachedSpriteTexture {
+    const { width, height } = this.readTexturePixelSize(texture);
+    return {
+      texture,
+      aspectRatio: width > 0 && height > 0 ? width / height : 0,
+      pixelWidth: width,
+      pixelHeight: height,
+    };
+  }
+
+  private readTexturePixelSize(texture: THREE.Texture): { width: number; height: number } {
+    const image = texture.image as { width?: number; height?: number } | undefined;
+    return {
+      width: image?.width ?? 0,
+      height: image?.height ?? 0,
+    };
   }
 
   private resolveSpriteAspectRatio(cached: CachedSpriteTexture): number {
@@ -815,9 +943,9 @@ export class GameRenderer {
   }
 
   private readTextureAspectRatio(texture: THREE.Texture): number {
-    const image = texture.image as { width?: number; height?: number } | undefined;
-    if (image?.width && image?.height) {
-      return image.width / image.height;
+    const { width, height } = this.readTexturePixelSize(texture);
+    if (width > 0 && height > 0) {
+      return width / height;
     }
     return 0;
   }
@@ -827,13 +955,34 @@ export class GameRenderer {
   }
 
   private createItemMesh(kind: ItemKind): THREE.Mesh {
+    if (kind === ItemKind.EthernetWhip) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.EthernetWhip];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for EthernetWhip');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, 'idle');
+      const { displayWidth, displayHeight } = this.resolveWhipDisplaySize(
+        weaponName,
+        'idle',
+        PLAYER_HALF_HEIGHT * 2,
+      );
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      sprite.mesh.scale.set(displayWidth, displayHeight, 1);
+      const bottomInset = getEthernetWhipBottomInset('idle');
+      // Keep idle art size; lift clears floor, then lower toward the ground.
+      sprite.mesh.userData.itemCenterLift = (
+        displayHeight * (0.5 - bottomInset) - ITEM_GUN_HEIGHT * 0.5 + WHIP_ITEM_Y_OFFSET
+      );
+      return sprite.mesh;
+    }
+
     const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
-    const color = kind === ItemKind.EthernetWhip ? WHIP_COLOR : GUN_COLOR;
     const material = new THREE.MeshStandardMaterial({
-      color,
+      color: GUN_COLOR,
       roughness: 0.3,
       metalness: 0.7,
-      emissive: new THREE.Color(color),
+      emissive: new THREE.Color(GUN_COLOR),
       emissiveIntensity: 0.15,
     });
     return new THREE.Mesh(geometry, material);
