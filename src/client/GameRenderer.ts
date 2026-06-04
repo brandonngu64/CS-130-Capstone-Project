@@ -3,6 +3,8 @@ import {
   CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
   getWeaponSpriteUrl,
+  BINARY_BEAM_HOLD_FRAME,
+  BINARY_BEAM_PROJECTILE_FRAME,
   PEN_CROSSBOW_HOLD_FRAME,
   PEN_CROSSBOW_PROJECTILE_FRAME,
   PEN_CROSSBOW_TEXTURE_PIXELS,
@@ -108,8 +110,8 @@ const PEN_CROSSBOW_WIDTH_SCALE = 1;
 /** Uniform scale on bolt projectile (preserves PNG aspect). */
 const PEN_CROSSBOW_BOLT_SCALE = 1.2;
 const PEN_CROSSBOW_ITEM_Y_OFFSET = -0.22;
-const BINARY_BEAM_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.62;
-const BINARY_BEAM_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.08;
+const BINARY_BEAM_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 1.0;
+const BINARY_BEAM_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.15;
 
 function resolveWhipHoldPosition(
   playerX: number,
@@ -193,6 +195,18 @@ function resolvePenCrossbowHoldPosition(
   return {
     x: playerX + facing * (PEN_CROSSBOW_HAND_OFFSET_X + displayWidth * 0.5),
     y: playerY + PEN_CROSSBOW_HAND_OFFSET_Y,
+  };
+}
+
+function resolveBinaryBeamHoldPosition(
+  playerX: number,
+  playerY: number,
+  facing: number,
+  displayWidth: number,
+): { x: number; y: number } {
+  return {
+    x: playerX + facing * (BINARY_BEAM_HAND_OFFSET_X + displayWidth * 0.5),
+    y: playerY + BINARY_BEAM_HAND_OFFSET_Y,
   };
 }
 
@@ -464,15 +478,17 @@ export class GameRenderer {
         );
       } else if (heldItem === ItemKind.BinaryBeam) {
         const spriteConfig = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam];
-        const cachedTex = this.getWeaponSpriteTexture(weaponName, weaponFrame);
+        const cachedTex = this.getWeaponSpriteTexture(weaponName, BINARY_BEAM_HOLD_FRAME);
         const aspect = this.resolveSpriteAspectRatio(cachedTex);
-        const displayHeight = player.height * (spriteConfig?.heldHeightRatio ?? 0.22);
+        const displayHeight = spriteConfig?.pickupDisplayHeight ?? 0.52;
         const displayWidth = displayHeight * aspect;
         weaponSprite.mesh.scale.set(displayWidth * player.facing, displayHeight, 1);
-        whipPos = {
-          x: player.x + player.facing * (spriteConfig?.heldOffsetX ?? BINARY_BEAM_HAND_OFFSET_X),
-          y: player.y + (spriteConfig?.heldOffsetY ?? BINARY_BEAM_HAND_OFFSET_Y),
-        };
+        whipPos = resolveBinaryBeamHoldPosition(
+          player.x,
+          player.y,
+          player.facing,
+          displayWidth,
+        );
       } else if (heldItem === ItemKind.Finals) {
         const frameSize = this.applyPaperStackMeshScale(weaponSprite.mesh, weaponName);
         weaponSprite.mesh.scale.x = frameSize.displayWidth;
@@ -624,7 +640,7 @@ export class GameRenderer {
         );
       } else if (item.kind === ItemKind.BinaryBeam) {
         const weaponName = WEAPON_SPRITE_NAMES[ItemKind.BinaryBeam];
-        const pickupFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.pickupFrame ?? 'gpu';
+        const pickupFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.pickupFrame ?? BINARY_BEAM_HOLD_FRAME;
         if (!weaponName) {
           throw new Error('Missing weapon sprite name for BinaryBeam');
         }
@@ -726,7 +742,7 @@ export class GameRenderer {
         bulletSprite.mesh.rotation.z = 0;
       } else if (bullet.kind === ItemKind.BinaryBeam) {
         const weaponName = WEAPON_SPRITE_NAMES[ItemKind.BinaryBeam];
-        const projectileFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.projectileFrame ?? 'beam';
+        const projectileFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.projectileFrame ?? BINARY_BEAM_PROJECTILE_FRAME;
         if (!weaponName) {
           throw new Error('Missing weapon sprite name for BinaryBeam');
         }

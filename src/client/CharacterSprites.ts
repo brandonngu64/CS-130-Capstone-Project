@@ -40,6 +40,18 @@ export const PAPER_STACK_TEXTURE_PIXELS = { width: 192, height: 200 } as const;
 /** Finals projectile art at assets/weapons/paper_stack/paper_sheet.png */
 export const PAPER_STACK_PROJECTILE_FRAME = 'paper_sheet';
 
+/** Held binary beam art at assets/weapons/binary_beam/gpu.png */
+export const BINARY_BEAM_HOLD_FRAME = 'gpu';
+
+/** Binary beam projectile art at assets/weapons/binary_beam/beam.png */
+export const BINARY_BEAM_PROJECTILE_FRAME = 'beam';
+
+/** Source pixel size of binary_beam/gpu.png (used before texture decode). */
+export const BINARY_BEAM_TEXTURE_PIXELS = { width: 203, height: 87 } as const;
+
+/** Source pixel size of binary_beam/beam.png (used before texture decode). */
+export const BINARY_BEAM_PROJECTILE_TEXTURE_PIXELS = { width: 202, height: 44 } as const;
+
 /** Held pen crossbow art at assets/weapons/pen_crossbow/idle.png */
 export const PEN_CROSSBOW_HOLD_FRAME = 'idle';
 
