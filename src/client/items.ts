@@ -33,6 +33,7 @@ export interface WeaponDefinition {
   /** Extra spawn offset from player body origin (X is multiplied by facing). */
   projectileSpawnOffsetX?: number;
   projectileSpawnOffsetY?: number;
+  projectilePiercePlayers?: boolean;
 }
 
 /** Sprite layout for newer weapons (folder name lives in CharacterSprites). */
@@ -95,6 +96,7 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     projectileHitHalfWidth: 0.35,
     projectileSpawnOffsetX: 2.5,
     projectileSpawnOffsetY: 0.15,
+    projectilePiercePlayers: true,
   },
 };
 
