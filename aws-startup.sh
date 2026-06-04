@@ -27,7 +27,11 @@ nvm alias default 20
 
 # Verify Node installation
 node --version
-npm --version
+
+# Install pnpm
+echo "Installing pnpm..."
+npm install -g pnpm
+pnpm --version
 
 # Clone the GitHub repository
 echo "Cloning GitHub repository..."
@@ -37,14 +41,14 @@ git clone git@github.com:brandonngu64/CS-130-Capstone-Project.git
 # Navigate to project and install dependencies
 echo "Installing project dependencies..."
 cd CS-130-Capstone-Project
-npm install
+pnpm install
 
 echo "=== Setup Complete ==="
 echo "Project cloned to: $HOME/CS-130-Capstone-Project"
 echo "Node version: $(node --version)"
-echo "npm version: $(npm --version)"
+echo "pnpm version: $(pnpm --version)"
 echo ""
 echo "Next steps:"
 echo "1. Ensure SSH key is configured for GitHub access"
-echo "2. Run 'npm start' or 'npm run dev' to start the application"
-echo "3. Access via: http://<your-public-dns>:5173"
+echo "2. Run 'pnpm start' or 'pnpm run dev' to start the application"
+echo "3. Access via: http://<your-public-dns>:3000"
