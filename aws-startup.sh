@@ -9,22 +9,18 @@ echo "=== Starting AWS EC2 Setup ==="
 # Update system packages
 echo "Updating system packages..."
 sudo apt update
-sudo apt upgrade -y
+DEBIAN_FRONTEND=noninteractive sudo apt upgrade -y
+sudo apt install -y curl git
 
-# Install Node.js and npm (optional, NVM will handle this)
-echo "Installing build tools..."
-sudo apt install curl git build-essential -y
-
-# Install NVM (Node Version Manager)
-echo "Installing NVM..."
+# Install Node v20 via nvm
+echo " "
+echo "Installing Node.js v20..."
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 
-# Source NVM (load into current shell)
+# Load nvm directly (source ~/.bashrc won't work in non-interactive scripts)
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# Install and use Node v20
-echo "Installing Node.js v20..."
 nvm install 20
 nvm use 20
 nvm alias default 20
@@ -51,4 +47,4 @@ echo ""
 echo "Next steps:"
 echo "1. Ensure SSH key is configured for GitHub access"
 echo "2. Run 'npm start' or 'npm run dev' to start the application"
-echo "3. Access via: http://<your-public-dns>:3000"
+echo "3. Access via: http://<your-public-dns>:5173"
