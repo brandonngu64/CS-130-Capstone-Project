@@ -28,6 +28,16 @@ export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
   [ItemKind.EthernetWhip]: 'ethernet_whip',
 };
 
+export const PUNCH_WEAPON_NAME = 'punch';
+
+// Native punch art is shorter than character sprites; scale relative to body height.
+export const PUNCH_SPRITE_HEIGHT_RATIO = 146 / 202;
+
+/** Default punch art: Sahai uses var2; all other characters use var1. */
+export function resolvePunchSpriteVariant(characterId: CharacterId): string {
+  return characterId === 'sahai' ? 'var2' : 'var1';
+}
+
 function spritePath(characterId: CharacterId, frame: string): string {
   return `../assets/characters/${characterId}/${frame}.png`;
 }
