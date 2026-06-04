@@ -1277,14 +1277,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.nextBulletId = (bulletId % BULLET_ID_MAX) + 1;
 
     const position = owner.body.translation();
-    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05);
+    const spawnX =
+      position.x
+      + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05 + (def.projectileSpawnOffsetX ?? 0));
+    const spawnY = position.y + (def.projectileSpawnOffsetY ?? 0);
     const speed = def.projectileSpeed ?? BULLET_SPEED;
     const lifetime = def.projectileLifetimeTicks ?? BULLET_LIFETIME_TICKS;
 
     this.bullets.set(bulletId, {
       id: bulletId,
       x: spawnX,
-      y: position.y,
+      y: spawnY,
       vx: owner.facing * speed,
       vy: 0,
       ticksRemaining: lifetime,
