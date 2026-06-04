@@ -66,14 +66,14 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   [ItemKind.EthernetWhip]: {
     kind: 'melee',
     damage: 22,
-    cooldownTicks: 40,
+    cooldownTicks: 18,
     hitboxHalfWidth: 1.8,
     hitboxHalfHeight: 0.2,
     centerOffsetX: 0.45 + 1.8, // PLAYER_HALF_WIDTH + reach
     centerOffsetY: 0.0,
-    windupTicks: 10,
-    lashTicks: 8,
-    recoilTicks: 12,
+    windupTicks: 4,
+    lashTicks: 5,
+    recoilTicks: 5,
     get durationTicks() {
       return (this.windupTicks ?? 0) + (this.lashTicks ?? 0) + (this.recoilTicks ?? 0);
     },

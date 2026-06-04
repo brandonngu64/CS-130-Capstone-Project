@@ -1,21 +1,22 @@
 import * as THREE from 'three';
 import {
+  CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
   getWeaponSpriteUrl,
+  PAPER_STACK_HOLD_FRAME,
+  PAPER_STACK_PROJECTILE_FRAME,
+  PAPER_STACK_TEXTURE_PIXELS,
   PUNCH_SPRITE_HEIGHT_RATIO,
   PUNCH_WEAPON_NAME,
   resolveCharacterFrame,
   resolveCharacterFrameKey,
-  getWeaponPickupFrame,
-  getWeaponProjectileFrame,
-  getWeaponSpriteFolder,
   resolveHeldWeaponFrame,
   resolvePunchSpriteVariant,
+  getEthernetWhipBottomInset,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
-import { RESPAWN_FLASH_TICKS } from './constants';
-import { K_createDroppedItemMesh, K_createProjectileMesh, K_createWeaponMesh, K_renderLaserSight } from './kyleWeapons';
-import { ItemKind, WEAPON_DEFINITIONS, WEAPON_SPRITE_CONFIG } from './items';
+import { PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
+import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS, WEAPON_SPRITE_CONFIG } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
@@ -31,6 +32,8 @@ type CachedTileMaterial = {
 type CachedSpriteTexture = {
   texture: THREE.Texture;
   aspectRatio: number;
+  pixelWidth: number;
+  pixelHeight: number;
 };
 
 type PlayerSpriteMesh = {
@@ -48,8 +51,113 @@ type AttackSpriteMesh = {
   lastFrameKey: string;
 };
 
-// How far from the player centre the whip sprite is anchored
-const DEFAULT_HELD_WEAPON_OFFSET_X = 0.5;
+type BulletSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+  kind: ItemKind;
+};
+
+// Size of a collectible item sitting on the ground
+const ITEM_GUN_WIDTH  = 0.5;
+const ITEM_GUN_HEIGHT = 0.25;
+const ITEM_GUN_DEPTH  = 0.25;
+const WHIP_ITEM_Y_OFFSET = -0.28;
+
+const BULLET_W = 0.3;
+const BULLET_H = 0.16;
+const BULLET_D = 0.16;
+
+// Whip art: handle near bottom-left of texture (facing-right unmirrored art).
+const WHIP_HANDLE_TEXTURE_X = -0.35;
+const WHIP_HANDLE_TEXTURE_Y = -0.15;
+// Target grip point on the hold pose (from player centre).
+const WHIP_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.72;
+const WHIP_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.06;
+
+// Finals paper stack held near the character's hand.
+const PAPER_STACK_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.62;
+const PAPER_STACK_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.08;
+const PAPER_STACK_UNIFORM_SCALE = 0.78;
+const PAPER_STACK_WIDTH_SCALE = 0.62;
+/** Uniform scale on paper_sheet projectile (preserves PNG aspect). */
+const PAPER_SHEET_SCALE = 1.2;
+const PAPER_STACK_ITEM_Y_OFFSET = -0.22;
+
+const BINARY_BEAM_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.62;
+const BINARY_BEAM_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.08;
+
+function resolveWhipHoldPosition(
+  playerX: number,
+  playerY: number,
+  facing: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  return {
+    x: playerX + facing * (
+      WHIP_HAND_OFFSET_X - WHIP_HANDLE_TEXTURE_X * displayWidth
+    ),
+    y: playerY + WHIP_HAND_OFFSET_Y - WHIP_HANDLE_TEXTURE_Y * displayHeight,
+  };
+}
+
+/** Bottom corner on the side toward the player (matches mirrored plane scale). */
+function whipNearPlayerCornerOffset(
+  facing: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  return {
+    x: -facing * displayWidth * 0.5,
+    y: -displayHeight * 0.5,
+  };
+}
+
+function whipNearPlayerCorner(
+  meshX: number,
+  meshY: number,
+  facing: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  const offset = whipNearPlayerCornerOffset(facing, displayWidth, displayHeight);
+  return { x: meshX + offset.x, y: meshY + offset.y };
+}
+
+/** World Y of the lowest visible pixel row in the texture. */
+function whipVisibleBottomY(
+  meshY: number,
+  displayHeight: number,
+  bottomInsetRatio: number,
+): number {
+  return meshY + displayHeight * (bottomInsetRatio - 0.5);
+}
+
+function resolveWhipMeshPosition(
+  idleNearCornerX: number,
+  idleVisibleBottomY: number,
+  facing: number,
+  frameWidth: number,
+  frameHeight: number,
+  frameBottomInset: number,
+): { x: number; y: number } {
+  return {
+    x: idleNearCornerX + facing * frameWidth * 0.5,
+    y: idleVisibleBottomY - frameHeight * (frameBottomInset - 0.5),
+  };
+}
+
+function resolvePaperStackHoldPosition(
+  playerX: number,
+  playerY: number,
+  facing: number,
+  displayWidth: number,
+): { x: number; y: number } {
+  return {
+    x: playerX + facing * (PAPER_STACK_HAND_OFFSET_X + displayWidth * 0.5),
+    y: playerY + PAPER_STACK_HAND_OFFSET_Y,
+  };
+}
 
 export class GameRenderer {
   private readonly scene: THREE.Scene;
@@ -71,11 +179,7 @@ export class GameRenderer {
   private readonly textureLoader = new THREE.TextureLoader();
   private readonly attackMeshes = new Map<string, AttackSpriteMesh>();
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
-  private readonly itemSpriteMeshes = new Map<number, WeaponSpriteMesh>();
-  private readonly bulletMeshes = new Map<number, THREE.Mesh>();
-  private readonly projectileSpriteMeshes = new Map<number, WeaponSpriteMesh>();
-  private readonly weaponMeshes = new Map<string, THREE.Mesh>();
-  private readonly laserSightMeshes = new Map<string, THREE.Line>();
+  private readonly bulletMeshes = new Map<number, BulletSpriteMesh>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
@@ -169,89 +273,11 @@ export class GameRenderer {
       material.depthWrite = !isTransparent;
     }
 
-    for (const player of state.players) {
-      const weapon = this.weaponMeshes.get(player.id);
-      const laser = this.laserSightMeshes.get(player.id);
-
-      if (player.heldItem === null) {
-        if (weapon) {
-          this.scene.remove(weapon);
-          weapon.geometry.dispose();
-          (weapon.material as THREE.Material).dispose();
-          this.weaponMeshes.delete(player.id);
-        }
-        if (laser) {
-          this.scene.remove(laser);
-          laser.geometry.dispose();
-          (laser.material as THREE.Material).dispose();
-          this.laserSightMeshes.delete(player.id);
-        }
-        continue;
-      }
-
-      const usesHeldWeaponSprite =
-        player.heldItem !== null && WEAPON_SPRITE_NAMES[player.heldItem] !== undefined;
-
-      if (usesHeldWeaponSprite) {
-        if (weapon) {
-          this.scene.remove(weapon);
-          weapon.geometry.dispose();
-          (weapon.material as THREE.Material).dispose();
-          this.weaponMeshes.delete(player.id);
-        }
-      } else if (!weapon || weapon.userData.kind !== player.heldItem) {
-        if (weapon) {
-          this.scene.remove(weapon);
-          weapon.geometry.dispose();
-          (weapon.material as THREE.Material).dispose();
-          this.weaponMeshes.delete(player.id);
-        }
-        const nextWeapon = K_createWeaponMesh(player.heldItem, this.textureLoader);
-        nextWeapon.userData.kind = player.heldItem;
-        this.scene.add(nextWeapon);
-        this.weaponMeshes.set(player.id, nextWeapon);
-      }
-
-      const currentWeapon = this.weaponMeshes.get(player.id);
-      if (currentWeapon) {
-        currentWeapon.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
-        currentWeapon.visible = true;
-      }
-
-      let currentLaser = laser;
-      if (!currentLaser) {
-        currentLaser = K_renderLaserSight(player.x, player.y + 0.1, player.facing);
-        this.scene.add(currentLaser);
-        this.laserSightMeshes.set(player.id, currentLaser);
-      }
-      currentLaser.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.30);
-      currentLaser.rotation.z = player.facing === -1 ? Math.PI : 0;
-      currentLaser.visible = player.heldItem === ItemKind.PenCrossbow;
-    }
-
     for (const [id, playerSprite] of this.playerMeshes) {
       if (!activeIds.has(id)) {
         this.scene.remove(playerSprite.mesh);
         playerSprite.mesh.geometry.dispose();
         this.playerMeshes.delete(id);
-      }
-    }
-
-    for (const [id, weapon] of this.weaponMeshes) {
-      if (!activeIds.has(id)) {
-        this.scene.remove(weapon);
-        weapon.geometry.dispose();
-        (weapon.material as THREE.Material).dispose();
-        this.weaponMeshes.delete(id);
-      }
-    }
-
-    for (const [id, laser] of this.laserSightMeshes) {
-      if (!activeIds.has(id)) {
-        this.scene.remove(laser);
-        laser.geometry.dispose();
-        (laser.material as THREE.Material).dispose();
-        this.laserSightMeshes.delete(id);
       }
     }
 
@@ -262,6 +288,7 @@ export class GameRenderer {
         : undefined;
 
       if (!weaponName) {
+        // Remove stale weapon mesh if player no longer holds a sprite-weapon
         const stale = this.weaponSpriteMeshes.get(player.id);
         if (stale) {
           this.scene.remove(stale.mesh);
@@ -273,25 +300,12 @@ export class GameRenderer {
       }
 
       const def = player.heldItem !== null ? WEAPON_DEFINITIONS[player.heldItem] : undefined;
-      if (!def) {
-        const stale = this.weaponSpriteMeshes.get(player.id);
-        if (stale) {
-          this.scene.remove(stale.mesh);
-          stale.mesh.geometry.dispose();
-          (stale.mesh.material as THREE.MeshBasicMaterial).dispose();
-          this.weaponSpriteMeshes.delete(player.id);
-        }
-        continue;
-      }
+      if (!def) continue;
 
       const ticksRemaining = player.activeWeaponAttack?.ticksRemaining ?? 0;
-      const heldFrame = resolveHeldWeaponFrame(
-        player.heldItem!,
-        player.facing,
-        def,
-        ticksRemaining,
-      );
-      const heldFrameKey = `${player.id}:${weaponName}:${heldFrame}`;
+      const heldItem = player.heldItem!;
+      const weaponFrame = resolveHeldWeaponFrame(heldItem, def, ticksRemaining);
+      const weaponFrameKey = `${player.id}:${weaponName}:${weaponFrame}`;
 
       let weaponSprite = this.weaponSpriteMeshes.get(player.id);
       if (!weaponSprite) {
@@ -300,39 +314,87 @@ export class GameRenderer {
         this.weaponSpriteMeshes.set(player.id, weaponSprite);
       }
 
-      if (weaponSprite.lastFrameKey !== heldFrameKey) {
-        const cachedTex = this.getWeaponSpriteTexture(weaponName, heldFrame);
+      if (weaponSprite.lastFrameKey !== weaponFrameKey) {
+        const cachedTex = this.getWeaponSpriteTexture(weaponName, weaponFrame);
         const prev = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
         prev.dispose();
         weaponSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
-        weaponSprite.lastFrameKey = heldFrameKey;
+        weaponSprite.lastFrameKey = weaponFrameKey;
       }
 
-      const spriteConfig = WEAPON_SPRITE_CONFIG[player.heldItem!];
-      const cachedTex = this.getWeaponSpriteTexture(weaponName, heldFrame);
-      const aspect = this.resolveSpriteAspectRatio(cachedTex);
-      const displayHeight = player.height * (spriteConfig?.heldHeightRatio ?? 1);
-      const displayWidth = displayHeight * aspect;
-      const holdOffsetX = spriteConfig?.heldOffsetX ?? DEFAULT_HELD_WEAPON_OFFSET_X;
-      const holdOffsetY = spriteConfig?.heldOffsetY ?? 0;
+      let whipPos: { x: number; y: number };
+      if (heldItem === ItemKind.EthernetWhip) {
+        const idleSize = this.resolveWhipDisplaySize(weaponName, 'idle', player.height);
+        const frameSize = this.resolveWhipDisplaySize(weaponName, weaponFrame, player.height);
 
-      weaponSprite.mesh.scale.set(displayWidth * player.facing, displayHeight, 1);
-      weaponSprite.mesh.position.set(
-        player.x + player.facing * holdOffsetX,
-        player.y + holdOffsetY,
-        0.36,
-      );
+        weaponSprite.mesh.scale.set(
+          frameSize.displayWidth * player.facing,
+          frameSize.displayHeight,
+          1,
+        );
+        const idleAnchor = resolveWhipHoldPosition(
+          player.x,
+          player.y,
+          player.facing,
+          idleSize.displayWidth,
+          idleSize.displayHeight,
+        );
+        const idleNearCorner = whipNearPlayerCorner(
+          idleAnchor.x,
+          idleAnchor.y,
+          player.facing,
+          idleSize.displayWidth,
+          idleSize.displayHeight,
+        );
+        const idleVisibleBottom = whipVisibleBottomY(
+          idleAnchor.y,
+          idleSize.displayHeight,
+          getEthernetWhipBottomInset('idle'),
+        );
+        whipPos = resolveWhipMeshPosition(
+          idleNearCorner.x,
+          idleVisibleBottom,
+          player.facing,
+          frameSize.displayWidth,
+          frameSize.displayHeight,
+          getEthernetWhipBottomInset(weaponFrame),
+        );
+      } else if (heldItem === ItemKind.BinaryBeam) {
+        const spriteConfig = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam];
+        const cachedTex = this.getWeaponSpriteTexture(weaponName, weaponFrame);
+        const aspect = this.resolveSpriteAspectRatio(cachedTex);
+        const displayHeight = player.height * (spriteConfig?.heldHeightRatio ?? 0.22);
+        const displayWidth = displayHeight * aspect;
+        weaponSprite.mesh.scale.set(displayWidth * player.facing, displayHeight, 1);
+        whipPos = {
+          x: player.x + player.facing * (spriteConfig?.heldOffsetX ?? BINARY_BEAM_HAND_OFFSET_X),
+          y: player.y + (spriteConfig?.heldOffsetY ?? BINARY_BEAM_HAND_OFFSET_Y),
+        };
+      } else {
+        const frameSize = this.applyPaperStackMeshScale(weaponSprite.mesh, weaponName);
+        weaponSprite.mesh.scale.x = frameSize.displayWidth * player.facing;
+        whipPos = resolvePaperStackHoldPosition(
+          player.x,
+          player.y,
+          player.facing,
+          frameSize.displayWidth,
+        );
+      }
 
+      weaponSprite.mesh.position.set(whipPos.x, whipPos.y, 0.36);
+
+      // Match player opacity during respawn flash
       const playerMesh = this.playerMeshes.get(player.id);
       const playerOpacity = playerMesh
         ? (playerMesh.mesh.material as THREE.MeshBasicMaterial).opacity
         : 1;
-      const weaponMaterial = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
-      weaponMaterial.opacity = playerOpacity;
-      weaponMaterial.transparent = playerOpacity < 1;
-      weaponMaterial.depthWrite = playerOpacity >= 1;
+      const wMat = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
+      wMat.opacity = playerOpacity;
+      wMat.transparent = playerOpacity < 1;
+      wMat.depthWrite = playerOpacity >= 1;
     }
 
+    // Clean up weapon meshes for players who left
     for (const [id, weaponSprite] of this.weaponSpriteMeshes) {
       if (!activeIds.has(id)) {
         this.scene.remove(weaponSprite.mesh);
@@ -403,60 +465,36 @@ export class GameRenderer {
     const activeItemIds = new Set(state.items.map((item: RenderState['items'][number]) => item.id));
 
     for (const item of state.items) {
-      const weaponName = getWeaponSpriteFolder(item.kind);
-      const pickupFrame = getWeaponPickupFrame(item.kind);
-      const bob = Math.sin(Date.now() / 400) * 0.08;
-
-      if (weaponName && pickupFrame) {
-        const staleMesh = this.itemMeshes.get(item.id);
-        if (staleMesh) {
-          this.scene.remove(staleMesh);
-          staleMesh.geometry.dispose();
-          (staleMesh.material as THREE.Material).dispose();
-          this.itemMeshes.delete(item.id);
-        }
-
-        const frameKey = `${item.kind}:${pickupFrame}`;
-        let itemSprite = this.itemSpriteMeshes.get(item.id);
-        if (!itemSprite) {
-          itemSprite = this.createWeaponSpriteMesh();
-          this.scene.add(itemSprite.mesh);
-          this.itemSpriteMeshes.set(item.id, itemSprite);
-        }
-
-        if (itemSprite.lastFrameKey !== frameKey) {
-          const cachedTex = this.getWeaponSpriteTexture(weaponName, pickupFrame);
-          const prev = itemSprite.mesh.material as THREE.MeshBasicMaterial;
-          prev.dispose();
-          itemSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
-          itemSprite.lastFrameKey = frameKey;
-        }
-
-        const spriteConfig = WEAPON_SPRITE_CONFIG[item.kind];
-        const cachedTex = this.getWeaponSpriteTexture(weaponName, pickupFrame);
-        const aspect = this.resolveSpriteAspectRatio(cachedTex);
-        const displayHeight = spriteConfig?.pickupDisplayHeight ?? 0.5;
-        const displayWidth = displayHeight * aspect;
-        itemSprite.mesh.scale.set(displayWidth, displayHeight, 1);
-        itemSprite.mesh.position.set(item.x, item.y + bob, 0.35);
-        continue;
-      }
-
-      const staleSprite = this.itemSpriteMeshes.get(item.id);
-      if (staleSprite) {
-        this.scene.remove(staleSprite.mesh);
-        staleSprite.mesh.geometry.dispose();
-        (staleSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
-        this.itemSpriteMeshes.delete(item.id);
-      }
-
       let mesh = this.itemMeshes.get(item.id);
       if (!mesh) {
-        mesh = K_createDroppedItemMesh(item.kind, this.textureLoader);
+        mesh = this.createItemMesh(item.kind);
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
-      mesh.position.set(item.x, item.y + bob, 0.35);
+
+      if (item.kind === ItemKind.Finals) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for Finals');
+        }
+        const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_HOLD_FRAME);
+        const frameSize = this.applyPaperStackMeshScale(mesh, weaponName);
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        if (material.map !== cached.texture) {
+          material.map = cached.texture;
+          material.needsUpdate = true;
+        }
+        material.visible = true;
+        mesh.visible = true;
+        mesh.userData.itemCenterLift = (
+          frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PAPER_STACK_ITEM_Y_OFFSET
+        );
+      }
+
+      // Bob gently up and down so items are easy to spot
+      const bob = Math.sin(Date.now() / 400) * 0.08;
+      const centerLift = (mesh.userData.itemCenterLift as number | undefined) ?? 0;
+      mesh.position.set(item.x, item.y + bob + centerLift, 0.35);
     }
 
     for (const [id, mesh] of this.itemMeshes) {
@@ -468,101 +506,74 @@ export class GameRenderer {
       }
     }
 
-    for (const [id, itemSprite] of this.itemSpriteMeshes) {
-      if (!activeItemIds.has(id)) {
-        this.scene.remove(itemSprite.mesh);
-        itemSprite.mesh.geometry.dispose();
-        (itemSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
-        this.itemSpriteMeshes.delete(id);
-      }
-    }
-
     // --- Bullets ---
     const activeBulletIds = new Set(state.bullets.map((bullet: RenderState['bullets'][number]) => bullet.id));
 
     for (const bullet of state.bullets) {
-      const weaponName = getWeaponSpriteFolder(bullet.kind);
-      const projectileFrame = getWeaponProjectileFrame(bullet.kind);
+      let bulletSprite = this.bulletMeshes.get(bullet.id);
+      if (!bulletSprite) {
+        bulletSprite = this.createBulletMesh(bullet.kind);
+        this.scene.add(bulletSprite.mesh);
+        this.bulletMeshes.set(bullet.id, bulletSprite);
+      }
 
-      if (weaponName && projectileFrame) {
-        const staleMesh = this.bulletMeshes.get(bullet.id);
-        if (staleMesh) {
-          this.scene.remove(staleMesh);
-          staleMesh.geometry.dispose();
-          (staleMesh.material as THREE.Material).dispose();
-          this.bulletMeshes.delete(bullet.id);
+      if (bullet.kind === ItemKind.Finals) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for Finals');
         }
-
-        const frameKey = `${bullet.kind}:${projectileFrame}`;
-        let projectileSprite = this.projectileSpriteMeshes.get(bullet.id);
-        if (!projectileSprite) {
-          projectileSprite = this.createWeaponSpriteMesh();
-          this.scene.add(projectileSprite.mesh);
-          this.projectileSpriteMeshes.set(bullet.id, projectileSprite);
-        }
-
-        if (projectileSprite.lastFrameKey !== frameKey) {
-          const cachedTex = this.getWeaponSpriteTexture(weaponName, projectileFrame);
-          const prev = projectileSprite.mesh.material as THREE.MeshBasicMaterial;
+        const frameKey = `${bullet.id}:${PAPER_STACK_PROJECTILE_FRAME}`;
+        if (bulletSprite.lastFrameKey !== frameKey) {
+          const cachedTex = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_PROJECTILE_FRAME);
+          const prev = bulletSprite.mesh.material as THREE.MeshBasicMaterial;
           prev.dispose();
-          projectileSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
-          projectileSprite.lastFrameKey = frameKey;
+          bulletSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+          bulletSprite.lastFrameKey = frameKey;
         }
 
-        const spriteConfig = WEAPON_SPRITE_CONFIG[bullet.kind];
+        const stackSize = this.resolvePaperStackDisplaySize(weaponName);
+        const sheetSize = this.resolvePaperSheetDisplaySize(weaponName, stackSize.displayWidth);
+        bulletSprite.mesh.scale.set(
+          sheetSize.displayWidth * bullet.facing,
+          sheetSize.displayHeight,
+          1,
+        );
+        bulletSprite.mesh.rotation.z = 0;
+      } else if (bullet.kind === ItemKind.BinaryBeam) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.BinaryBeam];
+        const projectileFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.projectileFrame ?? 'beam';
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for BinaryBeam');
+        }
+        const frameKey = `${bullet.id}:${projectileFrame}`;
+        if (bulletSprite.lastFrameKey !== frameKey) {
+          const cachedTex = this.getWeaponSpriteTexture(weaponName, projectileFrame);
+          const prev = bulletSprite.mesh.material as THREE.MeshBasicMaterial;
+          prev.dispose();
+          bulletSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+          bulletSprite.lastFrameKey = frameKey;
+        }
+
+        const spriteConfig = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam];
         const cachedTex = this.getWeaponSpriteTexture(weaponName, projectileFrame);
         const aspect = this.resolveSpriteAspectRatio(cachedTex);
         const scaleXMult = spriteConfig?.projectileScaleX ?? 1;
         const scaleYMult = spriteConfig?.projectileScaleY ?? 1;
         const displayHeight = 0.35;
         const displayWidth = displayHeight * aspect;
-        projectileSprite.mesh.scale.set(displayWidth * scaleXMult * bullet.facing, displayHeight * scaleYMult, 1);
-        projectileSprite.mesh.rotation.z = 0;
-        projectileSprite.mesh.position.set(bullet.x, bullet.y, 0.38);
-        continue;
+        bulletSprite.mesh.scale.set(displayWidth * scaleXMult * bullet.facing, displayHeight * scaleYMult, 1);
+        bulletSprite.mesh.rotation.z = 0;
       }
 
-      const staleSprite = this.projectileSpriteMeshes.get(bullet.id);
-      if (staleSprite) {
-        this.scene.remove(staleSprite.mesh);
-        staleSprite.mesh.geometry.dispose();
-        (staleSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
-        this.projectileSpriteMeshes.delete(bullet.id);
-      }
-
-      let mesh = this.bulletMeshes.get(bullet.id);
-      if (!mesh || mesh.userData.kind !== bullet.kind) {
-        if (mesh) {
-          this.scene.remove(mesh);
-          mesh.geometry.dispose();
-          (mesh.material as THREE.Material).dispose();
-        }
-        mesh = K_createProjectileMesh(bullet.kind, this.textureLoader);
-        mesh.userData.kind = bullet.kind;
-        this.scene.add(mesh);
-        this.bulletMeshes.set(bullet.id, mesh);
-      }
-
-      mesh.position.set(bullet.x, bullet.y, 0.38);
-      mesh.scale.set(1, 1, 1);
-      mesh.rotation.z = 0;
+      bulletSprite.mesh.position.set(bullet.x, bullet.y, 0.35);
     }
 
-    for (const [id, mesh] of this.bulletMeshes) {
+    for (const [id, bulletSprite] of this.bulletMeshes) {
       if (!activeBulletIds.has(id)) {
-        this.scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.Material).dispose();
+        this.scene.remove(bulletSprite.mesh);
+        bulletSprite.mesh.geometry.dispose();
+        (bulletSprite.mesh.material as THREE.Material).dispose();
         this.bulletMeshes.delete(id);
-      }
-    }
-
-    for (const [id, projectileSprite] of this.projectileSpriteMeshes) {
-      if (!activeBulletIds.has(id)) {
-        this.scene.remove(projectileSprite.mesh);
-        projectileSprite.mesh.geometry.dispose();
-        (projectileSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
-        this.projectileSpriteMeshes.delete(id);
       }
     }
 
@@ -656,33 +667,12 @@ export class GameRenderer {
     }
     this.itemMeshes.clear();
 
-    for (const [, itemSprite] of this.itemSpriteMeshes) {
-      this.scene.remove(itemSprite.mesh);
-      itemSprite.mesh.geometry.dispose();
-      (itemSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
-    }
-    this.itemSpriteMeshes.clear();
-
-    for (const [, mesh] of this.bulletMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
+    for (const [, bulletSprite] of this.bulletMeshes) {
+      this.scene.remove(bulletSprite.mesh);
+      bulletSprite.mesh.geometry.dispose();
+      (bulletSprite.mesh.material as THREE.Material).dispose();
     }
     this.bulletMeshes.clear();
-
-    for (const [, projectileSprite] of this.projectileSpriteMeshes) {
-      this.scene.remove(projectileSprite.mesh);
-      projectileSprite.mesh.geometry.dispose();
-      (projectileSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
-    }
-    this.projectileSpriteMeshes.clear();
-
-    for (const [, mesh] of this.weaponMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
-    }
-    this.weaponMeshes.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -998,10 +988,7 @@ export class GameRenderer {
     const texture = this.textureLoader.load(getCharacterSpriteUrl(characterId, frame));
     this.configurePixelTexture(texture);
 
-    const entry: CachedSpriteTexture = {
-      texture,
-      aspectRatio: this.readTextureAspectRatio(texture),
-    };
+    const entry = this.createCachedSpriteTexture(texture);
     this.spriteTextureCache.set(cacheKey, entry);
     return entry;
   }
@@ -1014,12 +1001,86 @@ export class GameRenderer {
     const texture = this.textureLoader.load(getWeaponSpriteUrl(weaponName, frame));
     this.configurePixelTexture(texture);
 
-    const entry: CachedSpriteTexture = {
-      texture,
-      aspectRatio: this.readTextureAspectRatio(texture),
-    };
+    const entry = this.createCachedSpriteTexture(texture);
     this.spriteTextureCache.set(cacheKey, entry);
     return entry;
+  }
+
+  /**
+   * Sizes paper_stack from PNG pixels using character sprite pixel-to-world mapping.
+   * Height keeps native aspect; width is scaled down so the stack is not overly wide.
+   */
+  private resolvePaperStackDisplaySize(
+    _weaponName: string,
+  ): { displayWidth: number; displayHeight: number } {
+    const worldPerPixel = (
+      (PLAYER_HALF_HEIGHT * 2) / CHARACTER_SPRITE_PIXEL_HEIGHT
+    ) * PAPER_STACK_UNIFORM_SCALE;
+    return {
+      displayWidth: PAPER_STACK_TEXTURE_PIXELS.width * worldPerPixel * PAPER_STACK_WIDTH_SCALE,
+      displayHeight: PAPER_STACK_TEXTURE_PIXELS.height * worldPerPixel,
+    };
+  }
+
+  private applyPaperStackMeshScale(
+    mesh: THREE.Mesh,
+    weaponName: string,
+  ): { displayWidth: number; displayHeight: number } {
+    const frameSize = this.resolvePaperStackDisplaySize(weaponName);
+    mesh.scale.set(frameSize.displayWidth, frameSize.displayHeight, 1);
+    return frameSize;
+  }
+
+  /** Projectile sized from paper_stack width, paper_sheet aspect, then uniform scale. */
+  private resolvePaperSheetDisplaySize(
+    weaponName: string,
+    stackDisplayWidth: number,
+  ): { displayWidth: number; displayHeight: number } {
+    const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_PROJECTILE_FRAME);
+    const aspect = this.resolveSpriteAspectRatio(cached);
+    const displayWidth = stackDisplayWidth * PAPER_SHEET_SCALE;
+    const displayHeight = aspect > 0 ? displayWidth / aspect : displayWidth;
+    return { displayWidth, displayHeight };
+  }
+
+  /** Idle-sized in world units; attack frames scale by source pixel size vs idle. */
+  private resolveWhipDisplaySize(
+    weaponName: string,
+    frame: string,
+    playerHeight: number,
+  ): { displayWidth: number; displayHeight: number } {
+    const idleCached = this.getWeaponSpriteTexture(weaponName, 'idle');
+    const frameCached = this.getWeaponSpriteTexture(weaponName, frame);
+    const idlePixelHeight = idleCached.pixelHeight > 0
+      ? idleCached.pixelHeight
+      : this.readTexturePixelSize(idleCached.texture).height;
+    const framePixelHeight = frameCached.pixelHeight > 0
+      ? frameCached.pixelHeight
+      : this.readTexturePixelSize(frameCached.texture).height;
+    const pixelScale = idlePixelHeight > 0 && framePixelHeight > 0
+      ? framePixelHeight / idlePixelHeight
+      : 1;
+    const displayHeight = playerHeight * pixelScale;
+    const aspect = this.resolveSpriteAspectRatio(frameCached);
+    return { displayWidth: displayHeight * aspect, displayHeight };
+  }
+
+  private createCachedSpriteTexture(texture: THREE.Texture): CachedSpriteTexture {
+    const { width, height } = this.readTexturePixelSize(texture);
+    return {
+      texture,
+      aspectRatio: width > 0 && height > 0 ? width / height : 0,
+      pixelWidth: width,
+      pixelHeight: height,
+    };
+  }
+
+  private readTexturePixelSize(texture: THREE.Texture): { width: number; height: number } {
+    const image = texture.image as { width?: number; height?: number } | undefined;
+    return {
+      width: image?.width ?? 0,
+      height: image?.height ?? 0,
+    };
   }
 
   private resolveSpriteAspectRatio(cached: CachedSpriteTexture): number {
@@ -1047,15 +1108,128 @@ export class GameRenderer {
   }
 
   private readTextureAspectRatio(texture: THREE.Texture): number {
-    const image = texture.image as { width?: number; height?: number } | undefined;
-    if (image?.width && image?.height) {
-      return image.width / image.height;
+    const { width, height } = this.readTexturePixelSize(texture);
+    if (width > 0 && height > 0) {
+      return width / height;
     }
     return 0;
   }
 
   private createAttackSpriteMesh(): AttackSpriteMesh {
     return this.createWeaponSpriteMesh();
+  }
+
+  private createItemMesh(kind: ItemKind): THREE.Mesh {
+    if (kind === ItemKind.EthernetWhip) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.EthernetWhip];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for EthernetWhip');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, 'idle');
+      const { displayWidth, displayHeight } = this.resolveWhipDisplaySize(
+        weaponName,
+        'idle',
+        PLAYER_HALF_HEIGHT * 2,
+      );
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      sprite.mesh.scale.set(displayWidth, displayHeight, 1);
+      const bottomInset = getEthernetWhipBottomInset('idle');
+      // Keep idle art size; lift clears floor, then lower toward the ground.
+      sprite.mesh.userData.itemCenterLift = (
+        displayHeight * (0.5 - bottomInset) - ITEM_GUN_HEIGHT * 0.5 + WHIP_ITEM_Y_OFFSET
+      );
+      return sprite.mesh;
+    }
+
+    if (kind === ItemKind.Finals) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for Finals');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_HOLD_FRAME);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      const frameSize = this.applyPaperStackMeshScale(sprite.mesh, weaponName);
+      sprite.mesh.userData.itemCenterLift = (
+        frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PAPER_STACK_ITEM_Y_OFFSET
+      );
+      return sprite.mesh;
+    }
+
+    if (kind === ItemKind.BinaryBeam) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.BinaryBeam];
+      const pickupFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.pickupFrame ?? 'gpu';
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for BinaryBeam');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, pickupFrame);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      const aspect = this.resolveSpriteAspectRatio(cached);
+      const displayHeight = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.pickupDisplayHeight ?? 0.52;
+      const displayWidth = displayHeight * aspect;
+      sprite.mesh.scale.set(displayWidth, displayHeight, 1);
+      sprite.mesh.userData.itemCenterLift = displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5;
+      return sprite.mesh;
+    }
+
+    const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
+    const material = new THREE.MeshStandardMaterial({
+      color: GUN_COLOR,
+      roughness: 0.3,
+      metalness: 0.7,
+      emissive: new THREE.Color(GUN_COLOR),
+      emissiveIntensity: 0.15,
+    });
+    return new THREE.Mesh(geometry, material);
+  }
+
+  private createBulletMesh(kind: ItemKind): BulletSpriteMesh {
+    if (kind === ItemKind.Finals) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for Finals');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_PROJECTILE_FRAME);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      return {
+        mesh: sprite.mesh,
+        lastFrameKey: `${PAPER_STACK_PROJECTILE_FRAME}`,
+        kind: ItemKind.Finals,
+      };
+    }
+
+    if (kind === ItemKind.BinaryBeam) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.BinaryBeam];
+      const projectileFrame = WEAPON_SPRITE_CONFIG[ItemKind.BinaryBeam]?.projectileFrame ?? 'beam';
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for BinaryBeam');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, projectileFrame);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      return {
+        mesh: sprite.mesh,
+        lastFrameKey: projectileFrame,
+        kind: ItemKind.BinaryBeam,
+      };
+    }
+
+    const geometry = new THREE.BoxGeometry(BULLET_W, BULLET_H, BULLET_D);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffe066,
+      roughness: 0.2,
+      metalness: 0.5,
+      emissive: new THREE.Color(0xffe066),
+      emissiveIntensity: 0.6,
+    });
+    return {
+      mesh: new THREE.Mesh(geometry, material),
+      lastFrameKey: '',
+      kind: ItemKind.Gun,
+    };
   }
 
   private resize(): void {
