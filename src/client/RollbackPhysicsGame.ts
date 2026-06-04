@@ -127,6 +127,12 @@ const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
 const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
+const SPAWN_ROTATION: readonly ItemKind[] = [
+  ItemKind.Gun,
+  ItemKind.PenCrossbow,
+  ItemKind.EthernetWhip,
+  ItemKind.Finals,
+];
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly map: TiledMapDefinition;
@@ -1125,7 +1131,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private chooseSpawnedItemKind(slotIndex: number): ItemKind {
-    return slotIndex % 2 === 0 ? ItemKind.PenCrossbow : ItemKind.Gun;
+    return SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length];
   }
 
   private handleBlastZoneDeaths(): void {
