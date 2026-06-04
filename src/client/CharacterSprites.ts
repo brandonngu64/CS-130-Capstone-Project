@@ -4,7 +4,7 @@ import {
   DEFAULT_CHARACTER_ID,
   isCharacterId,
 } from './constants';
-import { ItemKind, getWhipPhase } from './items';
+import { ItemKind, WEAPON_SPRITE_CONFIG, getWhipPhase } from './items';
 import type { WeaponDefinition } from './items';
 
 const SPRITE_MODULES = import.meta.glob('../assets/characters/**/*.png', {
@@ -28,6 +28,7 @@ export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
   [ItemKind.EthernetWhip]: 'ethernet_whip',
   [ItemKind.Finals]: 'paper_stack',
   [ItemKind.PenCrossbow]: 'pen_crossbow',
+  [ItemKind.BinaryBeam]: 'binary_beam',
 };
 
 /** Held finals weapon art at assets/weapons/paper_stack/paper_stack.png */
@@ -152,6 +153,10 @@ export function resolveHeldWeaponFrame(
   ticksRemaining: number,
   gunFireCooldownTicks = 0,
 ): string {
+  const configFrame = WEAPON_SPRITE_CONFIG[heldItem]?.heldFrame;
+  if (configFrame) {
+    return configFrame;
+  }
   if (heldItem === ItemKind.Finals) {
     return PAPER_STACK_HOLD_FRAME;
   }
@@ -177,6 +182,7 @@ export function resolveWhipFrame(
   }
   return 'attack1';
 }
+
 
 export function normalizeCharacterId(value: string | null | undefined): CharacterId {
   if (value && isCharacterId(value)) {

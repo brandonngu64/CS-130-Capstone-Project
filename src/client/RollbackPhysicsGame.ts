@@ -646,7 +646,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         x: bullet.x,
         y: bullet.y,
         kind: bullet.kind,
-        facing: bullet.vx < 0 ? -1 : 1,
+        facing: Math.sign(bullet.vx) || 1,
       }));
 
     const items = this.itemSlots
@@ -955,9 +955,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       bullet.vy += bullet.projectileGravity * FIXED_STEP_SECONDS;
       const dx = bullet.vx * FIXED_STEP_SECONDS;
       const ray = new RAPIER.Ray({ x: bullet.x, y: bullet.y }, { x: Math.sign(bullet.vx), y: 0 });
+      const weaponDef = WEAPON_DEFINITIONS[bullet.kind];
+      const hitHalfWidth = weaponDef?.projectileHitHalfWidth ?? BULLET_HALF_WIDTH;
       const hit = this.world.castRayAndGetNormal(
         ray,
-        Math.abs(dx) + BULLET_HALF_WIDTH,
+        Math.abs(dx) + hitHalfWidth,
         false,
         undefined,
         undefined,
@@ -1133,7 +1135,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private chooseSpawnedItemKind(slotIndex: number): ItemKind {
-    return SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length];
+    return SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length] ?? ItemKind.Gun;
   }
 
   private handleBlastZoneDeaths(): void {
@@ -1282,14 +1284,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.nextBulletId = (bulletId % BULLET_ID_MAX) + 1;
 
     const position = owner.body.translation();
-    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05);
+    const spawnX =
+      position.x
+      + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05 + (def.projectileSpawnOffsetX ?? 0));
+    const spawnY = position.y + (def.projectileSpawnOffsetY ?? 0);
     const speed = def.projectileSpeed ?? BULLET_SPEED;
     const lifetime = def.projectileLifetimeTicks ?? BULLET_LIFETIME_TICKS;
 
     this.bullets.set(bulletId, {
       id: bulletId,
       x: spawnX,
-      y: position.y,
+      y: spawnY,
       vx: owner.facing * speed,
       vy: 0,
       ticksRemaining: lifetime,
