@@ -7,17 +7,18 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  ci:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -31,3 +32,19 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Start server
+        run: npm start &
+
+      - name: Verify server listens on port 3000
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:3000 > /dev/null; then
+              echo "Server is up on port 3000"
+              exit 0
+            fi
+            echo "Waiting for server... attempt $i/15"
+            sleep 2
+          done
+          echo "Server failed to start on port 3000"
+          exit 1
