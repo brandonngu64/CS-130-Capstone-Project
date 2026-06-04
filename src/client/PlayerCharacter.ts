@@ -35,6 +35,7 @@ export class PlayerCharacter {
   public gunFireCooldownTicks: number;
   public reloadPending: boolean;
   public reloadPendingOnKill: boolean;
+  public knockbackTicksRemaining: number;
 
   constructor(
     id: string,
@@ -61,6 +62,7 @@ export class PlayerCharacter {
     this.gunFireCooldownTicks = 0;
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
+    this.knockbackTicksRemaining = 0;
   }
 
   takeDamage(amount: number): number {
@@ -149,5 +151,6 @@ export class PlayerCharacter {
     this.gunFireCooldownTicks = 0;
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
+    this.knockbackTicksRemaining = 0;
   }
 }
