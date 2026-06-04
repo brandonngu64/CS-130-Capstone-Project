@@ -80,7 +80,7 @@ export class GameRenderer {
     this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xdbe9f4);
+    this.scene.background = new THREE.Color(0xa7c5dd);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
     this.camera.position.set(0, 0, 12);
@@ -544,7 +544,7 @@ export class GameRenderer {
 
   private setupBackdrop(map: TiledMapDefinition): THREE.Mesh {
     const geometry = new THREE.PlaneGeometry(map.bounds.width + 12, map.bounds.height + 12);
-    const material = new THREE.MeshBasicMaterial({ color: 0xdbe9f4 });
+    const material = new THREE.MeshBasicMaterial({ color: 0xa7c5dd });
     const backdrop = new THREE.Mesh(geometry, material);
     backdrop.position.set(0, 0, -2);
     this.scene.add(backdrop);
