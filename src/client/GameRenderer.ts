@@ -544,7 +544,7 @@ export class GameRenderer {
 
   private setupBackdrop(map: TiledMapDefinition): THREE.Mesh {
     const geometry = new THREE.PlaneGeometry(map.bounds.width + 12, map.bounds.height + 12);
-    const material = new THREE.MeshBasicMaterial({ color: 0x0f141f });
+    const material = new THREE.MeshBasicMaterial({ color: 0xdbe9f4 });
     const backdrop = new THREE.Mesh(geometry, material);
     backdrop.position.set(0, 0, -2);
     this.scene.add(backdrop);
