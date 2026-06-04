@@ -353,17 +353,21 @@ function resolveTileMetadataByGlobalId(
   return lookup;
 }
 
-function layerBaseZ(layerName: string, layerIndex: number): number {
-  switch (layerName) {
-    case 'background':
-      return -1;
-    case 'level_layer':
-      return 0;
-    case 'foreground':
-      return 1;
-    default:
-      return layerIndex * 0.1;
+function computeLayerZ(rawIndex: number, levelLayerIndex: number, totalLayers: number): number {
+  if (rawIndex === levelLayerIndex) {
+    return 0;
   }
+
+  if (rawIndex < levelLayerIndex) {
+    // Background layers: z from -0.9 (backmost) to -0.1 (just behind level_layer)
+    const t = levelLayerIndex > 1 ? rawIndex / (levelLayerIndex - 1) : 0;
+    return -0.9 + t * 0.8;
+  }
+
+  // Foreground layers: z from 0.6 (just in front of players ~0.35–0.5) to 1.0 (frontmost)
+  const fgCount = totalLayers - levelLayerIndex - 1;
+  const t = fgCount > 1 ? (rawIndex - levelLayerIndex - 1) / (fgCount - 1) : 0;
+  return 0.6 + t * 0.4;
 }
 
 function buildMapBounds(width: number, height: number): MapBounds {
@@ -554,20 +558,9 @@ function buildLayerInstances(
   const halfWidth = rawMap.width / 2;
   const halfHeight = rawMap.height / 2;
 
-  const orderedLayers = rawMap.layers
-    .map((layer, index) => ({
-      index,
-      layer,
-      order:
-        layer.name === 'background'
-          ? 0
-          : layer.name === 'level_layer'
-            ? 1
-            : layer.name === 'foreground'
-              ? 2
-              : 3 + index,
-    }))
-    .sort((left, right) => left.order - right.order || left.index - right.index);
+  const levelLayerIndex = rawMap.layers.findIndex((l) => l.name === 'level_layer');
+  const effectiveLevelIndex = levelLayerIndex >= 0 ? levelLayerIndex : Math.floor(rawMap.layers.length / 2);
+  const orderedLayers = rawMap.layers.map((layer, index) => ({ index, layer }));
 
   for (const entry of orderedLayers) {
     const rawLayer = entry.layer;
@@ -610,7 +603,7 @@ function buildLayerInstances(
         const resolvedTile = tileRecord.metadata;
         const worldX = tileX + 0.5 - halfWidth;
         const worldY = halfHeight - tileY - 0.5;
-        const tileDepth = layerBaseZ(rawLayer.name, entry.index) + resolvedTile.zLayerPos * 0.01;
+        const tileDepth = computeLayerZ(entry.index, effectiveLevelIndex, rawMap.layers.length) + resolvedTile.zLayerPos * 0.01;
         const renderVisible = visible && resolvedTile.renderVisible;
         const collision = rawLayer.name === 'level_layer' ? resolvedTile.collision : 0;
         const specialRole = rawLayer.name === 'level_layer' ? resolvedTile.specialRole : null;
