@@ -4,7 +4,7 @@ import {
   DEFAULT_CHARACTER_ID,
   isCharacterId,
 } from './constants';
-import { ItemKind, getWhipPhase } from './items';
+import { ItemKind, WEAPON_SPRITE_CONFIG, getWhipPhase } from './items';
 import type { WeaponDefinition } from './items';
 
 const SPRITE_MODULES = import.meta.glob('../assets/characters/**/*.png', {
@@ -26,6 +26,7 @@ const WALK_VELOCITY_THRESHOLD = 0.35;
 // Add new holdable weapons here.
 export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
   [ItemKind.EthernetWhip]: 'ethernet_whip',
+  [ItemKind.BinaryBeam]: 'binary_beam',
 };
 
 export const PUNCH_WEAPON_NAME = 'punch';
@@ -52,6 +53,18 @@ export function getCharacterSpriteUrl(characterId: CharacterId, frame: string): 
     throw new Error(`Missing character sprite: ${characterId}/${frame}.png`);
   }
   return url;
+}
+
+export function getWeaponSpriteFolder(kind: ItemKind): string | undefined {
+  return WEAPON_SPRITE_NAMES[kind];
+}
+
+export function getWeaponPickupFrame(kind: ItemKind): string | undefined {
+  return WEAPON_SPRITE_CONFIG[kind]?.pickupFrame;
+}
+
+export function getWeaponProjectileFrame(kind: ItemKind): string | undefined {
+  return WEAPON_SPRITE_CONFIG[kind]?.projectileFrame;
 }
 
 export function getWeaponSpriteUrl(weaponName: string, frame: string): string {
@@ -123,6 +136,23 @@ export function resolveWhipFrame(
     return `${phase}_${direction}`; // e.g. windup_r, lash_l
   }
   return `idle_${direction}`;
+}
+
+/** Held-weapon sprite frame (GPU, whip phases, etc.). */
+export function resolveHeldWeaponFrame(
+  kind: ItemKind,
+  facing: number,
+  def: WeaponDefinition | undefined,
+  activeWeaponAttackTicksRemaining: number,
+): string {
+  const heldFrame = WEAPON_SPRITE_CONFIG[kind]?.heldFrame;
+  if (heldFrame) {
+    return heldFrame;
+  }
+  if (kind === ItemKind.EthernetWhip && def) {
+    return resolveWhipFrame(facing, def, activeWeaponAttackTicksRemaining);
+  }
+  return `idle_${facing < 0 ? 'l' : 'r'}`;
 }
 
 export function normalizeCharacterId(value: string | null | undefined): CharacterId {
