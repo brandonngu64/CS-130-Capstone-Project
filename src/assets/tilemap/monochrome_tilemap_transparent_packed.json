@@ -1,5 +1,5 @@
 { "columns":20,
- "image":"..\/Documents\/Tiled\/1bit-platformer\/Tilemap\/monochrome_tilemap_transparent_packed.png",
+ "image":"Tilemap\/monochrome_tilemap_transparent_packed.png",
  "imageheight":320,
  "imagewidth":320,
  "margin":0,
@@ -556,7 +556,7 @@
                 {
                  "name":"collision",
                  "type":"int",
-                 "value":0
+                 "value":1
                 }]
         }, 
         {
@@ -727,7 +727,7 @@
                 {
                  "name":"collision",
                  "type":"int",
-                 "value":0
+                 "value":1
                 }]
         }, 
         {
@@ -736,7 +736,7 @@
                 {
                  "name":"collision",
                  "type":"int",
-                 "value":0
+                 "value":1
                 }]
         }, 
         {
@@ -907,7 +907,7 @@
                 {
                  "name":"collision",
                  "type":"int",
-                 "value":0
+                 "value":1
                 }]
         }, 
         {
@@ -916,7 +916,7 @@
                 {
                  "name":"collision",
                  "type":"int",
-                 "value":0
+                 "value":1
                 }]
         }, 
         {
