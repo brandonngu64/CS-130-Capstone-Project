@@ -2,8 +2,11 @@ import * as THREE from 'three';
 import {
   getCharacterSpriteUrl,
   getWeaponSpriteUrl,
+  PUNCH_SPRITE_HEIGHT_RATIO,
+  PUNCH_WEAPON_NAME,
   resolveCharacterFrame,
   resolveCharacterFrameKey,
+  resolvePunchSpriteVariant,
   resolveWhipFrame,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
@@ -32,6 +35,11 @@ type PlayerSpriteMesh = {
 };
 
 type WeaponSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+};
+
+type AttackSpriteMesh = {
   mesh: THREE.Mesh;
   lastFrameKey: string;
 };
@@ -66,7 +74,7 @@ export class GameRenderer {
   private readonly cameraTarget = new THREE.Vector2();
   private cameraMode: CameraMode = 'follow';
   private readonly textureLoader = new THREE.TextureLoader();
-  private readonly attackMeshes = new Map<string, THREE.Mesh>();
+  private readonly attackMeshes = new Map<string, AttackSpriteMesh>();
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
   private readonly bulletMeshes = new Map<number, THREE.Mesh>();
   private cameraLockTarget: THREE.Vector2 | null = null;
@@ -248,20 +256,55 @@ export class GameRenderer {
     const activeAttackIds = new Set(state.attacks.map((attack: RenderState['attacks'][number]) => attack.id));
 
     for (const attack of state.attacks) {
-      let mesh = this.attackMeshes.get(attack.id);
-      if (!mesh) {
-        mesh = this.createAttackMesh(attack.width, attack.height, attack.color);
-        this.scene.add(mesh);
-        this.attackMeshes.set(attack.id, mesh);
+      const variant = resolvePunchSpriteVariant(attack.characterId);
+      const frameKey = `${attack.id}:${variant}`;
+
+      let attackSprite = this.attackMeshes.get(attack.id);
+      if (!attackSprite) {
+        attackSprite = this.createAttackSpriteMesh();
+        this.scene.add(attackSprite.mesh);
+        this.attackMeshes.set(attack.id, attackSprite);
       }
-      mesh.position.set(attack.x, attack.y, 0.5);
+
+      if (attackSprite.lastFrameKey !== frameKey) {
+        const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+        const prev = attackSprite.mesh.material as THREE.MeshBasicMaterial;
+        prev.dispose();
+        attackSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+        attackSprite.lastFrameKey = frameKey;
+      }
+
+      const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+      const aspect = this.resolveSpriteAspectRatio(cachedTex);
+      const displayHeight = attack.displayHeight * PUNCH_SPRITE_HEIGHT_RATIO;
+      const displayWidth = displayHeight * aspect;
+
+      attackSprite.mesh.scale.set(displayWidth * attack.facing, displayHeight, 1);
+
+      const playerId = attack.id.slice(0, -'-attack'.length);
+      const player = state.players.find((p) => p.id === playerId);
+      const spriteX = player
+        ? player.x + attack.facing * (
+          this.resolveCharacterVisualHalfWidth(player, state.animTick) + displayWidth * 0.5
+        )
+        : attack.x;
+      attackSprite.mesh.position.set(spriteX, attack.y, 0.5);
+
+      const playerMesh = this.playerMeshes.get(playerId);
+      const playerOpacity = playerMesh
+        ? (playerMesh.mesh.material as THREE.MeshBasicMaterial).opacity
+        : 1;
+      const attackMaterial = attackSprite.mesh.material as THREE.MeshBasicMaterial;
+      attackMaterial.opacity = playerOpacity;
+      attackMaterial.transparent = playerOpacity < 1;
+      attackMaterial.depthWrite = playerOpacity >= 1;
     }
 
-    for (const [id, mesh] of this.attackMeshes) {
+    for (const [id, attackSprite] of this.attackMeshes) {
       if (!activeAttackIds.has(id)) {
-        this.scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.scene.remove(attackSprite.mesh);
+        attackSprite.mesh.geometry.dispose();
+        (attackSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
         this.attackMeshes.delete(id);
       }
     }
@@ -388,10 +431,10 @@ export class GameRenderer {
     }
     this.spriteTextureCache.clear();
 
-    for (const [, mesh] of this.attackMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    for (const [, attackSprite] of this.attackMeshes) {
+      this.scene.remove(attackSprite.mesh);
+      attackSprite.mesh.geometry.dispose();
+      (attackSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
     }
     this.attackMeshes.clear();
 
@@ -756,6 +799,21 @@ export class GameRenderer {
     return cached.aspectRatio > 0 ? cached.aspectRatio : 1;
   }
 
+  private resolveCharacterVisualHalfWidth(
+    player: RenderState['players'][number],
+    animTick: number,
+  ): number {
+    const frame = resolveCharacterFrame(
+      player.facing,
+      player.heldItem,
+      player.vx,
+      animTick,
+    );
+    const cached = this.getCachedSpriteTexture(player.characterId, frame);
+    const aspect = this.resolveSpriteAspectRatio(cached);
+    return (player.height * aspect) * 0.5;
+  }
+
   private readTextureAspectRatio(texture: THREE.Texture): number {
     const image = texture.image as { width?: number; height?: number } | undefined;
     if (image?.width && image?.height) {
@@ -764,14 +822,8 @@ export class GameRenderer {
     return 0;
   }
 
-  private createAttackMesh(width: number, height: number, color: number): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(width, height, 0.5);
-    const material = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.35,
-      metalness: 0.05,
-    });
-    return new THREE.Mesh(geometry, material);
+  private createAttackSpriteMesh(): AttackSpriteMesh {
+    return this.createWeaponSpriteMesh();
   }
 
   private createItemMesh(kind: ItemKind): THREE.Mesh {

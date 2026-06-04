@@ -46,9 +46,9 @@ export interface AttackRenderState {
   id: string;
   x: number;
   y: number;
-  width: number;
-  height: number;
-  color: number;
+  characterId: CharacterId;
+  facing: number;
+  displayHeight: number;
 }
 
 export interface PlayerRenderState {
@@ -571,9 +571,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         id: `${id}-attack`,
         x: center.x,
         y: center.y,
-        width: definition.hitboxHalfWidth * 2,
-        height: definition.hitboxHalfHeight * 2,
-        color: record.color,
+        characterId: record.characterId,
+        facing: record.facing,
+        displayHeight: PLAYER_HALF_HEIGHT * 2,
       });
     }
 
