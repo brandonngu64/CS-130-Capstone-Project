@@ -512,12 +512,12 @@ export class GameRenderer {
         const spriteConfig = WEAPON_SPRITE_CONFIG[bullet.kind];
         const cachedTex = this.getWeaponSpriteTexture(weaponName, projectileFrame);
         const aspect = this.resolveSpriteAspectRatio(cachedTex);
-        const scaleX = (spriteConfig?.projectileScaleX ?? 1) * bullet.facing;
-        const scaleY = spriteConfig?.projectileScaleY ?? 1;
+        const scaleXMult = spriteConfig?.projectileScaleX ?? 1;
+        const scaleYMult = spriteConfig?.projectileScaleY ?? 1;
         const displayHeight = 0.35;
         const displayWidth = displayHeight * aspect;
-        projectileSprite.mesh.scale.set(displayWidth * scaleX, displayHeight * scaleY, 1);
-        projectileSprite.mesh.rotation.z = bullet.facing < 0 ? Math.PI : 0;
+        projectileSprite.mesh.scale.set(displayWidth * scaleXMult * bullet.facing, displayHeight * scaleYMult, 1);
+        projectileSprite.mesh.rotation.z = 0;
         projectileSprite.mesh.position.set(bullet.x, bullet.y, 0.38);
         continue;
       }
