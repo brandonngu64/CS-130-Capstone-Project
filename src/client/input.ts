@@ -5,7 +5,6 @@ export enum InputBits {
   Duck  = 1 << 3,
   Punch = 1 << 4,
   Dash  = 1 << 5,
-  Shoot = 1 << 6,
 }
 
 export interface InputState {
@@ -15,7 +14,6 @@ export interface InputState {
   duck: boolean;
   punch: boolean;
   dash: boolean;
-  shoot: boolean;
 }
 
 export function encodeInput(state: InputState): Uint8Array {
@@ -37,9 +35,6 @@ export function encodeInput(state: InputState): Uint8Array {
   }
   if (state.dash) {
     bits |= InputBits.Dash;
-  }
-  if (state.shoot) {
-    bits |= InputBits.Shoot;
   }
   return new Uint8Array([bits]);
 }

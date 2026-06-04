@@ -819,9 +819,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const jumpPressed = (inputFlags & InputBits.Jump) !== 0 && (previousFlags & InputBits.Jump) === 0;
     const ducking = (inputFlags & InputBits.Duck) !== 0;
-    const punchPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
+    const attackPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
     const dashPressed = (inputFlags & InputBits.Dash) !== 0 && (previousFlags & InputBits.Dash) === 0;
-    const shootPressed = (inputFlags & InputBits.Shoot) !== 0 && (previousFlags & InputBits.Shoot) === 0;
 
     if (record.dashTicksRemaining > 0) {
       body.setLinvel({ x: record.facing * DASH_SPEED, y: velocity.y }, true);
@@ -835,18 +834,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       nextYVelocity = JUMP_SPEED;
     }
 
-    // Default punch — only when no item held
-    if (punchPressed && record.activeAttack === null && record.canPunch()) {
-      const definition = getEquippedAttack(record.equippedWeapon);
-      record.activeAttack = {
-        kind: definition.kind,
-        ticksRemaining: definition.durationTicks,
-      };
-      this.resolvePunchHits(id, definition);
-    }
-
     if (
-      shootPressed &&
+      attackPressed &&
       record.gunFireCooldownTicks === 0 &&
       record.canShoot()
     ) {
@@ -859,8 +848,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
     }
 
-    // Melee weapon (whip, etc.) or projectile weapon (finals, etc.) triggered by Shoot key
-    if (shootPressed && record.canUseWeapon()) {
+    // Use U key input for weapon and default attacks.
+    if (attackPressed && record.canUseWeapon()) {
       const heldKind = record.heldItem!;
       const def = WEAPON_DEFINITIONS[heldKind];
       if (def?.kind === 'melee') {
@@ -873,6 +862,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.fireProjectileWeapon(record, def, heldKind);
         record.weaponCooldownTicks = def.cooldownTicks;
       }
+    }
+
+    if (attackPressed && record.activeAttack === null && record.canPunch()) {
+      const definition = getEquippedAttack(record.equippedWeapon);
+      record.activeAttack = {
+        kind: definition.kind,
+        ticksRemaining: definition.durationTicks,
+      };
+      this.resolvePunchHits(id, definition);
     }
 
     if (dashPressed && record.canDash()) {
