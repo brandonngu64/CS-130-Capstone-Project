@@ -67,6 +67,7 @@ export interface PlayerRenderState {
   heldItem: ItemKind | null;
   facing: number;
   vx: number;
+  gunFireCooldownTicks: number;
   activeWeaponAttack: { defKind: ItemKind; ticksRemaining: number } | null;
 }
 
@@ -610,6 +611,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           heldItem: record.heldItem,
           facing: record.facing,
           vx: velocity.x,
+          gunFireCooldownTicks: record.gunFireCooldownTicks,
           activeWeaponAttack: record.activeWeaponAttack
             ? { defKind: record.heldItem!, ticksRemaining: record.activeWeaponAttack.ticksRemaining }
             : null,
@@ -850,7 +852,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     ) {
       const weapon = K_getWeaponDefinition(record.heldItem!);
       this.fireBullet(record, weapon);
-      record.gunFireCooldownTicks = weapon.fireRate;
+      record.gunFireCooldownTicks = Math.max(1, Math.round(weapon.fireRate));
       if (weapon.reloadOnHit || weapon.reloadOnKill) {
         record.reloadPending = true;
         record.reloadPendingOnKill = weapon.reloadOnKill;

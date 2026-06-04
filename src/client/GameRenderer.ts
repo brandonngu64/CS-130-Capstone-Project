@@ -3,6 +3,9 @@ import {
   CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
   getWeaponSpriteUrl,
+  PEN_CROSSBOW_HOLD_FRAME,
+  PEN_CROSSBOW_PROJECTILE_FRAME,
+  PEN_CROSSBOW_TEXTURE_PIXELS,
   PAPER_STACK_HOLD_FRAME,
   PAPER_STACK_PROJECTILE_FRAME,
   PAPER_STACK_TEXTURE_PIXELS,
@@ -28,8 +31,12 @@ import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
 const CAMERA_MARGIN = 1.5;
 
-function isKyleWeaponKind(kind: ItemKind): boolean {
-  return kind === ItemKind.Gun || kind === ItemKind.PenCrossbow;
+function usesKyleGenericHeldMesh(kind: ItemKind): boolean {
+  return kind === ItemKind.Gun;
+}
+
+function usesKyleGenericProjectileMesh(kind: ItemKind): boolean {
+  return kind === ItemKind.Gun;
 }
 
 export type CameraMode = 'follow' | 'free' | 'action';
@@ -92,6 +99,15 @@ const PAPER_STACK_WIDTH_SCALE = 0.62;
 /** Uniform scale on paper_sheet projectile (preserves PNG aspect). */
 const PAPER_SHEET_SCALE = 1.2;
 const PAPER_STACK_ITEM_Y_OFFSET = -0.22;
+
+// Pen crossbow held near the character's hand (kyle weapon sprite path).
+const PEN_CROSSBOW_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.62;
+const PEN_CROSSBOW_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.08;
+const PEN_CROSSBOW_UNIFORM_SCALE = 0.78;
+const PEN_CROSSBOW_WIDTH_SCALE = 1;
+/** Uniform scale on bolt projectile (preserves PNG aspect). */
+const PEN_CROSSBOW_BOLT_SCALE = 1.2;
+const PEN_CROSSBOW_ITEM_Y_OFFSET = -0.22;
 
 function resolveWhipHoldPosition(
   playerX: number,
@@ -163,6 +179,18 @@ function resolvePaperStackHoldPosition(
   return {
     x: playerX + facing * (PAPER_STACK_HAND_OFFSET_X + displayWidth * 0.5),
     y: playerY + PAPER_STACK_HAND_OFFSET_Y,
+  };
+}
+
+function resolvePenCrossbowHoldPosition(
+  playerX: number,
+  playerY: number,
+  facing: number,
+  displayWidth: number,
+): { x: number; y: number } {
+  return {
+    x: playerX + facing * (PEN_CROSSBOW_HAND_OFFSET_X + displayWidth * 0.5),
+    y: playerY + PEN_CROSSBOW_HAND_OFFSET_Y,
   };
 }
 
@@ -286,14 +314,37 @@ export class GameRenderer {
     for (const player of state.players) {
       const weapon = this.weaponMeshes.get(player.id);
       const laser = this.laserSightMeshes.get(player.id);
+      const heldItem = player.heldItem;
 
-      if (player.heldItem === null || !isKyleWeaponKind(player.heldItem)) {
+      if (heldItem === null || !usesKyleGenericHeldMesh(heldItem)) {
         if (weapon) {
           this.scene.remove(weapon);
           weapon.geometry.dispose();
           (weapon.material as THREE.Material).dispose();
           this.weaponMeshes.delete(player.id);
         }
+      } else {
+        if (!weapon || weapon.userData.kind !== heldItem) {
+          if (weapon) {
+            this.scene.remove(weapon);
+            weapon.geometry.dispose();
+            (weapon.material as THREE.Material).dispose();
+            this.weaponMeshes.delete(player.id);
+          }
+          const nextWeapon = K_createWeaponMesh(heldItem, this.textureLoader);
+          nextWeapon.userData.kind = heldItem;
+          this.scene.add(nextWeapon);
+          this.weaponMeshes.set(player.id, nextWeapon);
+        }
+
+        const currentWeapon = this.weaponMeshes.get(player.id);
+        if (currentWeapon) {
+          currentWeapon.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
+          currentWeapon.visible = true;
+        }
+      }
+
+      if (heldItem !== ItemKind.PenCrossbow) {
         if (laser) {
           this.scene.remove(laser);
           laser.geometry.dispose();
@@ -301,25 +352,6 @@ export class GameRenderer {
           this.laserSightMeshes.delete(player.id);
         }
         continue;
-      }
-
-      if (!weapon || weapon.userData.kind !== player.heldItem) {
-        if (weapon) {
-          this.scene.remove(weapon);
-          weapon.geometry.dispose();
-          (weapon.material as THREE.Material).dispose();
-          this.weaponMeshes.delete(player.id);
-        }
-        const nextWeapon = K_createWeaponMesh(player.heldItem, this.textureLoader);
-        nextWeapon.userData.kind = player.heldItem;
-        this.scene.add(nextWeapon);
-        this.weaponMeshes.set(player.id, nextWeapon);
-      }
-
-      const currentWeapon = this.weaponMeshes.get(player.id);
-      if (currentWeapon) {
-        currentWeapon.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
-        currentWeapon.visible = true;
       }
 
       let currentLaser = laser;
@@ -330,7 +362,7 @@ export class GameRenderer {
       }
       currentLaser.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.30);
       currentLaser.rotation.z = player.facing === -1 ? Math.PI : 0;
-      currentLaser.visible = player.heldItem === ItemKind.PenCrossbow;
+      currentLaser.visible = true;
     }
 
     for (const [id, playerSprite] of this.playerMeshes) {
@@ -377,12 +409,18 @@ export class GameRenderer {
         continue;
       }
 
-      const def = player.heldItem !== null ? WEAPON_DEFINITIONS[player.heldItem] : undefined;
-      if (!def) continue;
+      const heldItem = player.heldItem!;
+      const def = WEAPON_DEFINITIONS[heldItem];
+      // PenCrossbow uses kyleWeapons for gameplay; only sprite weapons in items.WEAPON_DEFINITIONS need def here.
+      if (heldItem === ItemKind.EthernetWhip && !def) continue;
 
       const ticksRemaining = player.activeWeaponAttack?.ticksRemaining ?? 0;
-      const heldItem = player.heldItem!;
-      const weaponFrame = resolveHeldWeaponFrame(heldItem, def, ticksRemaining);
+      const weaponFrame = resolveHeldWeaponFrame(
+        heldItem,
+        def,
+        ticksRemaining,
+        player.gunFireCooldownTicks,
+      );
       const weaponFrameKey = `${player.id}:${weaponName}:${weaponFrame}`;
 
       let weaponSprite = this.weaponSpriteMeshes.get(player.id);
@@ -437,7 +475,7 @@ export class GameRenderer {
           frameSize.displayHeight,
           getEthernetWhipBottomInset(weaponFrame),
         );
-      } else {
+      } else if (heldItem === ItemKind.Finals) {
         const frameSize = this.applyPaperStackMeshScale(weaponSprite.mesh, weaponName);
         weaponSprite.mesh.scale.x = frameSize.displayWidth * player.facing;
         whipPos = resolvePaperStackHoldPosition(
@@ -446,6 +484,17 @@ export class GameRenderer {
           player.facing,
           frameSize.displayWidth,
         );
+      } else if (heldItem === ItemKind.PenCrossbow) {
+        const frameSize = this.applyPenCrossbowMeshScale(weaponSprite.mesh, weaponName);
+        weaponSprite.mesh.scale.x = frameSize.displayWidth * player.facing;
+        whipPos = resolvePenCrossbowHoldPosition(
+          player.x,
+          player.y,
+          player.facing,
+          frameSize.displayWidth,
+        );
+      } else {
+        throw new Error(`Unhandled sprite weapon: ${heldItem}`);
       }
 
       weaponSprite.mesh.position.set(whipPos.x, whipPos.y, 0.36);
@@ -534,7 +583,7 @@ export class GameRenderer {
     for (const item of state.items) {
       let mesh = this.itemMeshes.get(item.id);
       if (!mesh) {
-        mesh = isKyleWeaponKind(item.kind)
+        mesh = usesKyleGenericProjectileMesh(item.kind)
           ? K_createDroppedItemMesh(item.kind, this.textureLoader)
           : this.createItemMesh(item.kind);
         this.scene.add(mesh);
@@ -558,6 +607,23 @@ export class GameRenderer {
         mesh.userData.itemCenterLift = (
           frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PAPER_STACK_ITEM_Y_OFFSET
         );
+      } else if (item.kind === ItemKind.PenCrossbow) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.PenCrossbow];
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for PenCrossbow');
+        }
+        const cached = this.getWeaponSpriteTexture(weaponName, PEN_CROSSBOW_HOLD_FRAME);
+        const frameSize = this.applyPenCrossbowMeshScale(mesh, weaponName);
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        if (material.map !== cached.texture) {
+          material.map = cached.texture;
+          material.needsUpdate = true;
+        }
+        material.visible = true;
+        mesh.visible = true;
+        mesh.userData.itemCenterLift = (
+          frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PEN_CROSSBOW_ITEM_Y_OFFSET
+        );
       }
 
       // Bob gently up and down so items are easy to spot
@@ -579,7 +645,7 @@ export class GameRenderer {
     const activeBulletIds = new Set(state.bullets.map((bullet: RenderState['bullets'][number]) => bullet.id));
 
     for (const bullet of state.bullets) {
-      if (isKyleWeaponKind(bullet.kind)) {
+      if (usesKyleGenericProjectileMesh(bullet.kind)) {
         let mesh = this.kyleBulletMeshes.get(bullet.id);
         if (!mesh) {
           mesh = K_createProjectileMesh(bullet.kind, this.textureLoader);
@@ -616,6 +682,27 @@ export class GameRenderer {
         bulletSprite.mesh.scale.set(
           sheetSize.displayWidth * bullet.facing,
           sheetSize.displayHeight,
+          1,
+        );
+      } else if (bullet.kind === ItemKind.PenCrossbow) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.PenCrossbow];
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for PenCrossbow');
+        }
+        const frameKey = `${bullet.id}:${PEN_CROSSBOW_PROJECTILE_FRAME}`;
+        if (bulletSprite.lastFrameKey !== frameKey) {
+          const cachedTex = this.getWeaponSpriteTexture(weaponName, PEN_CROSSBOW_PROJECTILE_FRAME);
+          const prev = bulletSprite.mesh.material as THREE.MeshBasicMaterial;
+          prev.dispose();
+          bulletSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+          bulletSprite.lastFrameKey = frameKey;
+        }
+
+        const crossbowSize = this.resolvePenCrossbowDisplaySize(weaponName);
+        const boltSize = this.resolvePenCrossbowBoltDisplaySize(weaponName, crossbowSize.displayWidth);
+        bulletSprite.mesh.scale.set(
+          boltSize.displayWidth * bullet.facing,
+          boltSize.displayHeight,
           1,
         );
       }
@@ -1128,6 +1215,39 @@ export class GameRenderer {
     return { displayWidth, displayHeight };
   }
 
+  private resolvePenCrossbowDisplaySize(
+    _weaponName: string,
+  ): { displayWidth: number; displayHeight: number } {
+    const worldPerPixel = (
+      (PLAYER_HALF_HEIGHT * 2) / CHARACTER_SPRITE_PIXEL_HEIGHT
+    ) * PEN_CROSSBOW_UNIFORM_SCALE;
+    return {
+      displayWidth: PEN_CROSSBOW_TEXTURE_PIXELS.width * worldPerPixel * PEN_CROSSBOW_WIDTH_SCALE,
+      displayHeight: PEN_CROSSBOW_TEXTURE_PIXELS.height * worldPerPixel,
+    };
+  }
+
+  private applyPenCrossbowMeshScale(
+    mesh: THREE.Mesh,
+    weaponName: string,
+  ): { displayWidth: number; displayHeight: number } {
+    const frameSize = this.resolvePenCrossbowDisplaySize(weaponName);
+    mesh.scale.set(frameSize.displayWidth, frameSize.displayHeight, 1);
+    return frameSize;
+  }
+
+  /** Projectile sized from crossbow width, bolt aspect, then uniform scale. */
+  private resolvePenCrossbowBoltDisplaySize(
+    weaponName: string,
+    crossbowDisplayWidth: number,
+  ): { displayWidth: number; displayHeight: number } {
+    const cached = this.getWeaponSpriteTexture(weaponName, PEN_CROSSBOW_PROJECTILE_FRAME);
+    const aspect = this.resolveSpriteAspectRatio(cached);
+    const displayWidth = crossbowDisplayWidth * PEN_CROSSBOW_BOLT_SCALE;
+    const displayHeight = aspect > 0 ? displayWidth / aspect : displayWidth;
+    return { displayWidth, displayHeight };
+  }
+
   /** Idle-sized in world units; attack frames scale by source pixel size vs idle. */
   private resolveWhipDisplaySize(
     weaponName: string,
@@ -1242,6 +1362,21 @@ export class GameRenderer {
       return sprite.mesh;
     }
 
+    if (kind === ItemKind.PenCrossbow) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.PenCrossbow];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for PenCrossbow');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, PEN_CROSSBOW_HOLD_FRAME);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      const frameSize = this.applyPenCrossbowMeshScale(sprite.mesh, weaponName);
+      sprite.mesh.userData.itemCenterLift = (
+        frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PEN_CROSSBOW_ITEM_Y_OFFSET
+      );
+      return sprite.mesh;
+    }
+
     const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
     const material = new THREE.MeshStandardMaterial({
       color: GUN_COLOR,
@@ -1266,6 +1401,24 @@ export class GameRenderer {
         mesh: sprite.mesh,
         lastFrameKey: `${PAPER_STACK_PROJECTILE_FRAME}`,
         kind: ItemKind.Finals,
+      };
+    }
+
+    if (kind === ItemKind.PenCrossbow) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.PenCrossbow];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for PenCrossbow');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, PEN_CROSSBOW_PROJECTILE_FRAME);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      const crossbowSize = this.resolvePenCrossbowDisplaySize(weaponName);
+      const boltSize = this.resolvePenCrossbowBoltDisplaySize(weaponName, crossbowSize.displayWidth);
+      sprite.mesh.scale.set(boltSize.displayWidth, boltSize.displayHeight, 1);
+      return {
+        mesh: sprite.mesh,
+        lastFrameKey: `${PEN_CROSSBOW_PROJECTILE_FRAME}`,
+        kind: ItemKind.PenCrossbow,
       };
     }
 

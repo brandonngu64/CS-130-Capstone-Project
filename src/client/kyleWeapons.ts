@@ -1,5 +1,17 @@
 import * as THREE from 'three';
-import { BULLET_DAMAGE, BULLET_SPEED, GUN_FIRE_COOLDOWN_TICKS } from './constants';
+import {
+  PEN_CROSSBOW_HOLD_FRAME,
+  PEN_CROSSBOW_PROJECTILE_FRAME,
+  getWeaponSpriteUrl,
+  WEAPON_SPRITE_NAMES,
+} from './CharacterSprites';
+import {
+  BULLET_DAMAGE,
+  BULLET_SPEED,
+  GUN_FIRE_COOLDOWN_TICKS,
+  PEN_CROSSBOW_BOLT_SPEED,
+  PEN_CROSSBOW_FIRE_COOLDOWN_TICKS,
+} from './constants';
 import { ItemKind } from './items';
 
 export enum projectileSprite {
@@ -53,15 +65,15 @@ export const PenCrossbow: K_Weapon = {
   kind: ItemKind.PenCrossbow,
   damage: 80,
   ammo: 1,
-  fireRate: 0.1,
+  fireRate: PEN_CROSSBOW_FIRE_COOLDOWN_TICKS,
 
-  projectileSpeed: 100,
+  projectileSpeed: PEN_CROSSBOW_BOLT_SPEED,
   projectileSprite: projectileSprite.Pencil,
   projectileType: ProjectileType.Bullet,
   projectileGravity: 0,
 
-  reloadOnHit: true,
-  reloadOnKill: false,
+  reloadOnHit: false,
+  reloadOnKill: true,
 
   laserSight: true,
   cookable: false,
@@ -121,26 +133,51 @@ function createGenericGunMesh(): THREE.Mesh {
   return new THREE.Mesh(geometry, material);
 }
 
+function createSpriteMesh(textureLoader: THREE.TextureLoader, weaponName: string, frame: string): THREE.Mesh {
+  const texture = textureLoader.load(getWeaponSpriteUrl(weaponName, frame));
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const geometry = new THREE.PlaneGeometry(1, 1);
+  const material = new THREE.MeshBasicMaterial({
+    alphaTest: 0.001,
+    color: 0xffffff,
+    depthWrite: true,
+    map: texture,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    transparent: false,
+  });
+  return new THREE.Mesh(geometry, material);
+}
+
+function penCrossbowWeaponName(): string {
+  const weaponName = WEAPON_SPRITE_NAMES[ItemKind.PenCrossbow];
+  if (!weaponName) {
+    throw new Error('Missing weapon sprite name for PenCrossbow');
+  }
+  return weaponName;
+}
+
 export function K_createWeaponMesh(kind: ItemKind, textureLoader: THREE.TextureLoader): THREE.Mesh {
-  // Refactor note: weapon-specific visual meshes were removed. All weapons currently reuse the
-  // legacy generic gun mesh path until a dedicated visual is intentionally added back.
-  void kind;
-  void textureLoader;
+  if (kind === ItemKind.PenCrossbow) {
+    return createSpriteMesh(textureLoader, penCrossbowWeaponName(), PEN_CROSSBOW_HOLD_FRAME);
+  }
   return createGenericGunMesh();
 }
 
 export function K_createDroppedItemMesh(kind: ItemKind, textureLoader: THREE.TextureLoader): THREE.Mesh {
-  // Refactor note: dropped crossbow mesh override removed so dropped weapons share old generic visuals.
-  void kind;
-  void textureLoader;
+  if (kind === ItemKind.PenCrossbow) {
+    return createSpriteMesh(textureLoader, penCrossbowWeaponName(), PEN_CROSSBOW_HOLD_FRAME);
+  }
   return createGenericItemMesh();
 }
 
 export function K_createProjectileMesh(kind: ItemKind, textureLoader: THREE.TextureLoader): THREE.Mesh {
-  // Refactor note: crossbow projectile texture mesh removed; projectiles now use the existing generic mesh.
-  // If a future weapon needs a custom projectile visual, add it here with a dedicated helper function.
-  void kind;
-  void textureLoader;
+  if (kind === ItemKind.PenCrossbow) {
+    return createSpriteMesh(textureLoader, penCrossbowWeaponName(), PEN_CROSSBOW_PROJECTILE_FRAME);
+  }
   return createGenericProjectileMesh();
 }
 

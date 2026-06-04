@@ -27,6 +27,8 @@ export const BULLET_COLOR = 0xffe066;
 export const BULLET_ID_MAX = 255;
 export const BULLET_DAMAGE = 10;
 export const GUN_FIRE_COOLDOWN_TICKS = 15;
+export const PEN_CROSSBOW_FIRE_COOLDOWN_TICKS = 24;
+export const PEN_CROSSBOW_BOLT_SPEED = 50;
 
 export const PLAYER_COLOR_PALETTE = [
   0xe76f51,
