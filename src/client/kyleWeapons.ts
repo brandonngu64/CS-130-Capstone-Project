@@ -67,7 +67,7 @@ export const PenCrossbow: K_Weapon = {
   cookable: false,
 };
 
-export const WEAPON_DEFINITIONS: Readonly<Record<ItemKind, K_Weapon>> = {
+export const WEAPON_DEFINITIONS: Readonly<Partial<Record<ItemKind, K_Weapon>>> = {
   [ItemKind.Gun]: GunWeapon,
   [ItemKind.PenCrossbow]: PenCrossbow,
 };

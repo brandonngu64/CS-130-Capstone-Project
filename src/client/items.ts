@@ -24,6 +24,9 @@ export interface WeaponDefinition {
   // projectile only
   projectileSpeed?: number;
   projectileLifetimeTicks?: number;
+  reloadOnHit?: boolean;
+  reloadOnKill?: boolean;
+  projectileGravity?: number;
 }
 
 export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
