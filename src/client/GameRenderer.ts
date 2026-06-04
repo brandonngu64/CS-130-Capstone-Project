@@ -16,11 +16,21 @@ import {
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
 import { PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
+import {
+  K_createDroppedItemMesh,
+  K_createProjectileMesh,
+  K_createWeaponMesh,
+  K_renderLaserSight,
+} from './kyleWeapons';
 import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
 const CAMERA_MARGIN = 1.5;
+
+function isKyleWeaponKind(kind: ItemKind): boolean {
+  return kind === ItemKind.Gun || kind === ItemKind.PenCrossbow;
+}
 
 export type CameraMode = 'follow' | 'free' | 'action';
 
@@ -177,6 +187,9 @@ export class GameRenderer {
   private readonly attackMeshes = new Map<string, AttackSpriteMesh>();
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
   private readonly bulletMeshes = new Map<number, BulletSpriteMesh>();
+  private readonly kyleBulletMeshes = new Map<number, THREE.Mesh>();
+  private readonly weaponMeshes = new Map<string, THREE.Mesh>();
+  private readonly laserSightMeshes = new Map<string, THREE.Line>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
@@ -270,11 +283,79 @@ export class GameRenderer {
       material.depthWrite = !isTransparent;
     }
 
+    for (const player of state.players) {
+      const weapon = this.weaponMeshes.get(player.id);
+      const laser = this.laserSightMeshes.get(player.id);
+
+      if (player.heldItem === null || !isKyleWeaponKind(player.heldItem)) {
+        if (weapon) {
+          this.scene.remove(weapon);
+          weapon.geometry.dispose();
+          (weapon.material as THREE.Material).dispose();
+          this.weaponMeshes.delete(player.id);
+        }
+        if (laser) {
+          this.scene.remove(laser);
+          laser.geometry.dispose();
+          (laser.material as THREE.Material).dispose();
+          this.laserSightMeshes.delete(player.id);
+        }
+        continue;
+      }
+
+      if (!weapon || weapon.userData.kind !== player.heldItem) {
+        if (weapon) {
+          this.scene.remove(weapon);
+          weapon.geometry.dispose();
+          (weapon.material as THREE.Material).dispose();
+          this.weaponMeshes.delete(player.id);
+        }
+        const nextWeapon = K_createWeaponMesh(player.heldItem, this.textureLoader);
+        nextWeapon.userData.kind = player.heldItem;
+        this.scene.add(nextWeapon);
+        this.weaponMeshes.set(player.id, nextWeapon);
+      }
+
+      const currentWeapon = this.weaponMeshes.get(player.id);
+      if (currentWeapon) {
+        currentWeapon.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
+        currentWeapon.visible = true;
+      }
+
+      let currentLaser = laser;
+      if (!currentLaser) {
+        currentLaser = K_renderLaserSight(player.x, player.y + 0.1, player.facing);
+        this.scene.add(currentLaser);
+        this.laserSightMeshes.set(player.id, currentLaser);
+      }
+      currentLaser.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.30);
+      currentLaser.rotation.z = player.facing === -1 ? Math.PI : 0;
+      currentLaser.visible = player.heldItem === ItemKind.PenCrossbow;
+    }
+
     for (const [id, playerSprite] of this.playerMeshes) {
       if (!activeIds.has(id)) {
         this.scene.remove(playerSprite.mesh);
         playerSprite.mesh.geometry.dispose();
         this.playerMeshes.delete(id);
+      }
+    }
+
+    for (const [id, weapon] of this.weaponMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(weapon);
+        weapon.geometry.dispose();
+        (weapon.material as THREE.Material).dispose();
+        this.weaponMeshes.delete(id);
+      }
+    }
+
+    for (const [id, laser] of this.laserSightMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(laser);
+        laser.geometry.dispose();
+        (laser.material as THREE.Material).dispose();
+        this.laserSightMeshes.delete(id);
       }
     }
 
@@ -453,7 +534,9 @@ export class GameRenderer {
     for (const item of state.items) {
       let mesh = this.itemMeshes.get(item.id);
       if (!mesh) {
-        mesh = this.createItemMesh(item.kind);
+        mesh = isKyleWeaponKind(item.kind)
+          ? K_createDroppedItemMesh(item.kind, this.textureLoader)
+          : this.createItemMesh(item.kind);
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
@@ -496,6 +579,17 @@ export class GameRenderer {
     const activeBulletIds = new Set(state.bullets.map((bullet: RenderState['bullets'][number]) => bullet.id));
 
     for (const bullet of state.bullets) {
+      if (isKyleWeaponKind(bullet.kind)) {
+        let mesh = this.kyleBulletMeshes.get(bullet.id);
+        if (!mesh) {
+          mesh = K_createProjectileMesh(bullet.kind, this.textureLoader);
+          this.scene.add(mesh);
+          this.kyleBulletMeshes.set(bullet.id, mesh);
+        }
+        mesh.position.set(bullet.x, bullet.y, 0.35);
+        continue;
+      }
+
       let bulletSprite = this.bulletMeshes.get(bullet.id);
       if (!bulletSprite) {
         bulletSprite = this.createBulletMesh(bullet.kind);
@@ -535,6 +629,15 @@ export class GameRenderer {
         bulletSprite.mesh.geometry.dispose();
         (bulletSprite.mesh.material as THREE.Material).dispose();
         this.bulletMeshes.delete(id);
+      }
+    }
+
+    for (const [id, mesh] of this.kyleBulletMeshes) {
+      if (!activeBulletIds.has(id)) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+        this.kyleBulletMeshes.delete(id);
       }
     }
 
@@ -634,6 +737,27 @@ export class GameRenderer {
       (bulletSprite.mesh.material as THREE.Material).dispose();
     }
     this.bulletMeshes.clear();
+
+    for (const [, mesh] of this.kyleBulletMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.kyleBulletMeshes.clear();
+
+    for (const [, mesh] of this.weaponMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    }
+    this.weaponMeshes.clear();
+
+    for (const [, laser] of this.laserSightMeshes) {
+      this.scene.remove(laser);
+      laser.geometry.dispose();
+      (laser.material as THREE.Material).dispose();
+    }
+    this.laserSightMeshes.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
