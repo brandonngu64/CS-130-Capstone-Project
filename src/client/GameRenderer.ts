@@ -95,9 +95,9 @@ const WHIP_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.06;
 const PAPER_STACK_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.62;
 const PAPER_STACK_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.08;
 const PAPER_STACK_UNIFORM_SCALE = 0.78;
-const PAPER_STACK_WIDTH_SCALE = 0.62;
+const PAPER_STACK_WIDTH_SCALE = 1;
 /** Uniform scale on paper_sheet projectile (preserves PNG aspect). */
-const PAPER_SHEET_SCALE = 1.2;
+const PAPER_SHEET_SCALE = 1;
 const PAPER_STACK_ITEM_Y_OFFSET = -0.22;
 
 // Pen crossbow held near the character's hand (kyle weapon sprite path).
@@ -475,7 +475,7 @@ export class GameRenderer {
         };
       } else if (heldItem === ItemKind.Finals) {
         const frameSize = this.applyPaperStackMeshScale(weaponSprite.mesh, weaponName);
-        weaponSprite.mesh.scale.x = frameSize.displayWidth * player.facing;
+        weaponSprite.mesh.scale.x = frameSize.displayWidth;
         whipPos = resolvePaperStackHoldPosition(
           player.x,
           player.y,
@@ -697,7 +697,7 @@ export class GameRenderer {
         const stackSize = this.resolvePaperStackDisplaySize(weaponName);
         const sheetSize = this.resolvePaperSheetDisplaySize(weaponName, stackSize.displayWidth);
         bulletSprite.mesh.scale.set(
-          sheetSize.displayWidth * bullet.facing,
+          sheetSize.displayWidth,
           sheetSize.displayHeight,
           1,
         );

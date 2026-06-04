@@ -35,7 +35,7 @@ export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
 export const PAPER_STACK_HOLD_FRAME = 'paper_stack';
 
 /** Source pixel size of paper_stack.png (used before texture decode). */
-export const PAPER_STACK_TEXTURE_PIXELS = { width: 198, height: 78 } as const;
+export const PAPER_STACK_TEXTURE_PIXELS = { width: 192, height: 200 } as const;
 
 /** Finals projectile art at assets/weapons/paper_stack/paper_sheet.png */
 export const PAPER_STACK_PROJECTILE_FRAME = 'paper_sheet';
