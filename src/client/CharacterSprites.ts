@@ -27,6 +27,7 @@ const WALK_VELOCITY_THRESHOLD = 0.35;
 export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
   [ItemKind.EthernetWhip]: 'ethernet_whip',
   [ItemKind.Finals]: 'paper_stack',
+  [ItemKind.PenCrossbow]: 'pen_crossbow',
   [ItemKind.BinaryBeam]: 'binary_beam',
 };
 
@@ -34,10 +35,34 @@ export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
 export const PAPER_STACK_HOLD_FRAME = 'paper_stack';
 
 /** Source pixel size of paper_stack.png (used before texture decode). */
-export const PAPER_STACK_TEXTURE_PIXELS = { width: 198, height: 78 } as const;
+export const PAPER_STACK_TEXTURE_PIXELS = { width: 192, height: 200 } as const;
 
 /** Finals projectile art at assets/weapons/paper_stack/paper_sheet.png */
 export const PAPER_STACK_PROJECTILE_FRAME = 'paper_sheet';
+
+/** Held binary beam art at assets/weapons/binary_beam/gpu.png */
+export const BINARY_BEAM_HOLD_FRAME = 'gpu';
+
+/** Binary beam projectile art at assets/weapons/binary_beam/beam.png */
+export const BINARY_BEAM_PROJECTILE_FRAME = 'beam';
+
+/** Source pixel size of binary_beam/gpu.png (used before texture decode). */
+export const BINARY_BEAM_TEXTURE_PIXELS = { width: 203, height: 87 } as const;
+
+/** Source pixel size of binary_beam/beam.png (used before texture decode). */
+export const BINARY_BEAM_PROJECTILE_TEXTURE_PIXELS = { width: 202, height: 44 } as const;
+
+/** Held pen crossbow art at assets/weapons/pen_crossbow/idle.png */
+export const PEN_CROSSBOW_HOLD_FRAME = 'idle';
+
+/** Pen crossbow fire pose at assets/weapons/pen_crossbow/firing.png */
+export const PEN_CROSSBOW_FIRING_FRAME = 'firing';
+
+/** Pen crossbow projectile art at assets/weapons/pen_crossbow/bolt.png */
+export const PEN_CROSSBOW_PROJECTILE_FRAME = 'bolt';
+
+/** Source pixel size of idle.png (used before texture decode). */
+export const PEN_CROSSBOW_TEXTURE_PIXELS = { width: 202, height: 142 } as const;
 
 /** Transparent padding below visible pixels / texture height (per frame). */
 export const ETHERNET_WHIP_BOTTOM_INSET: Readonly<Record<string, number>> = {
@@ -134,6 +159,28 @@ export function resolveCharacterFrameKey(
  * Frame files at assets/weapons/ethernet_whip/:
  *   idle.png, attack1.png, attack2.png
  */
+export function resolveHeldWeaponFrame(
+  heldItem: ItemKind,
+  def: WeaponDefinition | undefined,
+  ticksRemaining: number,
+  gunFireCooldownTicks = 0,
+): string {
+  const configFrame = WEAPON_SPRITE_CONFIG[heldItem]?.heldFrame;
+  if (configFrame) {
+    return configFrame;
+  }
+  if (heldItem === ItemKind.Finals) {
+    return PAPER_STACK_HOLD_FRAME;
+  }
+  if (heldItem === ItemKind.PenCrossbow) {
+    return gunFireCooldownTicks > 0 ? PEN_CROSSBOW_FIRING_FRAME : PEN_CROSSBOW_HOLD_FRAME;
+  }
+  if (!def) {
+    throw new Error(`Missing weapon definition for held item ${heldItem}`);
+  }
+  return resolveWhipFrame(def, ticksRemaining);
+}
+
 export function resolveWhipFrame(
   def: WeaponDefinition,
   ticksRemaining: number,
@@ -148,20 +195,6 @@ export function resolveWhipFrame(
   return 'attack1';
 }
 
-export function resolveHeldWeaponFrame(
-  heldItem: ItemKind,
-  def: WeaponDefinition,
-  ticksRemaining: number,
-): string {
-  const configFrame = WEAPON_SPRITE_CONFIG[heldItem]?.heldFrame;
-  if (configFrame) {
-    return configFrame;
-  }
-  if (heldItem === ItemKind.Finals) {
-    return PAPER_STACK_HOLD_FRAME;
-  }
-  return resolveWhipFrame(def, ticksRemaining);
-}
 
 export function normalizeCharacterId(value: string | null | undefined): CharacterId {
   if (value && isCharacterId(value)) {

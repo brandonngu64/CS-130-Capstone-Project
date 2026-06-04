@@ -67,6 +67,7 @@ export interface PlayerRenderState {
   heldItem: ItemKind | null;
   facing: number;
   vx: number;
+  gunFireCooldownTicks: number;
   activeWeaponAttack: { defKind: ItemKind; ticksRemaining: number } | null;
 }
 
@@ -127,6 +128,12 @@ const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
 const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
+const SPAWN_ROTATION: readonly ItemKind[] = [
+  ItemKind.BinaryBeam,
+  ItemKind.PenCrossbow,
+  ItemKind.EthernetWhip,
+  ItemKind.Finals,
+];
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly map: TiledMapDefinition;
@@ -604,6 +611,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           heldItem: record.heldItem,
           facing: record.facing,
           vx: velocity.x,
+          gunFireCooldownTicks: record.gunFireCooldownTicks,
           activeWeaponAttack: record.activeWeaponAttack
             ? { defKind: record.heldItem!, ticksRemaining: record.activeWeaponAttack.ticksRemaining }
             : null,
@@ -811,9 +819,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const jumpPressed = (inputFlags & InputBits.Jump) !== 0 && (previousFlags & InputBits.Jump) === 0;
     const ducking = (inputFlags & InputBits.Duck) !== 0;
-    const punchPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
+    const attackPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
     const dashPressed = (inputFlags & InputBits.Dash) !== 0 && (previousFlags & InputBits.Dash) === 0;
-    const shootPressed = (inputFlags & InputBits.Shoot) !== 0 && (previousFlags & InputBits.Shoot) === 0;
 
     if (record.dashTicksRemaining > 0) {
       body.setLinvel({ x: record.facing * DASH_SPEED, y: velocity.y }, true);
@@ -827,32 +834,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       nextYVelocity = JUMP_SPEED;
     }
 
-    // Default punch — only when no item held
-    if (punchPressed && record.activeAttack === null && record.canPunch()) {
-      const definition = getEquippedAttack(record.equippedWeapon);
-      record.activeAttack = {
-        kind: definition.kind,
-        ticksRemaining: definition.durationTicks,
-      };
-      this.resolvePunchHits(id, definition);
-    }
-
     if (
-      shootPressed &&
+      attackPressed &&
       record.gunFireCooldownTicks === 0 &&
       record.canShoot()
     ) {
       const weapon = K_getWeaponDefinition(record.heldItem!);
       this.fireBullet(record, weapon);
-      record.gunFireCooldownTicks = weapon.fireRate;
+      record.gunFireCooldownTicks = Math.max(1, Math.round(weapon.fireRate));
       if (weapon.reloadOnHit || weapon.reloadOnKill) {
         record.reloadPending = true;
         record.reloadPendingOnKill = weapon.reloadOnKill;
       }
     }
 
-    // Melee weapon (whip, etc.) or projectile weapon (finals, etc.) triggered by Shoot key
-    if (shootPressed && record.canUseWeapon()) {
+    // Use U key input for weapon and default attacks.
+    if (attackPressed && record.canUseWeapon()) {
       const heldKind = record.heldItem!;
       const def = WEAPON_DEFINITIONS[heldKind];
       if (def?.kind === 'melee') {
@@ -865,6 +862,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.fireProjectileWeapon(record, def, heldKind);
         record.weaponCooldownTicks = def.cooldownTicks;
       }
+    }
+
+    if (attackPressed && record.activeAttack === null && record.canPunch()) {
+      const definition = getEquippedAttack(record.equippedWeapon);
+      record.activeAttack = {
+        kind: definition.kind,
+        ticksRemaining: definition.durationTicks,
+      };
+      this.resolvePunchHits(id, definition);
     }
 
     if (dashPressed && record.canDash()) {
@@ -1127,8 +1133,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private chooseSpawnedItemKind(slotIndex: number): ItemKind {
-    const rotation = [ItemKind.PenCrossbow, ItemKind.Gun, ItemKind.BinaryBeam] as const;
-    return rotation[slotIndex % rotation.length] ?? ItemKind.Gun;
+    return SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length] ?? ItemKind.Gun;
   }
 
   private handleBlastZoneDeaths(): void {

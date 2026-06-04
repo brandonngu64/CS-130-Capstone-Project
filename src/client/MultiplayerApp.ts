@@ -359,7 +359,6 @@ export class MultiplayerApp {
       event.code === 'ArrowDown' ||
       event.code === 'KeyS' ||
       event.code === 'KeyU' ||
-      event.code === 'KeyI' ||
       event.code === 'ShiftLeft' ||
       event.code === 'ShiftRight'
     ) {
@@ -380,9 +379,6 @@ export class MultiplayerApp {
     }
     if (event.code === 'KeyU') {
       this.inputState.punch = true;
-    }
-    if (event.code === 'KeyI') {
-      this.inputState.shoot = true;
     }
     if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
       this.inputState.dash = true;
@@ -421,9 +417,6 @@ export class MultiplayerApp {
     }
     if (event.code === 'KeyU') {
       this.inputState.punch = false;
-    }
-    if (event.code === 'KeyI') {
-      this.inputState.shoot = false;
     }
     if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
       this.inputState.dash = false;
