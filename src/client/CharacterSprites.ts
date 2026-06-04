@@ -26,7 +26,17 @@ const WALK_VELOCITY_THRESHOLD = 0.35;
 // Add new holdable weapons here.
 export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
   [ItemKind.EthernetWhip]: 'ethernet_whip',
+  [ItemKind.Finals]: 'paper_stack',
 };
+
+/** Held finals weapon art at assets/weapons/paper_stack/paper_stack.png */
+export const PAPER_STACK_HOLD_FRAME = 'paper_stack';
+
+/** Source pixel size of paper_stack.png (used before texture decode). */
+export const PAPER_STACK_TEXTURE_PIXELS = { width: 198, height: 78 } as const;
+
+/** Finals projectile art at assets/weapons/paper_stack/paper_sheet.png */
+export const PAPER_STACK_PROJECTILE_FRAME = 'paper_sheet';
 
 /** Transparent padding below visible pixels / texture height (per frame). */
 export const ETHERNET_WHIP_BOTTOM_INSET: Readonly<Record<string, number>> = {
@@ -41,8 +51,11 @@ export function getEthernetWhipBottomInset(frame: string): number {
 
 export const PUNCH_WEAPON_NAME = 'punch';
 
+/** Reference character body height in pixels (idle/hold art). */
+export const CHARACTER_SPRITE_PIXEL_HEIGHT = 202;
+
 // Native punch art is shorter than character sprites; scale relative to body height.
-export const PUNCH_SPRITE_HEIGHT_RATIO = 146 / 202;
+export const PUNCH_SPRITE_HEIGHT_RATIO = 146 / CHARACTER_SPRITE_PIXEL_HEIGHT;
 
 /** Default punch art: Sahai uses var2; all other characters use var1. */
 export function resolvePunchSpriteVariant(characterId: CharacterId): string {
@@ -120,6 +133,17 @@ export function resolveCharacterFrameKey(
  * Frame files at assets/weapons/ethernet_whip/:
  *   idle.png, attack1.png, attack2.png
  */
+export function resolveHeldWeaponFrame(
+  heldItem: ItemKind,
+  def: WeaponDefinition,
+  ticksRemaining: number,
+): string {
+  if (heldItem === ItemKind.Finals) {
+    return PAPER_STACK_HOLD_FRAME;
+  }
+  return resolveWhipFrame(def, ticksRemaining);
+}
+
 export function resolveWhipFrame(
   def: WeaponDefinition,
   ticksRemaining: number,

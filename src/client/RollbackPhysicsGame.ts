@@ -82,6 +82,8 @@ export interface BulletRenderState {
   id: number;
   x: number;
   y: number;
+  kind: ItemKind;
+  facing: number;
 }
 
 export interface RenderState {
@@ -581,7 +583,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const bullets = Array.from(this.bullets.values())
       .sort((left, right) => left.id - right.id)
-      .map((bullet) => ({ id: bullet.id, x: bullet.x, y: bullet.y }));
+      .map((bullet) => ({
+        id: bullet.id,
+        x: bullet.x,
+        y: bullet.y,
+        kind: bullet.kind,
+        facing: bullet.vx < 0 ? -1 : 1,
+      }));
 
     const items = this.itemSlots
       .map((slot) => slot.item)

@@ -1,14 +1,18 @@
 import * as THREE from 'three';
 import {
+  CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
   getWeaponSpriteUrl,
+  PAPER_STACK_HOLD_FRAME,
+  PAPER_STACK_PROJECTILE_FRAME,
+  PAPER_STACK_TEXTURE_PIXELS,
   PUNCH_SPRITE_HEIGHT_RATIO,
   PUNCH_WEAPON_NAME,
   resolveCharacterFrame,
   resolveCharacterFrameKey,
+  resolveHeldWeaponFrame,
   resolvePunchSpriteVariant,
   getEthernetWhipBottomInset,
-  resolveWhipFrame,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
 import { PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
@@ -47,6 +51,12 @@ type AttackSpriteMesh = {
   lastFrameKey: string;
 };
 
+type BulletSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+  kind: ItemKind;
+};
+
 // Size of a collectible item sitting on the ground
 const ITEM_GUN_WIDTH  = 0.5;
 const ITEM_GUN_HEIGHT = 0.25;
@@ -63,6 +73,15 @@ const WHIP_HANDLE_TEXTURE_Y = -0.15;
 // Target grip point on the hold pose (from player centre).
 const WHIP_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.72;
 const WHIP_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.06;
+
+// Finals paper stack held near the character's hand.
+const PAPER_STACK_HAND_OFFSET_X = PLAYER_HALF_WIDTH * 0.62;
+const PAPER_STACK_HAND_OFFSET_Y = PLAYER_HALF_HEIGHT * 0.08;
+const PAPER_STACK_UNIFORM_SCALE = 0.78;
+const PAPER_STACK_WIDTH_SCALE = 0.62;
+/** Uniform scale on paper_sheet projectile (preserves PNG aspect). */
+const PAPER_SHEET_SCALE = 1.2;
+const PAPER_STACK_ITEM_Y_OFFSET = -0.22;
 
 function resolveWhipHoldPosition(
   playerX: number,
@@ -125,6 +144,18 @@ function resolveWhipMeshPosition(
   };
 }
 
+function resolvePaperStackHoldPosition(
+  playerX: number,
+  playerY: number,
+  facing: number,
+  displayWidth: number,
+): { x: number; y: number } {
+  return {
+    x: playerX + facing * (PAPER_STACK_HAND_OFFSET_X + displayWidth * 0.5),
+    y: playerY + PAPER_STACK_HAND_OFFSET_Y,
+  };
+}
+
 export class GameRenderer {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
@@ -145,7 +176,7 @@ export class GameRenderer {
   private readonly textureLoader = new THREE.TextureLoader();
   private readonly attackMeshes = new Map<string, AttackSpriteMesh>();
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
-  private readonly bulletMeshes = new Map<number, THREE.Mesh>();
+  private readonly bulletMeshes = new Map<number, BulletSpriteMesh>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
@@ -269,8 +300,9 @@ export class GameRenderer {
       if (!def) continue;
 
       const ticksRemaining = player.activeWeaponAttack?.ticksRemaining ?? 0;
-      const whipFrame = resolveWhipFrame(def, ticksRemaining);
-      const whipFrameKey = `${player.id}:${weaponName}:${whipFrame}`;
+      const heldItem = player.heldItem!;
+      const weaponFrame = resolveHeldWeaponFrame(heldItem, def, ticksRemaining);
+      const weaponFrameKey = `${player.id}:${weaponName}:${weaponFrame}`;
 
       let weaponSprite = this.weaponSpriteMeshes.get(player.id);
       if (!weaponSprite) {
@@ -279,49 +311,62 @@ export class GameRenderer {
         this.weaponSpriteMeshes.set(player.id, weaponSprite);
       }
 
-      if (weaponSprite.lastFrameKey !== whipFrameKey) {
-        const cachedTex = this.getWeaponSpriteTexture(weaponName, whipFrame);
+      if (weaponSprite.lastFrameKey !== weaponFrameKey) {
+        const cachedTex = this.getWeaponSpriteTexture(weaponName, weaponFrame);
         const prev = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
         prev.dispose();
         weaponSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
-        weaponSprite.lastFrameKey = whipFrameKey;
+        weaponSprite.lastFrameKey = weaponFrameKey;
       }
 
-      const idleSize = this.resolveWhipDisplaySize(weaponName, 'idle', player.height);
-      const frameSize = this.resolveWhipDisplaySize(weaponName, whipFrame, player.height);
+      let whipPos: { x: number; y: number };
+      if (heldItem === ItemKind.EthernetWhip) {
+        const idleSize = this.resolveWhipDisplaySize(weaponName, 'idle', player.height);
+        const frameSize = this.resolveWhipDisplaySize(weaponName, weaponFrame, player.height);
 
-      weaponSprite.mesh.scale.set(
-        frameSize.displayWidth * player.facing,
-        frameSize.displayHeight,
-        1,
-      );
-      const idleAnchor = resolveWhipHoldPosition(
-        player.x,
-        player.y,
-        player.facing,
-        idleSize.displayWidth,
-        idleSize.displayHeight,
-      );
-      const idleNearCorner = whipNearPlayerCorner(
-        idleAnchor.x,
-        idleAnchor.y,
-        player.facing,
-        idleSize.displayWidth,
-        idleSize.displayHeight,
-      );
-      const idleVisibleBottom = whipVisibleBottomY(
-        idleAnchor.y,
-        idleSize.displayHeight,
-        getEthernetWhipBottomInset('idle'),
-      );
-      const whipPos = resolveWhipMeshPosition(
-        idleNearCorner.x,
-        idleVisibleBottom,
-        player.facing,
-        frameSize.displayWidth,
-        frameSize.displayHeight,
-        getEthernetWhipBottomInset(whipFrame),
-      );
+        weaponSprite.mesh.scale.set(
+          frameSize.displayWidth * player.facing,
+          frameSize.displayHeight,
+          1,
+        );
+        const idleAnchor = resolveWhipHoldPosition(
+          player.x,
+          player.y,
+          player.facing,
+          idleSize.displayWidth,
+          idleSize.displayHeight,
+        );
+        const idleNearCorner = whipNearPlayerCorner(
+          idleAnchor.x,
+          idleAnchor.y,
+          player.facing,
+          idleSize.displayWidth,
+          idleSize.displayHeight,
+        );
+        const idleVisibleBottom = whipVisibleBottomY(
+          idleAnchor.y,
+          idleSize.displayHeight,
+          getEthernetWhipBottomInset('idle'),
+        );
+        whipPos = resolveWhipMeshPosition(
+          idleNearCorner.x,
+          idleVisibleBottom,
+          player.facing,
+          frameSize.displayWidth,
+          frameSize.displayHeight,
+          getEthernetWhipBottomInset(weaponFrame),
+        );
+      } else {
+        const frameSize = this.applyPaperStackMeshScale(weaponSprite.mesh, weaponName);
+        weaponSprite.mesh.scale.x = frameSize.displayWidth * player.facing;
+        whipPos = resolvePaperStackHoldPosition(
+          player.x,
+          player.y,
+          player.facing,
+          frameSize.displayWidth,
+        );
+      }
+
       weaponSprite.mesh.position.set(whipPos.x, whipPos.y, 0.36);
 
       // Match player opacity during respawn flash
@@ -412,6 +457,26 @@ export class GameRenderer {
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
+
+      if (item.kind === ItemKind.Finals) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for Finals');
+        }
+        const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_HOLD_FRAME);
+        const frameSize = this.applyPaperStackMeshScale(mesh, weaponName);
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        if (material.map !== cached.texture) {
+          material.map = cached.texture;
+          material.needsUpdate = true;
+        }
+        material.visible = true;
+        mesh.visible = true;
+        mesh.userData.itemCenterLift = (
+          frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PAPER_STACK_ITEM_Y_OFFSET
+        );
+      }
+
       // Bob gently up and down so items are easy to spot
       const bob = Math.sin(Date.now() / 400) * 0.08;
       const centerLift = (mesh.userData.itemCenterLift as number | undefined) ?? 0;
@@ -431,20 +496,44 @@ export class GameRenderer {
     const activeBulletIds = new Set(state.bullets.map((bullet: RenderState['bullets'][number]) => bullet.id));
 
     for (const bullet of state.bullets) {
-      let mesh = this.bulletMeshes.get(bullet.id);
-      if (!mesh) {
-        mesh = this.createBulletMesh();
-        this.scene.add(mesh);
-        this.bulletMeshes.set(bullet.id, mesh);
+      let bulletSprite = this.bulletMeshes.get(bullet.id);
+      if (!bulletSprite) {
+        bulletSprite = this.createBulletMesh(bullet.kind);
+        this.scene.add(bulletSprite.mesh);
+        this.bulletMeshes.set(bullet.id, bulletSprite);
       }
-      mesh.position.set(bullet.x, bullet.y, 0.35);
+
+      if (bullet.kind === ItemKind.Finals) {
+        const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+        if (!weaponName) {
+          throw new Error('Missing weapon sprite name for Finals');
+        }
+        const frameKey = `${bullet.id}:${PAPER_STACK_PROJECTILE_FRAME}`;
+        if (bulletSprite.lastFrameKey !== frameKey) {
+          const cachedTex = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_PROJECTILE_FRAME);
+          const prev = bulletSprite.mesh.material as THREE.MeshBasicMaterial;
+          prev.dispose();
+          bulletSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+          bulletSprite.lastFrameKey = frameKey;
+        }
+
+        const stackSize = this.resolvePaperStackDisplaySize(weaponName);
+        const sheetSize = this.resolvePaperSheetDisplaySize(weaponName, stackSize.displayWidth);
+        bulletSprite.mesh.scale.set(
+          sheetSize.displayWidth * bullet.facing,
+          sheetSize.displayHeight,
+          1,
+        );
+      }
+
+      bulletSprite.mesh.position.set(bullet.x, bullet.y, 0.35);
     }
 
-    for (const [id, mesh] of this.bulletMeshes) {
+    for (const [id, bulletSprite] of this.bulletMeshes) {
       if (!activeBulletIds.has(id)) {
-        this.scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.scene.remove(bulletSprite.mesh);
+        bulletSprite.mesh.geometry.dispose();
+        (bulletSprite.mesh.material as THREE.Material).dispose();
         this.bulletMeshes.delete(id);
       }
     }
@@ -539,10 +628,10 @@ export class GameRenderer {
     }
     this.itemMeshes.clear();
 
-    for (const [, mesh] of this.bulletMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    for (const [, bulletSprite] of this.bulletMeshes) {
+      this.scene.remove(bulletSprite.mesh);
+      bulletSprite.mesh.geometry.dispose();
+      (bulletSprite.mesh.material as THREE.Material).dispose();
     }
     this.bulletMeshes.clear();
 
@@ -878,6 +967,43 @@ export class GameRenderer {
     return entry;
   }
 
+  /**
+   * Sizes paper_stack from PNG pixels using character sprite pixel-to-world mapping.
+   * Height keeps native aspect; width is scaled down so the stack is not overly wide.
+   */
+  private resolvePaperStackDisplaySize(
+    _weaponName: string,
+  ): { displayWidth: number; displayHeight: number } {
+    const worldPerPixel = (
+      (PLAYER_HALF_HEIGHT * 2) / CHARACTER_SPRITE_PIXEL_HEIGHT
+    ) * PAPER_STACK_UNIFORM_SCALE;
+    return {
+      displayWidth: PAPER_STACK_TEXTURE_PIXELS.width * worldPerPixel * PAPER_STACK_WIDTH_SCALE,
+      displayHeight: PAPER_STACK_TEXTURE_PIXELS.height * worldPerPixel,
+    };
+  }
+
+  private applyPaperStackMeshScale(
+    mesh: THREE.Mesh,
+    weaponName: string,
+  ): { displayWidth: number; displayHeight: number } {
+    const frameSize = this.resolvePaperStackDisplaySize(weaponName);
+    mesh.scale.set(frameSize.displayWidth, frameSize.displayHeight, 1);
+    return frameSize;
+  }
+
+  /** Projectile sized from paper_stack width, paper_sheet aspect, then uniform scale. */
+  private resolvePaperSheetDisplaySize(
+    weaponName: string,
+    stackDisplayWidth: number,
+  ): { displayWidth: number; displayHeight: number } {
+    const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_PROJECTILE_FRAME);
+    const aspect = this.resolveSpriteAspectRatio(cached);
+    const displayWidth = stackDisplayWidth * PAPER_SHEET_SCALE;
+    const displayHeight = aspect > 0 ? displayWidth / aspect : displayWidth;
+    return { displayWidth, displayHeight };
+  }
+
   /** Idle-sized in world units; attack frames scale by source pixel size vs idle. */
   private resolveWhipDisplaySize(
     weaponName: string,
@@ -977,6 +1103,21 @@ export class GameRenderer {
       return sprite.mesh;
     }
 
+    if (kind === ItemKind.Finals) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for Finals');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_HOLD_FRAME);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      const frameSize = this.applyPaperStackMeshScale(sprite.mesh, weaponName);
+      sprite.mesh.userData.itemCenterLift = (
+        frameSize.displayHeight * 0.5 - ITEM_GUN_HEIGHT * 0.5 + PAPER_STACK_ITEM_Y_OFFSET
+      );
+      return sprite.mesh;
+    }
+
     const geometry = new THREE.BoxGeometry(ITEM_GUN_WIDTH, ITEM_GUN_HEIGHT, ITEM_GUN_DEPTH);
     const material = new THREE.MeshStandardMaterial({
       color: GUN_COLOR,
@@ -988,7 +1129,22 @@ export class GameRenderer {
     return new THREE.Mesh(geometry, material);
   }
 
-  private createBulletMesh(): THREE.Mesh {
+  private createBulletMesh(kind: ItemKind): BulletSpriteMesh {
+    if (kind === ItemKind.Finals) {
+      const weaponName = WEAPON_SPRITE_NAMES[ItemKind.Finals];
+      if (!weaponName) {
+        throw new Error('Missing weapon sprite name for Finals');
+      }
+      const cached = this.getWeaponSpriteTexture(weaponName, PAPER_STACK_PROJECTILE_FRAME);
+      const sprite = this.createWeaponSpriteMesh();
+      sprite.mesh.material = this.createPlayerSpriteMaterial(cached.texture);
+      return {
+        mesh: sprite.mesh,
+        lastFrameKey: `${PAPER_STACK_PROJECTILE_FRAME}`,
+        kind: ItemKind.Finals,
+      };
+    }
+
     const geometry = new THREE.BoxGeometry(BULLET_W, BULLET_H, BULLET_D);
     const material = new THREE.MeshStandardMaterial({
       color: 0xffe066,
@@ -997,7 +1153,11 @@ export class GameRenderer {
       emissive: new THREE.Color(0xffe066),
       emissiveIntensity: 0.6,
     });
-    return new THREE.Mesh(geometry, material);
+    return {
+      mesh: new THREE.Mesh(geometry, material),
+      lastFrameKey: '',
+      kind: ItemKind.Gun,
+    };
   }
 
   private resize(): void {
