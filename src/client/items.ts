@@ -3,6 +3,7 @@ export enum ItemKind {
   PenCrossbow = 2134,
   EthernetWhip = 2,
   Finals = 3,
+  BinaryBeam = 4,
 }
 
 export type WeaponKind = 'projectile' | 'melee';
@@ -27,20 +28,52 @@ export interface WeaponDefinition {
   reloadOnHit?: boolean;
   reloadOnKill?: boolean;
   projectileGravity?: number;
+  /** Wider raycast half-width for large projectile sprites (defaults to bullet width). */
+  projectileHitHalfWidth?: number;
+  /** Extra spawn offset from player body origin (X is multiplied by facing). */
+  projectileSpawnOffsetX?: number;
+  projectileSpawnOffsetY?: number;
 }
+
+/** Sprite layout for newer weapons (folder name lives in CharacterSprites). */
+export interface WeaponSpriteConfig {
+  readonly heldFrame?: string;
+  readonly pickupFrame?: string;
+  readonly projectileFrame?: string;
+  readonly heldHeightRatio?: number;
+  readonly heldOffsetX?: number;
+  readonly heldOffsetY?: number;
+  readonly pickupDisplayHeight?: number;
+  readonly projectileScaleX?: number;
+  readonly projectileScaleY?: number;
+}
+
+export const WEAPON_SPRITE_CONFIG: Partial<Record<ItemKind, WeaponSpriteConfig>> = {
+  [ItemKind.BinaryBeam]: {
+    heldFrame: 'gpu',
+    pickupFrame: 'gpu',
+    projectileFrame: 'beam',
+    heldHeightRatio: 0.22,
+    heldOffsetX: 0.55,
+    heldOffsetY: 0.15,
+    pickupDisplayHeight: 0.52,
+    projectileScaleX: 2.4,
+    projectileScaleY: 0.75,
+  },
+};
 
 export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   [ItemKind.EthernetWhip]: {
     kind: 'melee',
     damage: 22,
-    cooldownTicks: 40,
+    cooldownTicks: 18,
     hitboxHalfWidth: 1.8,
     hitboxHalfHeight: 0.2,
     centerOffsetX: 0.45 + 1.8, // PLAYER_HALF_WIDTH + reach
     centerOffsetY: 0.0,
-    windupTicks: 10,
-    lashTicks: 8,
-    recoilTicks: 12,
+    windupTicks: 4,
+    lashTicks: 5,
+    recoilTicks: 5,
     get durationTicks() {
       return (this.windupTicks ?? 0) + (this.lashTicks ?? 0) + (this.recoilTicks ?? 0);
     },
@@ -52,9 +85,21 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     projectileSpeed: 32,
     projectileLifetimeTicks: 90,
   },
+  [ItemKind.BinaryBeam]: {
+    kind: 'projectile',
+    damage: 15,
+    cooldownTicks: 28,
+    projectileSpeed: 24,
+    projectileLifetimeTicks: 72,
+    projectileGravity: 0,
+    projectileHitHalfWidth: 0.35,
+    projectileSpawnOffsetX: 0.5,
+    projectileSpawnOffsetY: 0.2,
+  },
 };
 
 export const FINALS_COLOR = 0xf4a261;
+export const BINARY_BEAM_COLOR = 0x58a6ff;
 
 export type WhipPhase = 'windup' | 'lash' | 'recoil';
 

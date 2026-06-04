@@ -4,7 +4,7 @@ import {
   DEFAULT_CHARACTER_ID,
   isCharacterId,
 } from './constants';
-import { ItemKind, getWhipPhase } from './items';
+import { ItemKind, WEAPON_SPRITE_CONFIG, getWhipPhase } from './items';
 import type { WeaponDefinition } from './items';
 
 const SPRITE_MODULES = import.meta.glob('../assets/characters/**/*.png', {
@@ -26,12 +26,37 @@ const WALK_VELOCITY_THRESHOLD = 0.35;
 // Add new holdable weapons here.
 export const WEAPON_SPRITE_NAMES: Partial<Record<ItemKind, string>> = {
   [ItemKind.EthernetWhip]: 'ethernet_whip',
+  [ItemKind.Finals]: 'paper_stack',
+  [ItemKind.BinaryBeam]: 'binary_beam',
 };
+
+/** Held finals weapon art at assets/weapons/paper_stack/paper_stack.png */
+export const PAPER_STACK_HOLD_FRAME = 'paper_stack';
+
+/** Source pixel size of paper_stack.png (used before texture decode). */
+export const PAPER_STACK_TEXTURE_PIXELS = { width: 198, height: 78 } as const;
+
+/** Finals projectile art at assets/weapons/paper_stack/paper_sheet.png */
+export const PAPER_STACK_PROJECTILE_FRAME = 'paper_sheet';
+
+/** Transparent padding below visible pixels / texture height (per frame). */
+export const ETHERNET_WHIP_BOTTOM_INSET: Readonly<Record<string, number>> = {
+  idle: 19 / 218,
+  attack1: 81 / 295,
+  attack2: 117 / 310,
+};
+
+export function getEthernetWhipBottomInset(frame: string): number {
+  return ETHERNET_WHIP_BOTTOM_INSET[frame] ?? ETHERNET_WHIP_BOTTOM_INSET.idle;
+}
 
 export const PUNCH_WEAPON_NAME = 'punch';
 
+/** Reference character body height in pixels (idle/hold art). */
+export const CHARACTER_SPRITE_PIXEL_HEIGHT = 202;
+
 // Native punch art is shorter than character sprites; scale relative to body height.
-export const PUNCH_SPRITE_HEIGHT_RATIO = 146 / 202;
+export const PUNCH_SPRITE_HEIGHT_RATIO = 146 / CHARACTER_SPRITE_PIXEL_HEIGHT;
 
 /** Default punch art: Sahai uses var2; all other characters use var1. */
 export function resolvePunchSpriteVariant(characterId: CharacterId): string {
@@ -103,26 +128,39 @@ export function resolveCharacterFrameKey(
 
 /**
  * Resolves the whip sprite frame name based on the current attack phase.
- * Returns the idle frame when no attack is active (ticksRemaining === 0).
+ * Returns idle when no attack is active (ticksRemaining === 0).
+ * Facing is applied via mesh scale in the renderer.
  *
- * Frame files expected at:
- *   assets/weapons/ethernet_whip/idle_r.png
- *   assets/weapons/ethernet_whip/windup_r.png
- *   assets/weapons/ethernet_whip/lash_r.png
- *   assets/weapons/ethernet_whip/recoil_r.png
- *   (and matching _l variants for left-facing)
+ * Frame files at assets/weapons/ethernet_whip/:
+ *   idle.png, attack1.png, attack2.png
  */
 export function resolveWhipFrame(
-  facing: number,
   def: WeaponDefinition,
   ticksRemaining: number,
 ): string {
-  const direction = facing < 0 ? 'l' : 'r';
-  if (ticksRemaining > 0) {
-    const phase = getWhipPhase(def, ticksRemaining);
-    return `${phase}_${direction}`; // e.g. windup_r, lash_l
+  if (ticksRemaining <= 0) {
+    return 'idle';
   }
-  return `idle_${direction}`;
+  const phase = getWhipPhase(def, ticksRemaining);
+  if (phase === 'lash') {
+    return 'attack2';
+  }
+  return 'attack1';
+}
+
+export function resolveHeldWeaponFrame(
+  heldItem: ItemKind,
+  def: WeaponDefinition,
+  ticksRemaining: number,
+): string {
+  const configFrame = WEAPON_SPRITE_CONFIG[heldItem]?.heldFrame;
+  if (configFrame) {
+    return configFrame;
+  }
+  if (heldItem === ItemKind.Finals) {
+    return PAPER_STACK_HOLD_FRAME;
+  }
+  return resolveWhipFrame(def, ticksRemaining);
 }
 
 export function normalizeCharacterId(value: string | null | undefined): CharacterId {
