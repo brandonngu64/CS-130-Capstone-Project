@@ -125,6 +125,16 @@ export class GameStateManager {
     };
   }
 
+  /** Keeps stocks intact but forces the player back into an active in-play state. */
+  resetRespawnState(playerId: string): void {
+    const state = this.byPlayer.get(playerId);
+    if (!state || state.stocks === 0) {
+      return;
+    }
+    state.respawnTicksRemaining = 0;
+    state.respawnFlashTicksRemaining = 0;
+  }
+
   /** Id with stocks remaining, if exactly one; otherwise null (ongoing or tie). */
   getWinnerId(activePlayerIds: string[]): string | null {
     const alive = activePlayerIds.filter((id) => {

@@ -1,7 +1,18 @@
 import * as THREE from 'three';
+import {
+  getCharacterSpriteUrl,
+  getWeaponSpriteUrl,
+  PUNCH_SPRITE_HEIGHT_RATIO,
+  PUNCH_WEAPON_NAME,
+  resolveCharacterFrame,
+  resolveCharacterFrameKey,
+  resolvePunchSpriteVariant,
+  resolveWhipFrame,
+  WEAPON_SPRITE_NAMES,
+} from './CharacterSprites';
 import { RESPAWN_FLASH_TICKS } from './constants';
-import { ItemKind } from './items';
 import { K_createDroppedItemMesh, K_createProjectileMesh, K_createWeaponMesh, K_renderLaserSight } from './kyleWeapons';
+import { ItemKind, WEAPON_DEFINITIONS } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
@@ -14,15 +25,39 @@ type CachedTileMaterial = {
   texture: THREE.Texture;
 };
 
+type CachedSpriteTexture = {
+  texture: THREE.Texture;
+  aspectRatio: number;
+};
+
+type PlayerSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+};
+
+type WeaponSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+};
+
+type AttackSpriteMesh = {
+  mesh: THREE.Mesh;
+  lastFrameKey: string;
+};
+
+// How far from the player centre the whip sprite is anchored
+const WHIP_OFFSET_X = 0.5;
 
 export class GameRenderer {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly container: HTMLElement;
-  private readonly playerMeshes = new Map<string, THREE.Mesh>();
+  private readonly playerMeshes = new Map<string, PlayerSpriteMesh>();
+  private readonly weaponSpriteMeshes = new Map<string, WeaponSpriteMesh>();
   private readonly mapMeshes: THREE.Mesh[] = [];
   private readonly materialCache = new Map<string, CachedTileMaterial>();
+  private readonly spriteTextureCache = new Map<string, CachedSpriteTexture>();
   private readonly backdropMesh: THREE.Mesh;
   private readonly mapBounds: TiledMapDefinition['bounds'];
   private readonly baseViewHeight: number;
@@ -31,7 +66,7 @@ export class GameRenderer {
   private readonly cameraTarget = new THREE.Vector2();
   private cameraMode: CameraMode = 'follow';
   private readonly textureLoader = new THREE.TextureLoader();
-  private readonly attackMeshes = new Map<string, THREE.Mesh>();
+  private readonly attackMeshes = new Map<string, AttackSpriteMesh>();
   private readonly itemMeshes = new Map<number, THREE.Mesh>();
   private readonly bulletMeshes = new Map<number, THREE.Mesh>();
   private readonly weaponMeshes = new Map<string, THREE.Mesh>();
@@ -52,6 +87,8 @@ export class GameRenderer {
     this.camera.lookAt(0, 0, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.domElement.style.imageRendering = 'pixelated';
 
@@ -73,18 +110,44 @@ export class GameRenderer {
     const activeIds = new Set(state.players.map((player: RenderState['players'][number]) => player.id));
 
     for (const player of state.players) {
-      let mesh = this.playerMeshes.get(player.id);
-      if (!mesh) {
-        mesh = this.createPlayerMesh(player.width, player.height, player.color);
-        this.scene.add(mesh);
-        this.playerMeshes.set(player.id, mesh);
+      let playerSprite = this.playerMeshes.get(player.id);
+      if (!playerSprite) {
+        playerSprite = this.createPlayerSpriteMesh();
+        this.scene.add(playerSprite.mesh);
+        this.playerMeshes.set(player.id, playerSprite);
       }
 
-      mesh.position.set(player.x, player.y, 0.35);
+      const frame = resolveCharacterFrame(
+        player.facing,
+        player.heldItem,
+        player.vx,
+        state.animTick,
+      );
+      const frameKey = resolveCharacterFrameKey(
+        player.characterId,
+        player.facing,
+        player.heldItem,
+        player.vx,
+        state.animTick,
+      );
 
-      const material = mesh.material as THREE.MeshStandardMaterial;
-      material.emissive.setHex(player.id === localPlayerId ? 0x2a9d8f : 0x000000);
-      material.emissiveIntensity = player.id === localPlayerId ? 0.26 : 0;
+      const cachedSprite = this.getCachedSpriteTexture(player.characterId, frame);
+      if (playerSprite.lastFrameKey !== frameKey) {
+        const previousMaterial = playerSprite.mesh.material as THREE.MeshBasicMaterial;
+        previousMaterial.dispose();
+        playerSprite.mesh.material = this.createPlayerSpriteMaterial(cachedSprite.texture);
+        playerSprite.lastFrameKey = frameKey;
+      }
+
+      const aspectRatio = this.resolveSpriteAspectRatio(cachedSprite);
+      const displayHeight = player.height;
+      const displayWidth = displayHeight * aspectRatio;
+      playerSprite.mesh.scale.set(displayWidth, displayHeight, 1);
+
+      playerSprite.mesh.visible = true;
+      playerSprite.mesh.position.set(player.x, player.y, 0.35);
+
+      const material = playerSprite.mesh.material as THREE.MeshBasicMaterial;
 
       if (player.respawnFlashTicksRemaining > 0) {
         const flashStep = Math.max(1, Math.floor(RESPAWN_FLASH_TICKS / 24));
@@ -99,66 +162,160 @@ export class GameRenderer {
       const isTransparent = material.opacity < 1;
       material.transparent = isTransparent;
       material.depthWrite = !isTransparent;
-
-      if (player.heldItem !== null) {
-        let weapon = this.weaponMeshes.get(player.id);
-        if (!weapon || weapon.userData.kind !== player.heldItem) {
-          if (weapon) {
-            this.scene.remove(weapon);
-            weapon.geometry.dispose();
-            (weapon.material as THREE.Material).dispose();
-            this.weaponMeshes.delete(player.id);
-          }
-          weapon = K_createWeaponMesh(player.heldItem, this.textureLoader);
-          weapon.userData.kind = player.heldItem;
-          this.scene.add(weapon);
-          this.weaponMeshes.set(player.id, weapon);
-        }
-        weapon.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
-        weapon.visible = true;
-
-        let laser = this.laserSightMeshes.get(player.id);
-        if (!laser) {
-          laser = K_renderLaserSight(player.x, player.y + 0.1, player.facing);
-          this.scene.add(laser);
-          this.laserSightMeshes.set(player.id, laser);
-        }
-        laser.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.30);
-        laser.rotation.z = player.facing === -1 ? Math.PI : 0;
-        laser.visible = player.heldItem === ItemKind.PenCrossbow;
-      } else {
-        const weapon = this.weaponMeshes.get(player.id);
-        if (weapon) {
-          weapon.visible = false;
-        }
-        const laser = this.laserSightMeshes.get(player.id);
-        if (laser) {
-          laser.visible = false;
-        }
-      }
     }
 
-    for (const [id, mesh] of this.playerMeshes) {
-      if (!activeIds.has(id)) {
-        this.scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
-        this.playerMeshes.delete(id);
+    for (const player of state.players) {
+      const weapon = this.weaponMeshes.get(player.id);
+      const laser = this.laserSightMeshes.get(player.id);
 
-        const weapon = this.weaponMeshes.get(id);
+      if (player.heldItem === null) {
         if (weapon) {
           this.scene.remove(weapon);
           weapon.geometry.dispose();
           (weapon.material as THREE.Material).dispose();
-          this.weaponMeshes.delete(id);
+          this.weaponMeshes.delete(player.id);
         }
-        const laser = this.laserSightMeshes.get(id);
         if (laser) {
           this.scene.remove(laser);
           laser.geometry.dispose();
           (laser.material as THREE.Material).dispose();
-          this.laserSightMeshes.delete(id);
+          this.laserSightMeshes.delete(player.id);
         }
+        continue;
+      }
+
+      if (!weapon || weapon.userData.kind !== player.heldItem) {
+        if (weapon) {
+          this.scene.remove(weapon);
+          weapon.geometry.dispose();
+          (weapon.material as THREE.Material).dispose();
+          this.weaponMeshes.delete(player.id);
+        }
+        const nextWeapon = K_createWeaponMesh(player.heldItem, this.textureLoader);
+        nextWeapon.userData.kind = player.heldItem;
+        this.scene.add(nextWeapon);
+        this.weaponMeshes.set(player.id, nextWeapon);
+      }
+
+      const currentWeapon = this.weaponMeshes.get(player.id);
+      if (currentWeapon) {
+        currentWeapon.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.7);
+        currentWeapon.visible = true;
+      }
+
+      let currentLaser = laser;
+      if (!currentLaser) {
+        currentLaser = K_renderLaserSight(player.x, player.y + 0.1, player.facing);
+        this.scene.add(currentLaser);
+        this.laserSightMeshes.set(player.id, currentLaser);
+      }
+      currentLaser.position.set(player.x + player.facing * 0.55, player.y + 0.2, 0.30);
+      currentLaser.rotation.z = player.facing === -1 ? Math.PI : 0;
+      currentLaser.visible = player.heldItem === ItemKind.PenCrossbow;
+    }
+
+    for (const [id, playerSprite] of this.playerMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(playerSprite.mesh);
+        playerSprite.mesh.geometry.dispose();
+        this.playerMeshes.delete(id);
+      }
+    }
+
+    for (const [id, weapon] of this.weaponMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(weapon);
+        weapon.geometry.dispose();
+        (weapon.material as THREE.Material).dispose();
+        this.weaponMeshes.delete(id);
+      }
+    }
+
+    for (const [id, laser] of this.laserSightMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(laser);
+        laser.geometry.dispose();
+        (laser.material as THREE.Material).dispose();
+        this.laserSightMeshes.delete(id);
+      }
+    }
+
+    // --- Weapon sprites (whip etc.) ---
+    for (const player of state.players) {
+      const weaponName = player.heldItem !== null
+        ? WEAPON_SPRITE_NAMES[player.heldItem]
+        : undefined;
+
+      if (!weaponName) {
+        const stale = this.weaponSpriteMeshes.get(player.id);
+        if (stale) {
+          this.scene.remove(stale.mesh);
+          stale.mesh.geometry.dispose();
+          (stale.mesh.material as THREE.MeshBasicMaterial).dispose();
+          this.weaponSpriteMeshes.delete(player.id);
+        }
+        continue;
+      }
+
+      const def = player.heldItem !== null ? WEAPON_DEFINITIONS[player.heldItem] : undefined;
+      if (!def) {
+        const stale = this.weaponSpriteMeshes.get(player.id);
+        if (stale) {
+          this.scene.remove(stale.mesh);
+          stale.mesh.geometry.dispose();
+          (stale.mesh.material as THREE.MeshBasicMaterial).dispose();
+          this.weaponSpriteMeshes.delete(player.id);
+        }
+        continue;
+      }
+
+      const ticksRemaining = player.activeWeaponAttack?.ticksRemaining ?? 0;
+      const whipFrame = resolveWhipFrame(player.facing, def, ticksRemaining);
+      const whipFrameKey = `${player.id}:${weaponName}:${whipFrame}`;
+
+      let weaponSprite = this.weaponSpriteMeshes.get(player.id);
+      if (!weaponSprite) {
+        weaponSprite = this.createWeaponSpriteMesh();
+        this.scene.add(weaponSprite.mesh);
+        this.weaponSpriteMeshes.set(player.id, weaponSprite);
+      }
+
+      if (weaponSprite.lastFrameKey !== whipFrameKey) {
+        const cachedTex = this.getWeaponSpriteTexture(weaponName, whipFrame);
+        const prev = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
+        prev.dispose();
+        weaponSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+        weaponSprite.lastFrameKey = whipFrameKey;
+      }
+
+      const cachedTex = this.getWeaponSpriteTexture(weaponName, whipFrame);
+      const aspect = this.resolveSpriteAspectRatio(cachedTex);
+      const displayHeight = player.height;
+      const displayWidth = displayHeight * aspect;
+
+      weaponSprite.mesh.scale.set(displayWidth * player.facing, displayHeight, 1);
+      weaponSprite.mesh.position.set(
+        player.x + player.facing * WHIP_OFFSET_X,
+        player.y,
+        0.36,
+      );
+
+      const playerMesh = this.playerMeshes.get(player.id);
+      const playerOpacity = playerMesh
+        ? (playerMesh.mesh.material as THREE.MeshBasicMaterial).opacity
+        : 1;
+      const weaponMaterial = weaponSprite.mesh.material as THREE.MeshBasicMaterial;
+      weaponMaterial.opacity = playerOpacity;
+      weaponMaterial.transparent = playerOpacity < 1;
+      weaponMaterial.depthWrite = playerOpacity >= 1;
+    }
+
+    for (const [id, weaponSprite] of this.weaponSpriteMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(weaponSprite.mesh);
+        weaponSprite.mesh.geometry.dispose();
+        (weaponSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
+        this.weaponSpriteMeshes.delete(id);
       }
     }
 
@@ -166,20 +323,55 @@ export class GameRenderer {
     const activeAttackIds = new Set(state.attacks.map((attack: RenderState['attacks'][number]) => attack.id));
 
     for (const attack of state.attacks) {
-      let mesh = this.attackMeshes.get(attack.id);
-      if (!mesh) {
-        mesh = this.createAttackMesh(attack.width, attack.height, attack.color);
-        this.scene.add(mesh);
-        this.attackMeshes.set(attack.id, mesh);
+      const variant = resolvePunchSpriteVariant(attack.characterId);
+      const frameKey = `${attack.id}:${variant}`;
+
+      let attackSprite = this.attackMeshes.get(attack.id);
+      if (!attackSprite) {
+        attackSprite = this.createAttackSpriteMesh();
+        this.scene.add(attackSprite.mesh);
+        this.attackMeshes.set(attack.id, attackSprite);
       }
-      mesh.position.set(attack.x, attack.y, 0.5);
+
+      if (attackSprite.lastFrameKey !== frameKey) {
+        const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+        const prev = attackSprite.mesh.material as THREE.MeshBasicMaterial;
+        prev.dispose();
+        attackSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
+        attackSprite.lastFrameKey = frameKey;
+      }
+
+      const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+      const aspect = this.resolveSpriteAspectRatio(cachedTex);
+      const displayHeight = attack.displayHeight * PUNCH_SPRITE_HEIGHT_RATIO;
+      const displayWidth = displayHeight * aspect;
+
+      attackSprite.mesh.scale.set(displayWidth * attack.facing, displayHeight, 1);
+
+      const playerId = attack.id.slice(0, -'-attack'.length);
+      const player = state.players.find((p) => p.id === playerId);
+      const spriteX = player
+        ? player.x + attack.facing * (
+          this.resolveCharacterVisualHalfWidth(player, state.animTick) + displayWidth * 0.5
+        )
+        : attack.x;
+      attackSprite.mesh.position.set(spriteX, attack.y, 0.5);
+
+      const playerMesh = this.playerMeshes.get(playerId);
+      const playerOpacity = playerMesh
+        ? (playerMesh.mesh.material as THREE.MeshBasicMaterial).opacity
+        : 1;
+      const attackMaterial = attackSprite.mesh.material as THREE.MeshBasicMaterial;
+      attackMaterial.opacity = playerOpacity;
+      attackMaterial.transparent = playerOpacity < 1;
+      attackMaterial.depthWrite = playerOpacity >= 1;
     }
 
-    for (const [id, mesh] of this.attackMeshes) {
+    for (const [id, attackSprite] of this.attackMeshes) {
       if (!activeAttackIds.has(id)) {
-        this.scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        this.scene.remove(attackSprite.mesh);
+        attackSprite.mesh.geometry.dispose();
+        (attackSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
         this.attackMeshes.delete(id);
       }
     }
@@ -194,7 +386,6 @@ export class GameRenderer {
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
-      // Bob gently up and down so items are easy to spot.
       const bob = Math.sin(Date.now() / 400) * 0.08;
       mesh.position.set(item.x, item.y + bob, 0.35);
     }
@@ -270,12 +461,19 @@ export class GameRenderer {
   dispose(): void {
     this.resizeObserver.disconnect();
 
-    for (const [, mesh] of this.playerMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    for (const [, playerSprite] of this.playerMeshes) {
+      this.scene.remove(playerSprite.mesh);
+      playerSprite.mesh.geometry.dispose();
+      (playerSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
     }
     this.playerMeshes.clear();
+
+    for (const [, weaponSprite] of this.weaponSpriteMeshes) {
+      this.scene.remove(weaponSprite.mesh);
+      weaponSprite.mesh.geometry.dispose();
+      (weaponSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
+    }
+    this.weaponSpriteMeshes.clear();
 
     this.scene.remove(this.backdropMesh);
     this.backdropMesh.geometry.dispose();
@@ -294,10 +492,15 @@ export class GameRenderer {
     }
     this.materialCache.clear();
 
-    for (const [, mesh] of this.attackMeshes) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+    for (const cachedSprite of this.spriteTextureCache.values()) {
+      cachedSprite.texture.dispose();
+    }
+    this.spriteTextureCache.clear();
+
+    for (const [, attackSprite] of this.attackMeshes) {
+      this.scene.remove(attackSprite.mesh);
+      attackSprite.mesh.geometry.dispose();
+      (attackSprite.mesh.material as THREE.MeshBasicMaterial).dispose();
     }
     this.attackMeshes.clear();
 
@@ -408,6 +611,7 @@ export class GameRenderer {
   }
 
   private configurePixelTexture(texture: THREE.Texture): void {
+    texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.NearestFilter;
     texture.generateMipmaps = false;
@@ -584,28 +788,116 @@ export class GameRenderer {
     }
   }
 
-  private createPlayerMesh(width: number, height: number, color: number): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(width, height, 0.7);
-    const material = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.45,
-      metalness: 0.1,
-      opacity: 1,
+  private createPlayerSpriteMesh(): PlayerSpriteMesh {
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      visible: false,
+      toneMapped: false,
+    });
+    return {
+      mesh: new THREE.Mesh(geometry, material),
+      lastFrameKey: '',
+    };
+  }
+
+  private createWeaponSpriteMesh(): WeaponSpriteMesh {
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      transparent: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+    });
+    return {
+      mesh: new THREE.Mesh(geometry, material),
+      lastFrameKey: '',
+    };
+  }
+
+  private createPlayerSpriteMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
+    return new THREE.MeshBasicMaterial({
+      alphaTest: 0.001,
+      color: 0xffffff,
       depthWrite: true,
+      map: texture,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+      transparent: false,
     });
-    return new THREE.Mesh(geometry, material);
   }
 
-  private createAttackMesh(width: number, height: number, color: number): THREE.Mesh {
-    const geometry = new THREE.BoxGeometry(width, height, 0.5);
-    const material = new THREE.MeshStandardMaterial({
-      color,
-      roughness: 0.35,
-      metalness: 0.05,
-    });
-    return new THREE.Mesh(geometry, material);
+  private getCachedSpriteTexture(
+    characterId: RenderState['players'][number]['characterId'],
+    frame: string,
+  ): CachedSpriteTexture {
+    const cacheKey = `${characterId}:${frame}`;
+    const cached = this.spriteTextureCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const texture = this.textureLoader.load(getCharacterSpriteUrl(characterId, frame));
+    this.configurePixelTexture(texture);
+
+    const entry: CachedSpriteTexture = {
+      texture,
+      aspectRatio: this.readTextureAspectRatio(texture),
+    };
+    this.spriteTextureCache.set(cacheKey, entry);
+    return entry;
   }
 
+  private getWeaponSpriteTexture(weaponName: string, frame: string): CachedSpriteTexture {
+    const cacheKey = `weapon:${weaponName}:${frame}`;
+    const cached = this.spriteTextureCache.get(cacheKey);
+    if (cached) return cached;
+
+    const texture = this.textureLoader.load(getWeaponSpriteUrl(weaponName, frame));
+    this.configurePixelTexture(texture);
+
+    const entry: CachedSpriteTexture = {
+      texture,
+      aspectRatio: this.readTextureAspectRatio(texture),
+    };
+    this.spriteTextureCache.set(cacheKey, entry);
+    return entry;
+  }
+
+  private resolveSpriteAspectRatio(cached: CachedSpriteTexture): number {
+    if (cached.aspectRatio > 0) {
+      return cached.aspectRatio;
+    }
+
+    cached.aspectRatio = this.readTextureAspectRatio(cached.texture);
+    return cached.aspectRatio > 0 ? cached.aspectRatio : 1;
+  }
+
+  private resolveCharacterVisualHalfWidth(
+    player: RenderState['players'][number],
+    animTick: number,
+  ): number {
+    const frame = resolveCharacterFrame(
+      player.facing,
+      player.heldItem,
+      player.vx,
+      animTick,
+    );
+    const cached = this.getCachedSpriteTexture(player.characterId, frame);
+    const aspect = this.resolveSpriteAspectRatio(cached);
+    return (player.height * aspect) * 0.5;
+  }
+
+  private readTextureAspectRatio(texture: THREE.Texture): number {
+    const image = texture.image as { width?: number; height?: number } | undefined;
+    if (image?.width && image?.height) {
+      return image.width / image.height;
+    }
+    return 0;
+  }
+
+  private createAttackSpriteMesh(): AttackSpriteMesh {
+    return this.createWeaponSpriteMesh();
+  }
 
   private resize(): void {
     const width  = this.container.clientWidth;

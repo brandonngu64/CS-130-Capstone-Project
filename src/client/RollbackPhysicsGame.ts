@@ -7,6 +7,7 @@ import {
   BULLET_HALF_WIDTH,
   BULLET_ID_MAX,
   BULLET_LIFETIME_TICKS,
+  BULLET_SPEED,
   DASH_COOLDOWN_TICKS,
   DASH_DURATION_TICKS,
   DASH_SPEED,
@@ -18,7 +19,12 @@ import {
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
+  TICK_RATE,
+  type CharacterId,
+  characterIdFromIndex,
+  characterIdToIndex,
 } from './constants';
+import { defaultCharacterForPlayer } from './CharacterSprites';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import type { AttackDefinition } from './attacks';
@@ -30,17 +36,18 @@ import {
   ITEM_PICKUP_RADIUS,
   ITEM_SPAWN_INTERVAL_TICKS,
   ItemKind,
+  WEAPON_DEFINITIONS,
 } from './items';
-import type { WorldItem } from './items';
+import type { WeaponDefinition, WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
 export interface AttackRenderState {
   id: string;
   x: number;
   y: number;
-  width: number;
-  height: number;
-  color: number;
+  characterId: CharacterId;
+  facing: number;
+  displayHeight: number;
 }
 
 export interface PlayerRenderState {
@@ -50,6 +57,7 @@ export interface PlayerRenderState {
   width: number;
   height: number;
   color: number;
+  characterId: CharacterId;
   stocks: number;
   eliminated: boolean;
   respawning: boolean;
@@ -58,6 +66,8 @@ export interface PlayerRenderState {
   maxHealth: number;
   heldItem: ItemKind | null;
   facing: number;
+  vx: number;
+  activeWeaponAttack: { defKind: ItemKind; ticksRemaining: number } | null;
 }
 
 export interface ItemRenderState {
@@ -80,6 +90,8 @@ export interface RenderState {
   items: ItemRenderState[];
   bullets: BulletRenderState[];
   winnerId: string | null;
+  roundStartCountdownLabel: string | null;
+  animTick: number;
 }
 
 type StepPlayerState = {
@@ -113,6 +125,7 @@ type ItemSlotState = {
 const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
+const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly map: TiledMapDefinition;
@@ -129,6 +142,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly itemSlots: ItemSlotState[] = [];
   private nextBulletId = 1;
   private tickCount = 0;
+  private roundStartCountdownTicks = 0;
+  private previousConnectedPlayerCount = 0;
+  private readonly pendingCharacterIds = new Map<string, CharacterId>();
 
   constructor(map: TiledMapDefinition) {
     this.map = map;
@@ -170,6 +186,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         gunFireCooldownTicks: record.gunFireCooldownTicks,
         reloadPending: record.reloadPending,
         reloadPendingOnKill: record.reloadPendingOnKill,
+        characterId: characterIdToIndex(record.characterId),
+        weaponCooldownTicks: record.weaponCooldownTicks,
+        activeWeaponAttackTicksRemaining: record.activeWeaponAttack?.ticksRemaining ?? 0,
       };
     });
 
@@ -177,10 +196,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 16 + 14 + matchBytes;
+      byteLength += 2 + record.idBytes.length + 16 + 17 + matchBytes;
     }
 
-    byteLength += 4 + 1;
+    byteLength += 4 + 1 + 1 + 1;
     for (const bullet of bulletList) {
       const ownerIdBytes = this.textEncoder.encode(bullet.ownerId);
       byteLength += 1 + 4 + 4 + 4 + 4 + 1 + 2 + 1 + 2 + ownerIdBytes.length + 1 + 1 + 4;
@@ -217,12 +236,19 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.gunFireCooldownTicks); offset += 1;
       view.setUint8(offset, record.reloadPending ? 1 : 0); offset += 1;
       view.setUint8(offset, record.reloadPendingOnKill ? 1 : 0); offset += 1;
+      view.setUint8(offset, record.characterId); offset += 1;
+      view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
+      view.setUint8(offset, record.activeWeaponAttackTicksRemaining); offset += 1;
 
       offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
     }
 
     view.setUint32(offset, this.tickCount, true);
     offset += 4;
+    view.setUint8(offset, this.roundStartCountdownTicks & 0xff);
+    offset += 1;
+    view.setUint8(offset, this.previousConnectedPlayerCount & 0xff);
+    offset += 1;
 
     view.setUint8(offset, bulletList.length);
     offset += 1;
@@ -285,6 +311,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         gunFireCooldownTicks: number;
         reloadPending: boolean;
         reloadPendingOnKill: boolean;
+        characterId: number;
+        weaponCooldownTicks: number;
+        activeWeaponAttackTicksRemaining: number;
       }
     >();
 
@@ -311,6 +340,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const gunFireCooldownTicks = view.getUint8(offset); offset += 1;
       const reloadPending = view.getUint8(offset) !== 0; offset += 1;
       const reloadPendingOnKill = view.getUint8(offset) !== 0; offset += 1;
+      const characterId = view.getUint8(offset); offset += 1;
+      const weaponCooldownTicks = view.getUint8(offset); offset += 1;
+      const activeWeaponAttackTicksRemaining = view.getUint8(offset); offset += 1;
 
       incoming.set(id, {
         x,
@@ -329,6 +361,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         gunFireCooldownTicks,
         reloadPending,
         reloadPendingOnKill,
+        characterId,
+        weaponCooldownTicks,
+        activeWeaponAttackTicksRemaining,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -338,6 +373,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.tickCount = view.getUint32(offset, true);
     offset += 4;
+    this.roundStartCountdownTicks = view.getUint8(offset);
+    offset += 1;
+    this.previousConnectedPlayerCount = view.getUint8(offset);
+    offset += 1;
 
     for (const [id, state] of incoming) {
       const record = this.players.get(id);
@@ -360,6 +399,19 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.gunFireCooldownTicks = state.gunFireCooldownTicks;
       record.reloadPending = state.reloadPending;
       record.reloadPendingOnKill = state.reloadPendingOnKill;
+      record.characterId = characterIdFromIndex(state.characterId);
+      record.weaponCooldownTicks = state.weaponCooldownTicks;
+
+      // Reconstruct activeWeaponAttack from the serialized ticks + current heldItem
+      if (state.activeWeaponAttackTicksRemaining > 0 && state.heldItem > 0) {
+        const def = WEAPON_DEFINITIONS[state.heldItem as ItemKind];
+        record.activeWeaponAttack = def
+          ? { def, ticksRemaining: state.activeWeaponAttackTicksRemaining }
+          : null;
+      } else {
+        record.activeWeaponAttack = null;
+      }
+
       this.previousInputFlags.set(id, state.inputFlags);
     }
 
@@ -440,10 +492,21 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const ids = Array.from(inputs.keys(), (id) => id as string).sort();
     this.syncPlayers(ids);
+    this.handleRoundStartIfNeeded();
+
+    if (this.roundStartCountdownTicks > 0) {
+      this.roundStartCountdownTicks -= 1;
+      if (this.roundStartCountdownTicks === 0) {
+        this.wakeActivePlayers();
+      }
+      return;
+    }
+
     const respawnedIds = this.matchState.advanceTimers();
     this.respawnPlayers(respawnedIds);
     this.tickDashCooldowns();
     this.tickGunCooldowns();
+    this.tickWeaponCooldowns();
 
     const previousStates = new Map<string, StepPlayerState>();
 
@@ -486,7 +549,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.tickItems();
   }
 
-  // if a player's health drops to 0 or below, they should be considered dead and respawn 
+  // if a player's health drops to 0 or below, they should be considered dead and respawn
   private handleHealthDamage(): void {
     for (const [id, record] of this.players) {
       if (!this.matchState.canReceiveInput(id)) {
@@ -494,6 +557,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
 
       if (record.health <= 0) {
+        if (!this.hasOpponentInMatch()) {
+          this.recoverSoloPlayer(record);
+          continue;
+        }
         record.body.setLinvel({ x: 0, y: 0 }, true);
         record.body.sleep();
         this.matchState.startRespawn(id);
@@ -516,6 +583,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
+        const velocity = record.body.linvel();
         const match = this.matchState.getRenderInfo(id);
 
         return {
@@ -525,6 +593,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
+          characterId: record.characterId,
           stocks: match.stocks,
           eliminated: match.eliminated,
           respawning: match.respawning,
@@ -533,6 +602,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           maxHealth: record.maxHealth,
           heldItem: record.heldItem,
           facing: record.facing,
+          vx: velocity.x,
+          activeWeaponAttack: record.activeWeaponAttack
+            ? { defKind: record.heldItem!, ticksRemaining: record.activeWeaponAttack.ticksRemaining }
+            : null,
         };
       });
 
@@ -549,9 +622,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         id: `${id}-attack`,
         x: center.x,
         y: center.y,
-        width: definition.hitboxHalfWidth * 2,
-        height: definition.hitboxHalfHeight * 2,
-        color: record.color,
+        characterId: record.characterId,
+        facing: record.facing,
+        displayHeight: PLAYER_HALF_HEIGHT * 2,
       });
     }
 
@@ -581,7 +654,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       items,
       bullets,
       winnerId,
+      roundStartCountdownLabel: this.getRoundStartCountdownLabel(),
+      animTick: this.tickCount,
     };
+  }
+
+  setCharacterSelection(playerId: string, characterId: CharacterId): void {
+    this.pendingCharacterIds.set(playerId, characterId);
+    const record = this.players.get(playerId);
+    if (record) {
+      record.characterId = characterId;
+    }
+  }
+
+  applyCharacterSelections(selections: ReadonlyMap<string, CharacterId>): void {
+    for (const [playerId, characterId] of selections) {
+      this.setCharacterSelection(playerId, characterId);
+    }
   }
 
   reset(): void {
@@ -592,9 +681,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     this.players.clear();
     this.previousInputFlags.clear();
+    this.pendingCharacterIds.clear();
     this.bullets.clear();
     this.nextBulletId = 1;
     this.tickCount = 0;
+    this.roundStartCountdownTicks = 0;
+    this.previousConnectedPlayerCount = 0;
     this.matchState.clear();
     this.initializeItemSlots();
   }
@@ -649,7 +741,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const body = this.createPlayerBody(this.spawnPointForPlayer(id));
       this.registerPlayerColliders(body, id);
-      this.players.set(id, new PlayerCharacter(id, body, this.colorForPlayer(id)));
+      const characterId =
+        this.pendingCharacterIds.get(id) ?? defaultCharacterForPlayer(id, sortedIds);
+      this.players.set(
+        id,
+        new PlayerCharacter(id, body, this.colorForPlayer(id), undefined, characterId),
+      );
       this.previousInputFlags.set(id, 0);
       this.matchState.ensurePlayer(id);
     }
@@ -723,6 +820,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       nextYVelocity = JUMP_SPEED;
     }
 
+    // Default punch — only when no item held
     if (punchPressed && record.activeAttack === null && record.canPunch()) {
       const definition = getEquippedAttack(record.equippedWeapon);
       record.activeAttack = {
@@ -743,6 +841,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (weapon.reloadOnHit || weapon.reloadOnKill) {
         record.reloadPending = true;
         record.reloadPendingOnKill = weapon.reloadOnKill;
+      }
+    }
+
+    // Melee weapon (whip, etc.) or projectile weapon (finals, etc.) triggered by Shoot key
+    if (shootPressed && record.canUseWeapon()) {
+      const heldKind = record.heldItem!;
+      const def = WEAPON_DEFINITIONS[heldKind];
+      if (def?.kind === 'melee') {
+        record.activeWeaponAttack = {
+          def,
+          ticksRemaining: def.durationTicks ?? 0,
+        };
+        record.weaponCooldownTicks = def.cooldownTicks;
+      } else if (def?.kind === 'projectile') {
+        this.fireProjectileWeapon(record, def, heldKind);
+        record.weaponCooldownTicks = def.cooldownTicks;
       }
     }
 
@@ -772,6 +886,29 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (const [, record] of this.players) {
       if (record.gunFireCooldownTicks > 0) {
         record.gunFireCooldownTicks -= 1;
+      }
+    }
+  }
+
+  private tickWeaponCooldowns(): void {
+    for (const [id, record] of this.players) {
+      if (record.weaponCooldownTicks > 0) {
+        record.weaponCooldownTicks -= 1;
+      }
+
+      if (record.activeWeaponAttack) {
+        // Resolve melee hit on the very first tick of the lash phase
+        if (record.isWhipHitboxActive()) {
+          const lashTicks = record.activeWeaponAttack.def.lashTicks ?? 0;
+          if (record.activeWeaponAttack.ticksRemaining === lashTicks) {
+            this.resolveMeleeWeaponHits(id, record);
+          }
+        }
+
+        record.activeWeaponAttack.ticksRemaining -= 1;
+        if (record.activeWeaponAttack.ticksRemaining <= 0) {
+          record.activeWeaponAttack = null;
+        }
       }
     }
   }
@@ -918,6 +1055,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     player.reloadPending = false;
     player.reloadPendingOnKill = false;
     this.K_refreshWeaponFromGround(player, slot.item.kind);
+    player.activeWeaponAttack = null;
+    player.weaponCooldownTicks = 0;
     this.queueItemRespawn(slotIndex);
   }
 
@@ -944,6 +1083,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
 
     const kind = this.chooseSpawnedItemKind(slotIndex);
+
     this.itemSlots[slotIndex] = {
       item: {
         id: slotIndex,
@@ -989,6 +1129,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const position = record.body.translation();
       if (!this.isOutsideBlastZone(position)) {
+        continue;
+      }
+
+      if (!this.hasOpponentInMatch()) {
+        this.recoverSoloPlayer(record);
         continue;
       }
 
@@ -1110,6 +1255,38 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
   }
 
+  private fireProjectileWeapon(owner: PlayerCharacter, def: WeaponDefinition, kind: ItemKind): void {
+    let bulletId = this.nextBulletId;
+    for (let i = 0; i < BULLET_ID_MAX; i += 1) {
+      if (!this.bullets.has(bulletId)) {
+        break;
+      }
+      bulletId = (bulletId % BULLET_ID_MAX) + 1;
+    }
+
+    this.nextBulletId = (bulletId % BULLET_ID_MAX) + 1;
+
+    const position = owner.body.translation();
+    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05);
+    const speed = def.projectileSpeed ?? BULLET_SPEED;
+    const lifetime = def.projectileLifetimeTicks ?? BULLET_LIFETIME_TICKS;
+
+    this.bullets.set(bulletId, {
+      id: bulletId,
+      x: spawnX,
+      y: position.y,
+      vx: owner.facing * speed,
+      vy: 0,
+      ticksRemaining: lifetime,
+      kind,
+      damage: def.damage,
+      ownerId: owner.id,
+      reloadOnHit: def.reloadOnHit ?? false,
+      reloadOnKill: def.reloadOnKill ?? false,
+      projectileGravity: def.projectileGravity ?? 0,
+    });
+  }
+
   private attackCenter(
     playerX: number,
     playerY: number,
@@ -1147,6 +1324,29 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.y - center.y) < overlapHalfHeight
       ) {
         target.takeDamage(definition.damage);
+      }
+    }
+  }
+
+  private resolveMeleeWeaponHits(attackerId: string, attacker: PlayerCharacter): void {
+    if (!attacker.activeWeaponAttack) return;
+    const def = attacker.activeWeaponAttack.def;
+    const position = attacker.body.translation();
+    const cx = position.x + (def.centerOffsetX ?? 0) * attacker.facing;
+    const cy = position.y + (def.centerOffsetY ?? 0);
+    const overlapHalfWidth = (def.hitboxHalfWidth ?? 0) + PLAYER_HALF_WIDTH;
+    const overlapHalfHeight = (def.hitboxHalfHeight ?? 0) + PLAYER_HALF_HEIGHT;
+
+    for (const [otherId, target] of this.players) {
+      if (otherId === attackerId) continue;
+      if (!this.matchState.canReceiveInput(otherId)) continue;
+
+      const targetPos = target.body.translation();
+      if (
+        Math.abs(targetPos.x - cx) < overlapHalfWidth &&
+        Math.abs(targetPos.y - cy) < overlapHalfHeight
+      ) {
+        target.takeDamage(def.damage);
       }
     }
   }
@@ -1255,6 +1455,92 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   private colorForPlayer(playerId: string): number {
     return PLAYER_COLOR_PALETTE[this.hashString(playerId) % PLAYER_COLOR_PALETTE.length] ?? PLAYER_COLOR_PALETTE[0];
+  }
+
+  private handleRoundStartIfNeeded(): void {
+    const connectedPlayerCount = this.players.size;
+    if (
+      this.roundStartCountdownTicks === 0 &&
+      this.previousConnectedPlayerCount < 2 &&
+      connectedPlayerCount >= 2
+    ) {
+      this.startRoundStartCountdown();
+    }
+    this.previousConnectedPlayerCount = connectedPlayerCount;
+  }
+
+  private startRoundStartCountdown(): void {
+    this.roundStartCountdownTicks = ROUND_START_COUNTDOWN_TOTAL_TICKS;
+    this.bullets.clear();
+
+    for (const [id, record] of this.players) {
+      if (this.matchState.getRenderInfo(id).eliminated) {
+        continue;
+      }
+      this.matchState.resetRespawnState(id);
+      const spawnPoint = this.spawnPointForPlayer(id);
+      record.activeAttack = null;
+      record.activeWeaponAttack = null;
+      record.health = record.maxHealth;
+      record.body.setTranslation(
+        { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+        true,
+      );
+      record.body.setLinvel({ x: 0, y: 0 }, true);
+      record.body.sleep();
+    }
+  }
+
+  private wakeActivePlayers(): void {
+    for (const [id, record] of this.players) {
+      if (this.matchState.getRenderInfo(id).eliminated) {
+        continue;
+      }
+      record.body.wakeUp();
+    }
+  }
+
+  private getRoundStartCountdownLabel(): string | null {
+    if (this.roundStartCountdownTicks <= 0) {
+      return null;
+    }
+
+    const oneSecond = TICK_RATE;
+    if (this.roundStartCountdownTicks > oneSecond * 3) {
+      return '3';
+    }
+    if (this.roundStartCountdownTicks > oneSecond * 2) {
+      return '2';
+    }
+    if (this.roundStartCountdownTicks > oneSecond) {
+      return '1';
+    }
+    return 'GO!';
+  }
+
+  private hasOpponentInMatch(): boolean {
+    let activePlayers = 0;
+    for (const [id] of this.players) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+      activePlayers += 1;
+      if (activePlayers >= 2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private recoverSoloPlayer(record: PlayerCharacter): void {
+    const spawnPoint = this.spawnPointForPlayer(record.id);
+    record.health = record.maxHealth;
+    record.body.setTranslation(
+      { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+      true,
+    );
+    record.body.setLinvel({ x: 0, y: 0 }, true);
+    record.body.wakeUp();
   }
 
   private hashString(value: string): number {

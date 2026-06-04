@@ -23,6 +23,18 @@ export type ClientToServerMessage =
       fromPeerId: string;
       toPeerId: string;
       signal: SignalMessage;
+    }
+  | {
+      type: 'lobby_ready';
+      roomId: string;
+      peerId: string;
+      ready: boolean;
+    }
+  | {
+      type: 'lobby_character_select';
+      roomId: string;
+      peerId: string;
+      characterId: string;
     };
 
 export type ServerToClientMessage =
@@ -58,6 +70,18 @@ export type ServerToClientMessage =
       type: 'room_error';
       code: string;
       message: string;
+    }
+  | {
+      type: 'lobby_ready';
+      roomId: string;
+      peerId: string;
+      ready: boolean;
+    }
+  | {
+      type: 'lobby_character_select';
+      roomId: string;
+      peerId: string;
+      characterId: string;
     };
 
 export class SignalingClient {
