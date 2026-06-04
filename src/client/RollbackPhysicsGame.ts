@@ -39,7 +39,7 @@ import {
   ItemKind,
   WEAPON_DEFINITIONS,
 } from './items';
-import type { WorldItem } from './items';
+import type { WeaponDefinition, WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
 export interface AttackRenderState {
@@ -108,6 +108,7 @@ type Bullet = {
   y: number;
   vx: number;
   ticksRemaining: number;
+  kind: ItemKind;
 };
 
 type ItemSlotState = {
@@ -119,6 +120,7 @@ const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
 const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
+const SPAWN_ROTATION: readonly ItemKind[] = [ItemKind.Gun, ItemKind.EthernetWhip, ItemKind.Finals];
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly map: TiledMapDefinition;
@@ -189,7 +191,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       // +2 for weaponCooldownTicks (uint8) + activeWeaponAttackTicksRemaining (uint8)
       byteLength += 2 + record.idBytes.length + 16 + 14 + matchBytes + 2;
     }
-    byteLength += 4 + 2 + 1 + bulletList.length * 11 + 1 + this.itemSlots.length * 9 + 1;
+    // bullet payload is 12 bytes: id(1) + x(4) + y(4) + vx sign(1) + ticksRemaining(1) + kind(1)
+    byteLength += 4 + 2 + 1 + bulletList.length * 12 + 1 + this.itemSlots.length * 9 + 1;
 
     const buffer = new ArrayBuffer(byteLength);
     const view = new DataView(buffer);
@@ -242,6 +245,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setFloat32(offset, bullet.y, true); offset += 4;
       view.setInt8(offset, bullet.vx < 0 ? -1 : 1); offset += 1;
       view.setUint8(offset, bullet.ticksRemaining); offset += 1;
+      view.setUint8(offset, bullet.kind); offset += 1;
     }
 
     view.setUint8(offset, this.itemSlots.length);
@@ -388,9 +392,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const id = view.getUint8(offset); offset += 1;
       const x = view.getFloat32(offset, true); offset += 4;
       const y = view.getFloat32(offset, true); offset += 4;
-      const vx = view.getInt8(offset) < 0 ? -BULLET_SPEED : BULLET_SPEED; offset += 1;
+      const vxSign = view.getInt8(offset); offset += 1;
       const ticksRemaining = view.getUint8(offset); offset += 1;
-      this.bullets.set(id, { id, x, y, vx, ticksRemaining });
+      const kind = view.getUint8(offset) as ItemKind; offset += 1;
+      const speed = WEAPON_DEFINITIONS[kind]?.projectileSpeed ?? BULLET_SPEED;
+      const vx = vxSign < 0 ? -speed : speed;
+      this.bullets.set(id, { id, x, y, vx, ticksRemaining, kind });
     }
 
     const itemSlotCount = view.getUint8(offset);
@@ -775,14 +782,18 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.gunFireCooldownTicks = GUN_FIRE_COOLDOWN_TICKS;
     }
 
-    // Melee weapon (whip, etc.) — triggered by the same Shoot key
+    // Melee weapon (whip, etc.) or projectile weapon (finals, etc.) triggered by Shoot key
     if (shootPressed && record.canUseWeapon()) {
-      const def = WEAPON_DEFINITIONS[record.heldItem!];
+      const heldKind = record.heldItem!;
+      const def = WEAPON_DEFINITIONS[heldKind];
       if (def?.kind === 'melee') {
         record.activeWeaponAttack = {
           def,
           ticksRemaining: def.durationTicks ?? 0,
         };
+        record.weaponCooldownTicks = def.cooldownTicks;
+      } else if (def?.kind === 'projectile') {
+        this.fireProjectileWeapon(record, def, heldKind);
         record.weaponCooldownTicks = def.cooldownTicks;
       }
     }
@@ -875,7 +886,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (hit) {
         const hitPlayerId = this.playerColliderHandles.get(hit.collider.handle);
         if (hitPlayerId !== undefined && this.matchState.canReceiveInput(hitPlayerId)) {
-          this.players.get(hitPlayerId)?.takeDamage(BULLET_DAMAGE);
+          const damage = WEAPON_DEFINITIONS[bullet.kind]?.damage ?? BULLET_DAMAGE;
+          this.players.get(hitPlayerId)?.takeDamage(damage);
         }
         this.bullets.delete(bulletId);
         continue;
@@ -978,7 +990,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
 
     // Alternate between Gun and EthernetWhip so both appear in the world
-    const kind = slotIndex % 2 === 0 ? ItemKind.Gun : ItemKind.EthernetWhip;
+    const kind = SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length];
 
     this.itemSlots[slotIndex] = {
       item: {
@@ -998,7 +1010,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (let slotIndex = 0; slotIndex < this.map.itemSpawnPoints.length; slotIndex += 1) {
       const spawnPoint = this.map.itemSpawnPoints[slotIndex];
-      const kind = slotIndex % 2 === 0 ? ItemKind.Gun : ItemKind.EthernetWhip;
+      const kind = SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length];
       this.itemSlots.push({
         item: {
           id: slotIndex,
@@ -1134,6 +1146,33 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       y: position.y,
       vx: owner.facing * BULLET_SPEED,
       ticksRemaining: BULLET_LIFETIME_TICKS,
+      kind: ItemKind.Gun,
+    });
+  }
+
+  private fireProjectileWeapon(owner: PlayerCharacter, def: WeaponDefinition, kind: ItemKind): void {
+    let bulletId = this.nextBulletId;
+    for (let i = 0; i < BULLET_ID_MAX; i += 1) {
+      if (!this.bullets.has(bulletId)) {
+        break;
+      }
+      bulletId = (bulletId % BULLET_ID_MAX) + 1;
+    }
+
+    this.nextBulletId = (bulletId % BULLET_ID_MAX) + 1;
+
+    const position = owner.body.translation();
+    const spawnX = position.x + owner.facing * (PLAYER_HALF_WIDTH + BULLET_HALF_WIDTH + 0.05);
+    const speed = def.projectileSpeed ?? BULLET_SPEED;
+    const lifetime = def.projectileLifetimeTicks ?? BULLET_LIFETIME_TICKS;
+
+    this.bullets.set(bulletId, {
+      id: bulletId,
+      x: spawnX,
+      y: position.y,
+      vx: owner.facing * speed,
+      ticksRemaining: lifetime,
+      kind,
     });
   }
 
