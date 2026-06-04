@@ -80,7 +80,7 @@ export class GameRenderer {
     this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x131924);
+    this.scene.background = new THREE.Color(0xdbe9f4);
 
     this.camera = new THREE.OrthographicCamera(-12, 12, 10, -2, 0.1, 100);
     this.camera.position.set(0, 0, 12);
