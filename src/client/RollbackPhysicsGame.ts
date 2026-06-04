@@ -912,8 +912,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (record.activeWeaponAttack) {
         // Resolve melee hit on the very first tick of the lash phase
         if (record.isWhipHitboxActive()) {
-          const lashTicks = record.activeWeaponAttack.def.lashTicks ?? 0;
-          if (record.activeWeaponAttack.ticksRemaining === lashTicks) {
+          const def = record.activeWeaponAttack.def;
+          const lashStartTicks = (def.lashTicks ?? 0) + (def.recoilTicks ?? 0);
+          if (record.activeWeaponAttack.ticksRemaining === lashStartTicks) {
             this.resolveMeleeWeaponHits(id, record);
           }
         }
