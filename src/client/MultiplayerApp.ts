@@ -290,6 +290,7 @@ export class MultiplayerApp {
   private currentShareUrl = '';
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
+  private masterVolume = 1;
   private readonly cameraPanInput = {
     left: false,
     right: false,
@@ -564,6 +565,9 @@ export class MultiplayerApp {
       onFullscreenChange: (enabled) => {
         this.toggleFullscreen(enabled);
       },
+      onVolumeChange: (volume) => {
+        this.setMasterVolume(volume);
+      },
     });
 
     document.addEventListener('fullscreenchange', this.onFullscreenStateChange);
@@ -572,6 +576,7 @@ export class MultiplayerApp {
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
     this.settingsMenu.setPeerId(this.peerId);
     this.settingsMenu.setMap(this.getSelectedMapManifest());
+    this.settingsMenu.setVolume(this.masterVolume);
 
     this.renderer.setCameraMode(this.cameraMode);
     this.updateCameraButton();
@@ -620,11 +625,11 @@ export class MultiplayerApp {
     // Initialize looping audio tracks
     this.gameThemeAudio = new Audio(GAME_THEME_URL);
     this.gameThemeAudio.loop = true;
-    this.gameThemeAudio.volume = 0.5;
+    this.gameThemeAudio.volume = this.masterVolume * 0.15;
 
     this.menuThemeAudio = new Audio(MENU_THEME_URL);
     this.menuThemeAudio.loop = true;
-    this.menuThemeAudio.volume = 0.5;
+    this.menuThemeAudio.volume = this.masterVolume * 0.2;
   }
 
   async start(): Promise<void> {
@@ -1132,7 +1137,7 @@ export class MultiplayerApp {
       this.applyLobbyCharactersToGame();
       this.setStatus('Game started. Rollback simulation is active.');
       const fightStartAudio = new Audio(FIGHT_START_SOUND_URL);
-      fightStartAudio.volume = 0.5;
+      fightStartAudio.volume = 0.5 * this.masterVolume;
       void fightStartAudio.play().catch((err) => {
         console.warn('Fight start sound could not play:', err);
       });
@@ -1645,6 +1650,15 @@ export class MultiplayerApp {
     // viewport has settled at its new size.
     requestAnimationFrame(() => this.renderer.requestResize());
   };
+
+  private setMasterVolume(volume: number): void {
+    this.masterVolume = Math.max(0, Math.min(1, volume));
+    this.gameThemeAudio.volume = this.masterVolume * 0.15;
+    this.menuThemeAudio.volume = this.masterVolume * 0.2;
+    if (this.game) {
+      this.game.setVolume(this.masterVolume);
+    }
+  }
 
   private updateUiState(): void {
     const inRoom = this.isInRoom();

@@ -193,6 +193,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   });
   private footstepsAudioPoolIndex = 0;
   private readonly previousHorizontalDir = new Map<string, number>();
+  private masterVolume = 1;
   private nextBulletId = 1;
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
@@ -205,6 +206,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
     this.initializeItemSlots();
+  }
+
+  setVolume(volume: number): void {
+    this.masterVolume = Math.max(0, Math.min(1, volume));
+
+    this.punchAudioPool.forEach((audio) => {
+      audio.volume = 0.5 * this.masterVolume;
+    });
+    this.equipAudioPool.forEach((audio) => {
+      audio.volume = 0.5 * this.masterVolume;
+    });
+    this.jumpAudioPool.forEach((audio) => {
+      audio.volume = 0.5 * this.masterVolume;
+    });
+    this.footstepsAudioPool.forEach((audio) => {
+      audio.volume = 0.9 * this.masterVolume;
+    });
   }
 
   serialize(): Uint8Array {
@@ -966,7 +984,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         record.weaponCooldownTicks = def.cooldownTicks;
         if (heldKind === ItemKind.EthernetWhip) {
           const whipSound = new Audio(WHIP_SOUND_URL);
-          whipSound.volume = 0.5;
+          whipSound.volume = 0.5 * this.masterVolume;
           void whipSound.play().catch((err) => {
             console.warn('Whip sound could not play:', err);
           });
@@ -1504,7 +1522,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (kind === ItemKind.Finals) {
       const paperSound = new Audio(PAPER_SOUND_URL);
-      paperSound.volume = 0.9;
+      paperSound.volume = 0.9 * this.masterVolume;
       void paperSound.play().catch((err) => {
         console.warn('Paper sound could not play:', err);
       });
@@ -1512,7 +1530,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (kind === ItemKind.PenCrossbow) {
       const crossbowSound = new Audio(PEN_CROSSBOW_SOUND_URL);
-      crossbowSound.volume = 0.5;
+      crossbowSound.volume = 0.5 * this.masterVolume;
       void crossbowSound.play().catch((err) => {
         console.warn('Pen crossbow sound could not play:', err);
       });
@@ -1520,7 +1538,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (kind === ItemKind.BinaryBeam) {
       const binaryBeamSound = new Audio(BINARY_BEAM_SOUND_URL);
-      binaryBeamSound.volume = 0.5;
+      binaryBeamSound.volume = 0.5 * this.masterVolume;
       void binaryBeamSound.play().catch((err) => {
         console.warn('Binary beam sound could not play:', err);
       });
