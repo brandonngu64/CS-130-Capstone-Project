@@ -141,7 +141,7 @@ function createSpriteMesh(textureLoader: THREE.TextureLoader, weaponName: string
 
   const geometry = new THREE.PlaneGeometry(1, 1);
   const material = new THREE.MeshBasicMaterial({
-    alphaTest: 0.001,
+    alphaTest: 0.1,
     color: 0xffffff,
     depthWrite: true,
     map: texture,
