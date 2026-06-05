@@ -43,6 +43,8 @@ import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiled
 
 const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).href;
 const WHIP_SOUND_URL = new URL('../assets/sounds/whip.wav', import.meta.url).href;
+const PAPER_SOUND_URL = new URL('../assets/sounds/paper.wav', import.meta.url).href;
+const EQUIP_SOUND_URL = new URL('../assets/sounds/equip_sound.mp3', import.meta.url).href;
 const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
 const BINARY_BEAM_SOUND_URL = new URL('../assets/sounds/binary_beam.wav', import.meta.url).href;
 
@@ -161,6 +163,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return audio;
   });
   private punchAudioPoolIndex = 0;
+  private readonly equipAudioPool: HTMLAudioElement[] = Array.from({ length: 2 }, () => {
+    const audio = new Audio(EQUIP_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.5;
+    audio.load();
+    return audio;
+  });
+  private equipAudioPoolIndex = 0;
   private nextBulletId = 1;
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
@@ -917,6 +927,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
   }
 
+  private playEquipSound(): void {
+    const audio = this.equipAudioPool[this.equipAudioPoolIndex];
+    this.equipAudioPoolIndex = (this.equipAudioPoolIndex + 1) % this.equipAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Equip sound could not play:', err);
+    });
+  }
+
   private tickDashCooldowns(): void {
     for (const [, record] of this.players) {
       if (record.dashCooldownTicks > 0) {
@@ -1102,6 +1121,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.K_refreshWeaponFromGround(player, slot.item.kind);
     player.activeWeaponAttack = null;
     player.weaponCooldownTicks = 0;
+    this.playEquipSound();
     this.queueItemRespawn(slotIndex);
   }
 
@@ -1333,6 +1353,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       reloadOnKill: def.reloadOnKill ?? false,
       projectileGravity: def.projectileGravity ?? 0,
     });
+
+    if (kind === ItemKind.Finals) {
+      const paperSound = new Audio(PAPER_SOUND_URL);
+      paperSound.volume = 0.9;
+      void paperSound.play().catch((err) => {
+        console.warn('Paper sound could not play:', err);
+      });
+    }
 
     if (kind === ItemKind.PenCrossbow) {
       const crossbowSound = new Audio(PEN_CROSSBOW_SOUND_URL);
