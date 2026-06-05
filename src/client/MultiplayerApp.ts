@@ -561,7 +561,12 @@ export class MultiplayerApp {
       onArenaSideWallsChange: (enabled) => {
         this.applyArenaSideWalls(enabled);
       },
+      onFullscreenChange: (enabled) => {
+        this.toggleFullscreen(enabled);
+      },
     });
+
+    document.addEventListener('fullscreenchange', this.onFullscreenStateChange);
 
     this.mainMenu.setPeerId(this.peerId);
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
@@ -685,6 +690,7 @@ export class MultiplayerApp {
 
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    document.removeEventListener('fullscreenchange', this.onFullscreenStateChange);
 
     this.cleanupNetworking();
     this.mainMenu.destroy();
@@ -1609,6 +1615,32 @@ export class MultiplayerApp {
       : '';
     this.setStatus(`Arena side walls ${wallLabel}.${syncHint}`);
   }
+
+  private toggleFullscreen(enabled: boolean): void {
+    if (enabled) {
+      if (document.fullscreenElement) {
+        return;
+      }
+      const request = this.viewport.requestFullscreen();
+      request.catch((err: Error) => {
+        this.setStatus(`Fullscreen request failed: ${err.message}`, 'error');
+        this.settingsMenu.setFullscreenEnabled(false);
+      });
+    } else {
+      if (!document.fullscreenElement) {
+        return;
+      }
+      const exit = document.exitFullscreen();
+      exit.catch((err: Error) => {
+        this.setStatus(`Exit fullscreen failed: ${err.message}`, 'error');
+      });
+    }
+  }
+
+  private readonly onFullscreenStateChange = (): void => {
+    const active = document.fullscreenElement !== null;
+    this.settingsMenu.setFullscreenEnabled(active);
+  };
 
   private updateUiState(): void {
     const inRoom = this.isInRoom();
