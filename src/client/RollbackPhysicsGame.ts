@@ -136,6 +136,9 @@ type ItemSlotState = {
 const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
+const KNOCKBACK_BASE = 4;    // horizontal impulse at full health
+const KNOCKBACK_SCALE = 14;  // additional impulse at 0 health
+const KNOCKBACK_UP = 3;      // upward lift on every hit
 const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
 const SPAWN_ROTATION: readonly ItemKind[] = [
   ItemKind.BinaryBeam,
@@ -239,6 +242,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         characterId: characterIdToIndex(record.characterId),
         weaponCooldownTicks: record.weaponCooldownTicks,
         activeWeaponAttackTicksRemaining: record.activeWeaponAttack?.ticksRemaining ?? 0,
+        knockbackTicksRemaining: record.knockbackTicksRemaining,
       };
     });
 
@@ -246,7 +250,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 16 + 17 + matchBytes;
+      byteLength += 2 + record.idBytes.length + 16 + 18 + matchBytes;
     }
 
     byteLength += 4 + 1 + 1 + 1;
@@ -289,6 +293,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.characterId); offset += 1;
       view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
       view.setUint8(offset, record.activeWeaponAttackTicksRemaining); offset += 1;
+      view.setUint8(offset, record.knockbackTicksRemaining); offset += 1;
 
       offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
     }
@@ -364,6 +369,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         characterId: number;
         weaponCooldownTicks: number;
         activeWeaponAttackTicksRemaining: number;
+        knockbackTicksRemaining: number;
       }
     >();
 
@@ -393,6 +399,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const characterId = view.getUint8(offset); offset += 1;
       const weaponCooldownTicks = view.getUint8(offset); offset += 1;
       const activeWeaponAttackTicksRemaining = view.getUint8(offset); offset += 1;
+      const knockbackTicksRemaining = view.getUint8(offset); offset += 1;
 
       incoming.set(id, {
         x,
@@ -414,6 +421,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         characterId,
         weaponCooldownTicks,
         activeWeaponAttackTicksRemaining,
+        knockbackTicksRemaining,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -451,6 +459,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.reloadPendingOnKill = state.reloadPendingOnKill;
       record.characterId = characterIdFromIndex(state.characterId);
       record.weaponCooldownTicks = state.weaponCooldownTicks;
+      record.knockbackTicksRemaining = state.knockbackTicksRemaining;
 
       // Reconstruct activeWeaponAttack from the serialized ticks + current heldItem
       if (state.activeWeaponAttackTicksRemaining > 0 && state.heldItem > 0) {
@@ -593,6 +602,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.tickBullets();
     this.world.step();
     this.resolvePlatformContacts(previousStates);
+    this.syncHorizontalMovement(ids, inputs, previousStates);
     this.handleBlastZoneDeaths();
     this.handleHealthDamage();
     this.tickHeldItems();
@@ -628,18 +638,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return hash >>> 0;
   }
 
-  getRenderState(): RenderState {
+  getRenderState(renderDelaySeconds = 0): RenderState {
+    const renderDelay = Math.max(0, renderDelaySeconds);
+
     const players = Array.from(this.players.entries())
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
         const velocity = record.body.linvel();
+        const renderX = position.x + velocity.x * renderDelay;
+        const renderY = position.y + velocity.y * renderDelay;
         const match = this.matchState.getRenderInfo(id);
 
         return {
           id,
-          x: position.x,
-          y: position.y,
+          x: renderX,
+          y: renderY,
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
@@ -668,7 +682,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const definition = getAttackDefinition(record.activeAttack.kind);
       const position = record.body.translation();
-      const center = this.attackCenter(position.x, position.y, record.facing, definition);
+      const velocity = record.body.linvel();
+      const renderX = position.x + velocity.x * renderDelay;
+      const renderY = position.y + velocity.y * renderDelay;
+      const center = this.attackCenter(renderX, renderY, record.facing, definition);
       attacks.push({
         id: `${id}-attack`,
         x: center.x,
@@ -685,8 +702,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort((left, right) => left.id - right.id)
       .map((bullet) => ({
         id: bullet.id,
-        x: bullet.x,
-        y: bullet.y,
+        x: bullet.x + bullet.vx * renderDelay,
+        y: bullet.y + bullet.vy * renderDelay,
         kind: bullet.kind,
         facing: Math.sign(bullet.vx) || 1,
       }));
@@ -712,7 +729,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       bullets,
       winnerId,
       roundStartCountdownLabel: this.getRoundStartCountdownLabel(),
-      animTick: this.tickCount,
+      animTick: this.tickCount + renderDelay * TICK_RATE,
     };
   }
 
@@ -746,6 +763,52 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousConnectedPlayerCount = 0;
     this.matchState.clear();
     this.initializeItemSlots();
+  }
+
+  private syncHorizontalMovement(
+    ids: string[],
+    inputs: Map<PlayerId, Uint8Array>,
+    previousStates: Map<string, StepPlayerState>,
+  ): void {
+    for (const id of ids) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      const previous = previousStates.get(id);
+      const record = this.players.get(id);
+      if (!previous || !record || record.dashTicksRemaining > 0) {
+        continue;
+      }
+
+      const raw = inputs.get(id as PlayerId);
+      if (!raw) {
+        continue;
+      }
+
+      const inputFlags = decodeInputBits(raw);
+      const horizontalDir =
+        (inputFlags & InputBits.Left ? -1 : 0) +
+        (inputFlags & InputBits.Right ? 1 : 0);
+      if (horizontalDir === 0) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const intendedDelta = horizontalDir * MOVE_SPEED * FIXED_STEP_SECONDS;
+      const intendedX = previous.x + intendedDelta;
+      const actualDelta = position.x - previous.x;
+
+      if (Math.abs(actualDelta) > 0.001 && Math.sign(actualDelta) !== horizontalDir) {
+        continue;
+      }
+      if (Math.abs(actualDelta) > Math.abs(intendedDelta) + 0.001) {
+        continue;
+      }
+
+      record.body.setTranslation({ x: intendedX, y: position.y }, true);
+      record.body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: record.body.linvel().y }, true);
+    }
   }
 
   private createStaticLevel(): void {
@@ -985,6 +1048,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (record.dashCooldownTicks > 0) {
         record.dashCooldownTicks -= 1;
       }
+      if (record.knockbackTicksRemaining > 0) {
+        record.knockbackTicksRemaining -= 1;
+      }
     }
   }
 
@@ -1005,8 +1071,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (record.activeWeaponAttack) {
         // Resolve melee hit on the very first tick of the lash phase
         if (record.isWhipHitboxActive()) {
-          const lashTicks = record.activeWeaponAttack.def.lashTicks ?? 0;
-          if (record.activeWeaponAttack.ticksRemaining === lashTicks) {
+          const def = record.activeWeaponAttack.def;
+          const lashStartTicks = (def.lashTicks ?? 0) + (def.recoilTicks ?? 0);
+          if (record.activeWeaponAttack.ticksRemaining === lashStartTicks) {
             this.resolveMeleeWeaponHits(id, record);
           }
         }
@@ -1061,10 +1128,47 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       if (hit) {
         const hitPlayerId = this.playerColliderHandles.get(hit.collider.handle);
-        if (hitPlayerId !== undefined && this.matchState.canReceiveInput(hitPlayerId)) {
+        const piercesPlayers = weaponDef?.projectilePiercePlayers ?? false;
+
+        if (hitPlayerId !== undefined && piercesPlayers) {
+          if (this.matchState.canTakeDamage(hitPlayerId)) {
+            const target = this.players.get(hitPlayerId);
+            if (target) {
+              const nextHealth = target.takeDamage(bullet.damage);
+              const shooter = this.players.get(bullet.ownerId);
+              if (bullet.reloadOnHit && shooter) {
+                shooter.reloadPending = false;
+                shooter.reloadPendingOnKill = false;
+              }
+              if (bullet.reloadOnKill && nextHealth === 0 && shooter) {
+                shooter.reloadPending = false;
+                shooter.reloadPendingOnKill = false;
+              }
+            }
+          }
+
+          const travelSign = Math.sign(bullet.vx) || 1;
+          const piercedTarget = this.players.get(hitPlayerId);
+          if (piercedTarget) {
+            const pos = piercedTarget.body.translation();
+            const exitX = pos.x + travelSign * (PLAYER_HALF_WIDTH + hitHalfWidth + 0.02);
+            bullet.x = travelSign > 0 ? Math.max(bullet.x, exitX) : Math.min(bullet.x, exitX);
+          } else {
+            bullet.x += dx;
+          }
+
+          bullet.y += bullet.vy * FIXED_STEP_SECONDS;
+          if (bullet.x < minX || bullet.x > maxX) {
+            this.bullets.delete(bulletId);
+          }
+          continue;
+        }
+
+        if (hitPlayerId !== undefined && this.matchState.canTakeDamage(hitPlayerId)) {
           const target = this.players.get(hitPlayerId);
           if (target) {
             const nextHealth = target.takeDamage(bullet.damage);
+            this.applyKnockback(target, Math.sign(bullet.vx) || 1);
             const shooter = this.players.get(bullet.ownerId);
             if (bullet.reloadOnHit && shooter) {
               shooter.reloadPending = false;
@@ -1435,6 +1539,20 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     };
   }
 
+  private applyKnockback(target: PlayerCharacter, directionX: number): void {
+    const healthFraction = target.health / target.maxHealth;
+    const magnitude = KNOCKBACK_BASE + KNOCKBACK_SCALE * (1 - healthFraction);
+    const currentVel = target.body.linvel();
+    target.knockbackTicksRemaining = 6;
+    target.body.setLinvel(
+      {
+        x: currentVel.x + directionX * magnitude,
+        y: currentVel.y + KNOCKBACK_UP,
+      },
+      true,
+    );
+  }
+
   private resolvePunchHits(attackerId: string, definition: AttackDefinition): void {
     const attacker = this.players.get(attackerId);
     if (!attacker) {
@@ -1450,7 +1568,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (otherId === attackerId) {
         continue;
       }
-      if (!this.matchState.canReceiveInput(otherId)) {
+      if (!this.matchState.canTakeDamage(otherId)) {
         continue;
       }
 
@@ -1460,6 +1578,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.y - center.y) < overlapHalfHeight
       ) {
         target.takeDamage(definition.damage);
+        const knockDir = Math.sign(targetPos.x - center.x) || attacker.facing;
+        this.applyKnockback(target, knockDir);
       }
     }
   }
@@ -1475,7 +1595,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (const [otherId, target] of this.players) {
       if (otherId === attackerId) continue;
-      if (!this.matchState.canReceiveInput(otherId)) continue;
+      if (!this.matchState.canTakeDamage(otherId)) continue;
 
       const targetPos = target.body.translation();
       if (
@@ -1483,6 +1603,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.y - cy) < overlapHalfHeight
       ) {
         target.takeDamage(def.damage);
+        this.applyKnockback(target, attacker.facing);
       }
     }
   }

@@ -974,6 +974,7 @@ export class GameRenderer {
 
   private getTileMaterial(tile: MapTileInstance): THREE.MeshBasicMaterial {
     const tintColor = tile.tintColor ?? 0xffffff;
+    const spriteAlphaTest = 0.1;
     const cacheKey = `${tile.atlasUrl}|${tintColor}|${tile.opacity}`;
     const cachedMaterial = this.materialCache.get(cacheKey);
     if (cachedMaterial) {
@@ -986,7 +987,7 @@ export class GameRenderer {
     const isOpaque = tile.opacity >= 1;
 
     const material = new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
+      alphaTest: spriteAlphaTest,
       color: tintColor,
       map: texture,
       opacity: tile.opacity,
@@ -1037,19 +1038,24 @@ export class GameRenderer {
     const target = this.getCameraTarget(state, localPlayerId);
     const targetZoom = this.getTargetZoom(state);
 
-    const followLerp = this.cameraMode === 'action' ? 0.12 : 0.18;
-    const zoomLerp = this.cameraMode === 'action' ? 0.08 : 0.12;
+    const zoomLerp = this.cameraMode === 'action' ? 0.12 : 0.16;
 
-    this.camera.position.x = THREE.MathUtils.lerp(
-      this.camera.position.x,
-      target.x,
-      followLerp,
-    );
-    this.camera.position.y = THREE.MathUtils.lerp(
-      this.camera.position.y,
-      target.y,
-      followLerp,
-    );
+    if (this.cameraMode === 'follow') {
+      this.camera.position.x = target.x;
+      this.camera.position.y = target.y;
+    } else {
+      const followLerp = this.cameraMode === 'action' ? 0.22 : 0.28;
+      this.camera.position.x = THREE.MathUtils.lerp(
+        this.camera.position.x,
+        target.x,
+        followLerp,
+      );
+      this.camera.position.y = THREE.MathUtils.lerp(
+        this.camera.position.y,
+        target.y,
+        followLerp,
+      );
+    }
     this.camera.position.z = 12;
     this.camera.zoom = THREE.MathUtils.lerp(this.camera.zoom, targetZoom, zoomLerp);
     if (this.cameraMode === 'free') {
@@ -1196,7 +1202,7 @@ export class GameRenderer {
   private createWeaponSpriteMesh(): WeaponSpriteMesh {
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
+      alphaTest: 0.1,
       transparent: false,
       toneMapped: false,
       side: THREE.DoubleSide,
@@ -1209,7 +1215,7 @@ export class GameRenderer {
 
   private createPlayerSpriteMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
     return new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
+      alphaTest: 0.1,
       color: 0xffffff,
       depthWrite: true,
       map: texture,

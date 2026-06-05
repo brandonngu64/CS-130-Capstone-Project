@@ -63,7 +63,7 @@ export const GunWeapon: K_Weapon = {
 
 export const PenCrossbow: K_Weapon = {
   kind: ItemKind.PenCrossbow,
-  damage: 80,
+  damage: 100,
   ammo: 1,
   fireRate: PEN_CROSSBOW_FIRE_COOLDOWN_TICKS,
 
@@ -141,7 +141,7 @@ function createSpriteMesh(textureLoader: THREE.TextureLoader, weaponName: string
 
   const geometry = new THREE.PlaneGeometry(1, 1);
   const material = new THREE.MeshBasicMaterial({
-    alphaTest: 0.001,
+    alphaTest: 0.1,
     color: 0xffffff,
     depthWrite: true,
     map: texture,

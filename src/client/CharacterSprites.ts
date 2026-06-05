@@ -19,7 +19,7 @@ const WEAPON_SPRITE_MODULES = import.meta.glob('../assets/weapons/**/*.png', {
   import: 'default',
 }) as Record<string, string>;
 
-const WALK_ANIMATION_FRAME_TICKS = 8;
+const WALK_ANIMATION_FRAME_TICKS = 10;
 const WALK_VELOCITY_THRESHOLD = 0.35;
 
 // Maps ItemKind to the weapon's sprite folder name.

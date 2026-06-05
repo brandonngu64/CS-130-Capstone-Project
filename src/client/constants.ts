@@ -41,7 +41,7 @@ export const PLAYER_COLOR_PALETTE = [
 
 export const DEFAULT_STOCKS = 3;
 export const RESPAWN_DELAY_TICKS = 120;
-export const RESPAWN_FLASH_TICKS = TICK_RATE * 5;
+export const RESPAWN_FLASH_TICKS = TICK_RATE * 3;
 
 export const CHARACTER_IDS = ['eggert', 'nachenburg', 'sahai', 'smallberg'] as const;
 export type CharacterId = (typeof CHARACTER_IDS)[number];
