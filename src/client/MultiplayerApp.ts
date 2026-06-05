@@ -719,7 +719,8 @@ export class MultiplayerApp {
     }
 
     if (this.game) {
-      const renderState = this.game.getRenderState();
+      const renderDelaySeconds = this.accumulatedTimeMs / 1000;
+      const renderState = this.game.getRenderState(renderDelaySeconds);
       this.renderer.render(renderState, this.peerId);
       if (this.isInRoom() || this.connecting) {
         this.stockHud.update(renderState.players, this.peerId);

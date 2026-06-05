@@ -553,6 +553,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.tickBullets();
     this.world.step();
     this.resolvePlatformContacts(previousStates);
+    this.syncHorizontalMovement(ids, inputs, previousStates);
     this.handleBlastZoneDeaths();
     this.handleHealthDamage();
     this.tickHeldItems();
@@ -588,18 +589,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return hash >>> 0;
   }
 
-  getRenderState(): RenderState {
+  getRenderState(renderDelaySeconds = 0): RenderState {
+    const renderDelay = Math.max(0, renderDelaySeconds);
+
     const players = Array.from(this.players.entries())
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, record]) => {
         const position = record.body.translation();
         const velocity = record.body.linvel();
+        const renderX = position.x + velocity.x * renderDelay;
+        const renderY = position.y + velocity.y * renderDelay;
         const match = this.matchState.getRenderInfo(id);
 
         return {
           id,
-          x: position.x,
-          y: position.y,
+          x: renderX,
+          y: renderY,
           width: PLAYER_HALF_WIDTH * 2,
           height: PLAYER_HALF_HEIGHT * 2,
           color: record.color,
@@ -628,7 +633,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const definition = getAttackDefinition(record.activeAttack.kind);
       const position = record.body.translation();
-      const center = this.attackCenter(position.x, position.y, record.facing, definition);
+      const velocity = record.body.linvel();
+      const renderX = position.x + velocity.x * renderDelay;
+      const renderY = position.y + velocity.y * renderDelay;
+      const center = this.attackCenter(renderX, renderY, record.facing, definition);
       attacks.push({
         id: `${id}-attack`,
         x: center.x,
@@ -645,8 +653,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       .sort((left, right) => left.id - right.id)
       .map((bullet) => ({
         id: bullet.id,
-        x: bullet.x,
-        y: bullet.y,
+        x: bullet.x + bullet.vx * renderDelay,
+        y: bullet.y + bullet.vy * renderDelay,
         kind: bullet.kind,
         facing: Math.sign(bullet.vx) || 1,
       }));
@@ -672,7 +680,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       bullets,
       winnerId,
       roundStartCountdownLabel: this.getRoundStartCountdownLabel(),
-      animTick: this.tickCount,
+      animTick: this.tickCount + renderDelay * TICK_RATE,
     };
   }
 
@@ -706,6 +714,52 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousConnectedPlayerCount = 0;
     this.matchState.clear();
     this.initializeItemSlots();
+  }
+
+  private syncHorizontalMovement(
+    ids: string[],
+    inputs: Map<PlayerId, Uint8Array>,
+    previousStates: Map<string, StepPlayerState>,
+  ): void {
+    for (const id of ids) {
+      if (!this.matchState.canReceiveInput(id)) {
+        continue;
+      }
+
+      const previous = previousStates.get(id);
+      const record = this.players.get(id);
+      if (!previous || !record || record.dashTicksRemaining > 0) {
+        continue;
+      }
+
+      const raw = inputs.get(id as PlayerId);
+      if (!raw) {
+        continue;
+      }
+
+      const inputFlags = decodeInputBits(raw);
+      const horizontalDir =
+        (inputFlags & InputBits.Left ? -1 : 0) +
+        (inputFlags & InputBits.Right ? 1 : 0);
+      if (horizontalDir === 0) {
+        continue;
+      }
+
+      const position = record.body.translation();
+      const intendedDelta = horizontalDir * MOVE_SPEED * FIXED_STEP_SECONDS;
+      const intendedX = previous.x + intendedDelta;
+      const actualDelta = position.x - previous.x;
+
+      if (Math.abs(actualDelta) > 0.001 && Math.sign(actualDelta) !== horizontalDir) {
+        continue;
+      }
+      if (Math.abs(actualDelta) > Math.abs(intendedDelta) + 0.001) {
+        continue;
+      }
+
+      record.body.setTranslation({ x: intendedX, y: position.y }, true);
+      record.body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: record.body.linvel().y }, true);
+    }
   }
 
   private createStaticLevel(): void {
