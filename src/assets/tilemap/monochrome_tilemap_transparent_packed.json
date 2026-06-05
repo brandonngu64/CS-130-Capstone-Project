@@ -138,6 +138,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -147,6 +152,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -156,6 +166,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -165,6 +180,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -174,6 +194,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -183,6 +208,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -192,6 +222,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -332,6 +367,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -341,6 +381,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -350,6 +395,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -359,6 +409,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -368,6 +423,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -377,6 +437,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -386,6 +451,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#E53935"
                 }]
         }, 
         {
@@ -395,6 +465,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#E53935"
                 }]
         }, 
         {
@@ -404,6 +479,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#E53935"
                 }]
         }, 
         {
@@ -521,6 +601,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -764,6 +849,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#E91E63"
                 }]
         }, 
         {
@@ -998,6 +1088,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":2
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -1007,6 +1102,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":2
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#3FAB47"
                 }]
         }, 
         {
@@ -1124,6 +1224,11 @@
                  "name":"collision",
                  "type":"int",
                  "value":0
+                }, 
+                {
+                 "name":"tintcolor",
+                 "type":"string",
+                 "value":"#E91E63"
                 }]
         }, 
         {
