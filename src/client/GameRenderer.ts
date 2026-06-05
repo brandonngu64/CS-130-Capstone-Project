@@ -1548,6 +1548,14 @@ export class GameRenderer {
     };
   }
 
+  requestResize(): void {
+    // Clear any leftover inline width/height that older setSize calls
+    // may have written before this build, so CSS can drive sizing again.
+    this.renderer.domElement.style.width = '';
+    this.renderer.domElement.style.height = '';
+    this.resize();
+  }
+
   private resize(): void {
     const width  = this.container.clientWidth;
     const height = this.container.clientHeight;
@@ -1564,6 +1572,10 @@ export class GameRenderer {
     this.camera.bottom = -viewHeight * 0.5;
     this.camera.updateProjectionMatrix();
 
-    this.renderer.setSize(width, height);
+    // Pass updateStyle=false so Three.js only resizes the drawing buffer
+    // and does NOT write inline width/height onto the canvas element.
+    // The canvas keeps its CSS 100% x 100% sizing, so exiting fullscreen
+    // can shrink it back without an inline-style lock-in.
+    this.renderer.setSize(width, height, false);
   }
 }

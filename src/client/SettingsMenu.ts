@@ -17,6 +17,7 @@ export interface SettingsMenuCallbacks {
   onCopyShareUrl(): void;
   onClose(): void;
   onArenaSideWallsChange(enabled: boolean): void;
+  onFullscreenChange(enabled: boolean): void;
 }
 
 export class SettingsMenu {
@@ -31,6 +32,7 @@ export class SettingsMenu {
   private readonly copyButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
   private readonly sideWallsToggle: HTMLInputElement;
+  private readonly fullscreenToggle: HTMLInputElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -78,12 +80,19 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuSideWallsToggle',
     );
+    this.fullscreenToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuFullscreenToggle',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
     this.closeButton.addEventListener('click', () => callbacks.onClose());
     this.sideWallsToggle.addEventListener('change', () => {
       callbacks.onArenaSideWallsChange(this.sideWallsToggle.checked);
+    });
+    this.fullscreenToggle.addEventListener('change', () => {
+      callbacks.onFullscreenChange(this.fullscreenToggle.checked);
     });
 
     this.element.addEventListener('click', (event) => {
@@ -136,6 +145,10 @@ export class SettingsMenu {
     this.sideWallsToggle.checked = enabled;
   }
 
+  setFullscreenEnabled(enabled: boolean): void {
+    this.fullscreenToggle.checked = enabled;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -180,6 +193,11 @@ export class SettingsMenu {
         <label class="toggle-field">
           <input id="settingsMenuSideWallsToggle" type="checkbox" />
           <span>Arena side walls (blocks walking off stage)</span>
+        </label>
+
+        <label class="toggle-field">
+          <input id="settingsMenuFullscreenToggle" type="checkbox" />
+          <span>Fullscreen mode</span>
         </label>
 
         <button id="settingsMenuLeaveButton" class="action-danger" type="button">Leave Room</button>
