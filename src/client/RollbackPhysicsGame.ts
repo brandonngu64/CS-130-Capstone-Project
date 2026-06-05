@@ -45,6 +45,8 @@ const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).h
 const WHIP_SOUND_URL = new URL('../assets/sounds/whip.wav', import.meta.url).href;
 const PAPER_SOUND_URL = new URL('../assets/sounds/paper.wav', import.meta.url).href;
 const EQUIP_SOUND_URL = new URL('../assets/sounds/equip_sound.mp3', import.meta.url).href;
+const JUMP_SOUND_URL = new URL('../assets/sounds/jump.mp3', import.meta.url).href;
+const FOOTSTEPS_SOUND_URL = new URL('../assets/sounds/Footsteps.wav', import.meta.url).href;
 const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
 const BINARY_BEAM_SOUND_URL = new URL('../assets/sounds/binary_beam.wav', import.meta.url).href;
 
@@ -171,6 +173,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return audio;
   });
   private equipAudioPoolIndex = 0;
+  private readonly jumpAudioPool: HTMLAudioElement[] = Array.from({ length: 3 }, () => {
+    const audio = new Audio(JUMP_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.5;
+    audio.load();
+    return audio;
+  });
+  private jumpAudioPoolIndex = 0;
+  private readonly footstepsAudioPool: HTMLAudioElement[] = Array.from({ length: 3 }, () => {
+    const audio = new Audio(FOOTSTEPS_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.9;
+    audio.load();
+    return audio;
+  });
+  private footstepsAudioPoolIndex = 0;
+  private readonly previousHorizontalDir = new Map<string, number>();
   private nextBulletId = 1;
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
@@ -855,6 +874,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     let nextYVelocity = velocity.y;
     if (jumpPressed && this.isGrounded(body, ducking)) {
       nextYVelocity = JUMP_SPEED;
+      this.playJumpSound();
     }
 
     if (
@@ -914,6 +934,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       return;
     }
 
+    const prevHorizontalDir = this.previousHorizontalDir.get(id) ?? 0;
+    if (horizontalDir !== 0 && prevHorizontalDir === 0) {
+      this.playFootstepsSound();
+    }
+    this.previousHorizontalDir.set(id, horizontalDir);
+
     body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
   }
@@ -933,6 +959,24 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     audio.currentTime = 0;
     void audio.play().catch((err) => {
       console.warn('Equip sound could not play:', err);
+    });
+  }
+
+  private playJumpSound(): void {
+    const audio = this.jumpAudioPool[this.jumpAudioPoolIndex];
+    this.jumpAudioPoolIndex = (this.jumpAudioPoolIndex + 1) % this.jumpAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Jump sound could not play:', err);
+    });
+  }
+
+  private playFootstepsSound(): void {
+    const audio = this.footstepsAudioPool[this.footstepsAudioPoolIndex];
+    this.footstepsAudioPoolIndex = (this.footstepsAudioPoolIndex + 1) % this.footstepsAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Footsteps sound could not play:', err);
     });
   }
 
