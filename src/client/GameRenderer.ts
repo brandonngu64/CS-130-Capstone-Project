@@ -1037,19 +1037,24 @@ export class GameRenderer {
     const target = this.getCameraTarget(state, localPlayerId);
     const targetZoom = this.getTargetZoom(state);
 
-    const followLerp = this.cameraMode === 'action' ? 0.12 : 0.18;
-    const zoomLerp = this.cameraMode === 'action' ? 0.08 : 0.12;
+    const zoomLerp = this.cameraMode === 'action' ? 0.12 : 0.16;
 
-    this.camera.position.x = THREE.MathUtils.lerp(
-      this.camera.position.x,
-      target.x,
-      followLerp,
-    );
-    this.camera.position.y = THREE.MathUtils.lerp(
-      this.camera.position.y,
-      target.y,
-      followLerp,
-    );
+    if (this.cameraMode === 'follow') {
+      this.camera.position.x = target.x;
+      this.camera.position.y = target.y;
+    } else {
+      const followLerp = this.cameraMode === 'action' ? 0.22 : 0.28;
+      this.camera.position.x = THREE.MathUtils.lerp(
+        this.camera.position.x,
+        target.x,
+        followLerp,
+      );
+      this.camera.position.y = THREE.MathUtils.lerp(
+        this.camera.position.y,
+        target.y,
+        followLerp,
+      );
+    }
     this.camera.position.z = 12;
     this.camera.zoom = THREE.MathUtils.lerp(this.camera.zoom, targetZoom, zoomLerp);
     if (this.cameraMode === 'free') {
