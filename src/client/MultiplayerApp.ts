@@ -68,6 +68,7 @@ const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 
 const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
+const MENU_THEME_URL = new URL('../assets/sounds/menu.mp3', import.meta.url).href;
 const FIGHT_START_SOUND_URL = new URL('../assets/sounds/fight_start.wav', import.meta.url).href;
 
 function requireElement<T extends HTMLElement>(
@@ -265,6 +266,7 @@ export class MultiplayerApp {
   private readonly winnerBannerSubtitle: HTMLElement;
   private readonly roundStartBanner: HTMLElement;
   private readonly gameThemeAudio: HTMLAudioElement;
+  private readonly menuThemeAudio: HTMLAudioElement;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -330,7 +332,8 @@ export class MultiplayerApp {
   private lastFrameTimeMs = 0;
   private accumulatedTimeMs = 0;
   private connecting = false;
-  private themeStarted = false;
+  private gameThemeStarted = false;
+  private menuThemeStarted = false;
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'KeyC') {
@@ -609,10 +612,14 @@ export class MultiplayerApp {
     this.refreshDebugValues();
     this.setStatus('Initializing Rapier runtime...');
 
-    // Initialize looping game theme (will play when game starts)
+    // Initialize looping audio tracks
     this.gameThemeAudio = new Audio(GAME_THEME_URL);
     this.gameThemeAudio.loop = true;
     this.gameThemeAudio.volume = 0.5;
+
+    this.menuThemeAudio = new Audio(MENU_THEME_URL);
+    this.menuThemeAudio.loop = true;
+    this.menuThemeAudio.volume = 0.5;
   }
 
   async start(): Promise<void> {
@@ -702,17 +709,27 @@ export class MultiplayerApp {
       this.accumulatedTimeMs -= this.fixedStepMs;
     }
 
-    // Start theme when game transitions to Playing state
     const isPlaying = this.session?.state === SessionState.Playing;
-    if (isPlaying && !this.themeStarted) {
-      this.themeStarted = true;
-      void this.gameThemeAudio.play().catch((err) => {
-        console.warn('Game theme could not play:', err);
-      });
-    } else if (!isPlaying && this.themeStarted) {
-      this.themeStarted = false;
-      this.gameThemeAudio.pause();
-      this.gameThemeAudio.currentTime = 0;
+    if (isPlaying) {
+      if (!this.gameThemeStarted) {
+        this.gameThemeStarted = true;
+        this.menuThemeStarted = false;
+        this.menuThemeAudio.pause();
+        this.gameThemeAudio.currentTime = 0;
+        void this.gameThemeAudio.play().catch((err) => {
+          console.warn('Game theme could not play:', err);
+        });
+      }
+    } else {
+      if (!this.menuThemeStarted) {
+        this.menuThemeStarted = true;
+        this.gameThemeStarted = false;
+        this.gameThemeAudio.pause();
+        this.gameThemeAudio.currentTime = 0;
+        void this.menuThemeAudio.play().catch((err) => {
+          console.warn('Menu theme could not play:', err);
+        });
+      }
     }
 
     if (this.cameraMode === 'free') {
