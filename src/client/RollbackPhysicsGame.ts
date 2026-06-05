@@ -43,6 +43,10 @@ import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiled
 
 const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).href;
 const WHIP_SOUND_URL = new URL('../assets/sounds/whip.wav', import.meta.url).href;
+const PAPER_SOUND_URL = new URL('../assets/sounds/paper.wav', import.meta.url).href;
+const EQUIP_SOUND_URL = new URL('../assets/sounds/equip_sound.mp3', import.meta.url).href;
+const JUMP_SOUND_URL = new URL('../assets/sounds/jump.mp3', import.meta.url).href;
+const FOOTSTEPS_SOUND_URL = new URL('../assets/sounds/Footsteps.wav', import.meta.url).href;
 const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
 const BINARY_BEAM_SOUND_URL = new URL('../assets/sounds/binary_beam.wav', import.meta.url).href;
 
@@ -156,6 +160,39 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly textDecoder = new TextDecoder();
   private readonly bullets = new Map<number, Bullet>();
   private readonly itemSlots: ItemSlotState[] = [];
+  private readonly punchAudioPool: HTMLAudioElement[] = Array.from({ length: 4 }, () => {
+    const audio = new Audio(PUNCH_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.5;
+    audio.load();
+    return audio;
+  });
+  private punchAudioPoolIndex = 0;
+  private readonly equipAudioPool: HTMLAudioElement[] = Array.from({ length: 2 }, () => {
+    const audio = new Audio(EQUIP_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.5;
+    audio.load();
+    return audio;
+  });
+  private equipAudioPoolIndex = 0;
+  private readonly jumpAudioPool: HTMLAudioElement[] = Array.from({ length: 3 }, () => {
+    const audio = new Audio(JUMP_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.5;
+    audio.load();
+    return audio;
+  });
+  private jumpAudioPoolIndex = 0;
+  private readonly footstepsAudioPool: HTMLAudioElement[] = Array.from({ length: 3 }, () => {
+    const audio = new Audio(FOOTSTEPS_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.9;
+    audio.load();
+    return audio;
+  });
+  private footstepsAudioPoolIndex = 0;
+  private readonly previousHorizontalDir = new Map<string, number>();
   private nextBulletId = 1;
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
@@ -900,6 +937,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     let nextYVelocity = velocity.y;
     if (jumpPressed && this.isGrounded(body, ducking)) {
       nextYVelocity = JUMP_SPEED;
+      this.playJumpSound();
     }
 
     if (
@@ -941,16 +979,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (attackPressed && record.activeAttack === null && record.canPunch()) {
       const definition = getEquippedAttack(record.equippedWeapon);
-            const punchSound = new Audio(PUNCH_SOUND_URL);
       record.activeAttack = {
         kind: definition.kind,
         ticksRemaining: definition.durationTicks,
       };
-      punchSound.volume = 0.5;
-      punchSound.currentTime = 0; // rewind so it can replay quickly
-      void punchSound.play().catch((err) => {
-        console.warn('Sound could not play:', err);
-      });
+      this.playPunchSound();
       this.resolvePunchHits(id, definition);
     }
 
@@ -964,8 +997,50 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       return;
     }
 
-    body.setLinvel({ x: record.knockbackTicksRemaining > 0 ? velocity.x : horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
+    const prevHorizontalDir = this.previousHorizontalDir.get(id) ?? 0;
+    if (horizontalDir !== 0 && prevHorizontalDir === 0) {
+      this.playFootstepsSound();
+    }
+    this.previousHorizontalDir.set(id, horizontalDir);
+
+    body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
+  }
+
+  private playPunchSound(): void {
+    const audio = this.punchAudioPool[this.punchAudioPoolIndex];
+    this.punchAudioPoolIndex = (this.punchAudioPoolIndex + 1) % this.punchAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Punch sound could not play:', err);
+    });
+  }
+
+  private playEquipSound(): void {
+    const audio = this.equipAudioPool[this.equipAudioPoolIndex];
+    this.equipAudioPoolIndex = (this.equipAudioPoolIndex + 1) % this.equipAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Equip sound could not play:', err);
+    });
+  }
+
+  private playJumpSound(): void {
+    const audio = this.jumpAudioPool[this.jumpAudioPoolIndex];
+    this.jumpAudioPoolIndex = (this.jumpAudioPoolIndex + 1) % this.jumpAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Jump sound could not play:', err);
+    });
+  }
+
+  private playFootstepsSound(): void {
+    const audio = this.footstepsAudioPool[this.footstepsAudioPoolIndex];
+    this.footstepsAudioPoolIndex = (this.footstepsAudioPoolIndex + 1) % this.footstepsAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Footsteps sound could not play:', err);
+    });
   }
 
   private tickDashCooldowns(): void {
@@ -1194,6 +1269,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.K_refreshWeaponFromGround(player, slot.item.kind);
     player.activeWeaponAttack = null;
     player.weaponCooldownTicks = 0;
+    this.playEquipSound();
     this.queueItemRespawn(slotIndex);
   }
 
@@ -1425,6 +1501,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       reloadOnKill: def.reloadOnKill ?? false,
       projectileGravity: def.projectileGravity ?? 0,
     });
+
+    if (kind === ItemKind.Finals) {
+      const paperSound = new Audio(PAPER_SOUND_URL);
+      paperSound.volume = 0.9;
+      void paperSound.play().catch((err) => {
+        console.warn('Paper sound could not play:', err);
+      });
+    }
 
     if (kind === ItemKind.PenCrossbow) {
       const crossbowSound = new Audio(PEN_CROSSBOW_SOUND_URL);
