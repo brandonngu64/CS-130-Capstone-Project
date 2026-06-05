@@ -976,6 +976,42 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       if (hit) {
         const hitPlayerId = this.playerColliderHandles.get(hit.collider.handle);
+        const piercesPlayers = weaponDef?.projectilePiercePlayers ?? false;
+
+        if (hitPlayerId !== undefined && piercesPlayers) {
+          if (this.matchState.canReceiveInput(hitPlayerId)) {
+            const target = this.players.get(hitPlayerId);
+            if (target) {
+              const nextHealth = target.takeDamage(bullet.damage);
+              const shooter = this.players.get(bullet.ownerId);
+              if (bullet.reloadOnHit && shooter) {
+                shooter.reloadPending = false;
+                shooter.reloadPendingOnKill = false;
+              }
+              if (bullet.reloadOnKill && nextHealth === 0 && shooter) {
+                shooter.reloadPending = false;
+                shooter.reloadPendingOnKill = false;
+              }
+            }
+          }
+
+          const travelSign = Math.sign(bullet.vx) || 1;
+          const piercedTarget = this.players.get(hitPlayerId);
+          if (piercedTarget) {
+            const pos = piercedTarget.body.translation();
+            const exitX = pos.x + travelSign * (PLAYER_HALF_WIDTH + hitHalfWidth + 0.02);
+            bullet.x = travelSign > 0 ? Math.max(bullet.x, exitX) : Math.min(bullet.x, exitX);
+          } else {
+            bullet.x += dx;
+          }
+
+          bullet.y += bullet.vy * FIXED_STEP_SECONDS;
+          if (bullet.x < minX || bullet.x > maxX) {
+            this.bullets.delete(bulletId);
+          }
+          continue;
+        }
+
         if (hitPlayerId !== undefined && this.matchState.canReceiveInput(hitPlayerId)) {
           const target = this.players.get(hitPlayerId);
           if (target) {
