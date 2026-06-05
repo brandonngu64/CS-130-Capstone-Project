@@ -94,7 +94,7 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     projectileLifetimeTicks: 72,
     projectileGravity: 0,
     projectileHitHalfWidth: 0.35,
-    projectileSpawnOffsetX: 2.5,
+    projectileSpawnOffsetX: 2.0,
     projectileSpawnOffsetY: 0.15,
     projectilePiercePlayers: true,
   },

@@ -974,6 +974,7 @@ export class GameRenderer {
 
   private getTileMaterial(tile: MapTileInstance): THREE.MeshBasicMaterial {
     const tintColor = tile.tintColor ?? 0xffffff;
+    const spriteAlphaTest = 0.1;
     const cacheKey = `${tile.atlasUrl}|${tintColor}|${tile.opacity}`;
     const cachedMaterial = this.materialCache.get(cacheKey);
     if (cachedMaterial) {
@@ -986,7 +987,7 @@ export class GameRenderer {
     const isOpaque = tile.opacity >= 1;
 
     const material = new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
+      alphaTest: spriteAlphaTest,
       color: tintColor,
       map: texture,
       opacity: tile.opacity,
@@ -1201,7 +1202,7 @@ export class GameRenderer {
   private createWeaponSpriteMesh(): WeaponSpriteMesh {
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
+      alphaTest: 0.1,
       transparent: false,
       toneMapped: false,
       side: THREE.DoubleSide,
@@ -1214,7 +1215,7 @@ export class GameRenderer {
 
   private createPlayerSpriteMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
     return new THREE.MeshBasicMaterial({
-      alphaTest: 0.001,
+      alphaTest: 0.1,
       color: 0xffffff,
       depthWrite: true,
       map: texture,
