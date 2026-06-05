@@ -18,6 +18,7 @@ export interface SettingsMenuCallbacks {
   onClose(): void;
   onArenaSideWallsChange(enabled: boolean): void;
   onFullscreenChange(enabled: boolean): void;
+  onVolumeChange(volume: number): void;
 }
 
 export class SettingsMenu {
@@ -33,6 +34,8 @@ export class SettingsMenu {
   private readonly closeButton: HTMLButtonElement;
   private readonly sideWallsToggle: HTMLInputElement;
   private readonly fullscreenToggle: HTMLInputElement;
+  private readonly volumeSlider: HTMLInputElement;
+  private readonly volumeValue: HTMLElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -72,6 +75,14 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuCloseButton',
     );
+    this.volumeSlider = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuVolumeSlider',
+    );
+    this.volumeValue = getElement<HTMLElement>(
+      this.element,
+      '#settingsMenuVolumeValue',
+    );
     this.statusText = getElement<HTMLElement>(
       this.element,
       '#settingsMenuStatus',
@@ -93,6 +104,11 @@ export class SettingsMenu {
     });
     this.fullscreenToggle.addEventListener('change', () => {
       callbacks.onFullscreenChange(this.fullscreenToggle.checked);
+    });
+    this.volumeSlider.addEventListener('input', () => {
+      const volume = Number(this.volumeSlider.value) / 100;
+      this.volumeValue.textContent = `${this.volumeSlider.value}%`;
+      callbacks.onVolumeChange(volume);
     });
 
     this.element.addEventListener('click', (event) => {
@@ -149,6 +165,13 @@ export class SettingsMenu {
     this.fullscreenToggle.checked = enabled;
   }
 
+  setVolume(volume: number): void {
+    const normalizedVolume = Math.max(0, Math.min(1, volume));
+    const percent = Math.round(normalizedVolume * 100);
+    this.volumeSlider.value = String(percent);
+    this.volumeValue.textContent = `${percent}%`;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -198,6 +221,11 @@ export class SettingsMenu {
         <label class="toggle-field">
           <input id="settingsMenuFullscreenToggle" type="checkbox" />
           <span>Fullscreen mode</span>
+        </label>
+
+        <label class="range-field">
+          <span>Master Volume <output id="settingsMenuVolumeValue">100%</output></span>
+          <input id="settingsMenuVolumeSlider" type="range" min="0" max="100" step="1" value="100" />
         </label>
 
         <button id="settingsMenuLeaveButton" class="action-danger" type="button">Leave Room</button>
