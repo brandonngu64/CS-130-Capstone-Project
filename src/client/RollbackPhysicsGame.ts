@@ -153,6 +153,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly textDecoder = new TextDecoder();
   private readonly bullets = new Map<number, Bullet>();
   private readonly itemSlots: ItemSlotState[] = [];
+  private readonly punchAudioPool: HTMLAudioElement[] = Array.from({ length: 4 }, () => {
+    const audio = new Audio(PUNCH_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.5;
+    audio.load();
+    return audio;
+  });
+  private punchAudioPoolIndex = 0;
   private nextBulletId = 1;
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
@@ -878,16 +886,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (attackPressed && record.activeAttack === null && record.canPunch()) {
       const definition = getEquippedAttack(record.equippedWeapon);
-            const punchSound = new Audio(PUNCH_SOUND_URL);
       record.activeAttack = {
         kind: definition.kind,
         ticksRemaining: definition.durationTicks,
       };
-      punchSound.volume = 0.5;
-      punchSound.currentTime = 0; // rewind so it can replay quickly
-      void punchSound.play().catch((err) => {
-        console.warn('Sound could not play:', err);
-      });
+      this.playPunchSound();
       this.resolvePunchHits(id, definition);
     }
 
@@ -903,6 +906,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
+  }
+
+  private playPunchSound(): void {
+    const audio = this.punchAudioPool[this.punchAudioPoolIndex];
+    this.punchAudioPoolIndex = (this.punchAudioPoolIndex + 1) % this.punchAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Punch sound could not play:', err);
+    });
   }
 
   private tickDashCooldowns(): void {
