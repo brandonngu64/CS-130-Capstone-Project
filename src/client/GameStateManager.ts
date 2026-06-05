@@ -57,6 +57,19 @@ export class GameStateManager {
     return state.stocks > 0 && state.respawnTicksRemaining === 0;
   }
 
+  /** False while respawn invulnerability flash is active. */
+  canTakeDamage(playerId: string): boolean {
+    const state = this.byPlayer.get(playerId);
+    if (!state) {
+      return false;
+    }
+    return (
+      state.stocks > 0
+      && state.respawnTicksRemaining === 0
+      && state.respawnFlashTicksRemaining === 0
+    );
+  }
+
   startRespawn(playerId: string): boolean {
     const state = this.byPlayer.get(playerId);
     if (!state || state.stocks === 0 || state.respawnTicksRemaining > 0) {

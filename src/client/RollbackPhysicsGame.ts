@@ -1046,7 +1046,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         const piercesPlayers = weaponDef?.projectilePiercePlayers ?? false;
 
         if (hitPlayerId !== undefined && piercesPlayers) {
-          if (this.matchState.canReceiveInput(hitPlayerId)) {
+          if (this.matchState.canTakeDamage(hitPlayerId)) {
             const target = this.players.get(hitPlayerId);
             if (target) {
               const nextHealth = target.takeDamage(bullet.damage);
@@ -1079,7 +1079,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           continue;
         }
 
-        if (hitPlayerId !== undefined && this.matchState.canReceiveInput(hitPlayerId)) {
+        if (hitPlayerId !== undefined && this.matchState.canTakeDamage(hitPlayerId)) {
           const target = this.players.get(hitPlayerId);
           if (target) {
             const nextHealth = target.takeDamage(bullet.damage);
@@ -1458,7 +1458,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (otherId === attackerId) {
         continue;
       }
-      if (!this.matchState.canReceiveInput(otherId)) {
+      if (!this.matchState.canTakeDamage(otherId)) {
         continue;
       }
 
@@ -1485,7 +1485,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (const [otherId, target] of this.players) {
       if (otherId === attackerId) continue;
-      if (!this.matchState.canReceiveInput(otherId)) continue;
+      if (!this.matchState.canTakeDamage(otherId)) continue;
 
       const targetPos = target.body.translation();
       if (
