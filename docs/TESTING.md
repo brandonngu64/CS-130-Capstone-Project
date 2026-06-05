@@ -142,10 +142,54 @@ Edge cases and error handling covered: unknown map IDs, filename/path normalizat
 
 Edge cases and error handling covered: neutral facing, exact walk threshold, held-item animation override, whip timing boundaries, unknown weapon definitions, unknown sprite assets, invalid character IDs, roster wraparound, and late-joining players.
 
+## Suite 4: Game State Manager
+
+- Test class/file: [src/client/__tests__/GameStateManager.test.ts](../src/client/__tests__/GameStateManager.test.ts)
+- Framework mapping: `describe('player state initialization and cleanup')`, `describe('respawn and damage lifecycle')`, `describe('winner detection')`, and `describe('rollback match state serialization')` are Vitest suites; each `it(...)` block is a test case.
+- Setup: tests create fresh `GameStateManager` instances for each case. Shared helpers create players and advance deterministic timer ticks.
+- Teardown: no teardown is required because each test owns its manager instance and the class does not allocate DOM, physics, file, or network resources.
+
+### Player State Initialization and Cleanup
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `creates new players with default stocks and active timers` | New manager with player `alice` | Alice starts with `DEFAULT_STOCKS`, zero respawn timers, can receive input, can take damage, and renders as active. |
+| `does not reset an existing player when ensurePlayer is called again` | Alice loses one stock, then `ensurePlayer('alice')` is called again | Alice keeps `DEFAULT_STOCKS - 1` and the active respawn delay, proving duplicate setup does not reset match state. |
+| `treats unknown players as eliminated and unable to act` | Unknown player id `missing` | Snapshot is `null`, input/damage checks return `false`, and render info reports eliminated with zero stocks. |
+| `removes individual players and clears all match state` | Players `alice` and `bob`; call `removePlayer('alice')`, then `clear()` | Alice is removed while Bob remains; after clear, Bob is also removed. |
+
+### Respawn and Damage Lifecycle
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `starts a respawn after a non-final stock loss` | Alice starts respawn with 3 stocks | Stocks drop to 2, respawn delay becomes `RESPAWN_DELAY_TICKS`, input and damage are blocked, and render info marks Alice respawning. |
+| `rejects respawn starts for unknown, eliminated, or already-respawning players` | Unknown player, Alice while respawning, and Alice after final stock loss | `startRespawn` returns `false` for invalid states and never starts a new timer for eliminated players. |
+| `emits a respawn event only when the respawn timer reaches zero` | Alice respawn timer advanced `RESPAWN_DELAY_TICKS - 1`, then one more tick | No event fires early; the final tick returns `['alice']` and starts `RESPAWN_FLASH_TICKS`. |
+| `blocks damage during respawn flash while allowing input after respawn` | Alice after respawn delay and through the flash timer | Input is allowed during flash, damage is blocked during flash, and damage is allowed again after flash reaches zero. |
+| `can force a living player back into active state without restoring stocks` | Alice loses one stock, then `resetRespawnState('alice')` | Respawn timers reset to zero, Alice can take damage, and lost stock is not restored. |
+| `does not reset timers for unknown or eliminated players` | Unknown player and Alice after losing all stocks | Reset calls do nothing for missing or eliminated players; Alice remains eliminated with zero stocks. |
+
+### Winner Detection
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `returns null while there are zero or multiple living active players` | Empty active list, `alice`/`bob`, and missing-only list | Winner is `null` when there is no single surviving player. |
+| `returns the only active player with stocks remaining` | Bob loses all stocks while Alice remains active | Winner is `alice`. |
+
+### Rollback Match State Serialization
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `reports a stable byte size for each serialized player` | New manager | `matchBytesPerPlayer()` returns `5`. |
+| `writes and reads player state snapshots using little-endian timers` | Alice loses one stock, advances 7 respawn ticks, then serializes to `DataView` | Serialized bytes contain stocks, remaining respawn ticks, and flash ticks at the expected offsets; reading into a new manager recreates the same snapshot. |
+| `serializes multiple players at caller-provided offsets` | Alice in flash state and Bob in respawn state serialized back-to-back | Offsets advance by 5 bytes per player, and restoring both players matches the source snapshots. |
+| `throws when writing a player that has no match state` | Attempt to write `missing` | `writePlayer` throws `Missing match state for missing`. |
+
+Edge cases and error handling covered: duplicate player initialization, unknown players, player removal, clearing state, final-stock elimination, respawn timer boundary, invulnerability flash boundary, forced respawn reset, single-winner detection, multi-player serialization offsets, and missing-player serialization errors.
+
 ## Planned Suite Breakdown
 
 The remaining suites can be added as separate commits so the final report is easy to explain:
 
-1. Game state manager suite: validate player snapshots, stock/life transitions, match-over calculation, and render info ordering.
-2. Rollback physics gameplay suite: validate movement, jumping, dashing, projectile lifetime, hit detection, respawn timing, and blast-zone deaths using deterministic frame advancement.
-3. Signaling/server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
+1. Rollback physics gameplay suite: validate movement, jumping, dashing, projectile lifetime, hit detection, respawn timing, and blast-zone deaths using deterministic frame advancement.
+2. Signaling/server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
