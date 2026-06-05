@@ -66,15 +66,15 @@ export const WEAPON_SPRITE_CONFIG: Partial<Record<ItemKind, WeaponSpriteConfig>>
 export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   [ItemKind.EthernetWhip]: {
     kind: 'melee',
-    damage: 22,
-    cooldownTicks: 18,
+    damage: 15,
+    cooldownTicks: 10,
     hitboxHalfWidth: 1.8,
     hitboxHalfHeight: 0.2,
     centerOffsetX: 0.45 + 1.8, // PLAYER_HALF_WIDTH + reach
     centerOffsetY: 0.0,
-    windupTicks: 4,
-    lashTicks: 5,
-    recoilTicks: 5,
+    windupTicks: 3,
+    lashTicks: 4,
+    recoilTicks: 4,
     get durationTicks() {
       return (this.windupTicks ?? 0) + (this.lashTicks ?? 0) + (this.recoilTicks ?? 0);
     },
