@@ -64,10 +64,6 @@ These tests verify Ethernet Whip timing because melee hitbox activation depends 
 
 Boundary conditions covered: first tick of windup, last tick of windup, first and last lash ticks, first recoil tick, and zero ticks remaining.
 
-## Planned Suite Breakdown
-
-The remaining suites can be added as separate commits so the final report is easy to explain:
-
 ## Suite 2: Map Loading and Gameplay Metadata
 
 - Test class/file: [src/client/__tests__/tiledMap.test.ts](../src/client/__tests__/tiledMap.test.ts)
@@ -103,11 +99,53 @@ The remaining suites can be added as separate commits so the final report is eas
 
 Edge cases and error handling covered: unknown map IDs, filename/path normalization, defensive manifest copying, cached default loading, centered boundary math, collider bounds, and hidden special spawn tiles.
 
+## Suite 3: Character Sprite and Weapon Frames
+
+- Test class/file: [src/client/__tests__/CharacterSprites.test.ts](../src/client/__tests__/CharacterSprites.test.ts)
+- Framework mapping: `describe('character body frame selection')`, `describe('weapon and punch frame selection')`, `describe('sprite asset resolution')`, and `describe('character id normalization and assignment')` are Vitest suites; each `it(...)` or `it.each(...)` block is a test case.
+- Setup: tests import deterministic sprite helper functions and use existing character/weapon image assets resolved by Vite's test environment.
+- Teardown: no teardown is required because the tested helpers do not create renderer objects, DOM nodes, network connections, or persistent timers.
+
+### Character Body Frame Selection
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `uses facing %s for idle frame %s` | Facing values `1`, `0`, and `-1` with no held item, zero velocity, and animation tick `0` | Facing right or neutral resolves to `idle_r`; facing left resolves to `idle_l`. |
+| `switches to hold frames whenever a character has an item` | Finals while facing right; Ethernet Whip while facing left with nonzero movement inputs | Held items force `hold_r` or `hold_l`, proving held weapon rendering overrides movement animation. |
+| `alternates walk frames after crossing the velocity threshold` | Velocities `0.35`, `0.36`, and `-0.36`; animation ticks `0`, `10`, and `20` | Velocity at the threshold stays idle; velocity above the threshold alternates between walk frame 1 and 2 based on animation tick and facing. |
+| `includes character id and resolved frame in frame cache keys` | Character `sahai`, facing left, moving left, animation tick `10` | The cache key is `sahai:walk_l2`. |
+
+### Weapon and Punch Frame Selection
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `uses the special Sahai punch sprite variant only for Sahai` | `sahai`, `eggert`, and `nachenburg` | Sahai resolves to punch variant `var2`; the other tested characters resolve to `var1`. |
+| `resolves %s whip ticks remaining to %s` | Whip ticks remaining `14`, `10`, `5`, and `0` | Windup/recoil use `attack1`, lash uses `attack2`, and zero ticks remaining uses `idle`. |
+| `resolves non-whip held weapon frames from item-specific rules` | Finals, Binary Beam, and Pen Crossbow with cooldowns `0` and `3` | Finals uses `paper_stack`, Binary Beam uses `gpu`, Pen Crossbow uses `idle` normally and `firing` during cooldown. |
+| `throws when a held item has no sprite rule or weapon definition` | Gun with no weapon definition | `resolveHeldWeaponFrame` throws `Missing weapon definition for held item 1`. |
+| `falls back to idle bottom inset for unknown whip frames` | Known frame `attack2` and unknown frame `missing` | Known frames use their configured inset; unknown frames fall back to the idle inset. |
+
+### Sprite Asset Resolution
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `resolves existing character and weapon sprite URLs` | Eggert idle sprite, Sahai preview sprite, and paper stack weapon sprite | Each helper returns a URL containing the expected asset path. |
+| `throws clear errors for missing sprite assets` | Missing Eggert frame and missing paper stack weapon frame | The helpers throw explicit missing-sprite errors with the requested asset name. |
+
+### Character ID Normalization and Assignment
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `normalizes missing or invalid character ids to the default character` | `smallberg`, `Smallberg`, `null`, and `undefined` | Valid lowercase IDs are preserved; invalid, null, and undefined values return the default character. |
+| `assigns characters by sorted player order and wraps long rosters` | Sorted player IDs `a`, `b`, `c`, `d`, `e` | Players map by roster order, and the fifth player wraps back to `eggert`. |
+| `assigns a stable valid fallback character for players missing from the sorted list` | Player `late-joiner` with sorted list `['host']` | The fallback assignment is deterministic and always one of the configured character IDs. |
+
+Edge cases and error handling covered: neutral facing, exact walk threshold, held-item animation override, whip timing boundaries, unknown weapon definitions, unknown sprite assets, invalid character IDs, roster wraparound, and late-joining players.
+
 ## Planned Suite Breakdown
 
 The remaining suites can be added as separate commits so the final report is easy to explain:
 
-1. Character sprite and weapon frame suite: validate frame selection for idle, walking, held items, punch variants, whip phases, and pen crossbow firing cooldowns.
-2. Game state manager suite: validate player snapshots, stock/life transitions, match-over calculation, and render info ordering.
-3. Rollback physics gameplay suite: validate movement, jumping, dashing, projectile lifetime, hit detection, respawn timing, and blast-zone deaths using deterministic frame advancement.
-4. Signaling/server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
+1. Game state manager suite: validate player snapshots, stock/life transitions, match-over calculation, and render info ordering.
+2. Rollback physics gameplay suite: validate movement, jumping, dashing, projectile lifetime, hit detection, respawn timing, and blast-zone deaths using deterministic frame advancement.
+3. Signaling/server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
