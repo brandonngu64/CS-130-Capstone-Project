@@ -44,6 +44,7 @@ import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiled
 const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).href;
 const WHIP_SOUND_URL = new URL('../assets/sounds/whip.wav', import.meta.url).href;
 const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
+const BINARY_BEAM_SOUND_URL = new URL('../assets/sounds/binary_beam.wav', import.meta.url).href;
 
 export interface AttackRenderState {
   id: string;
@@ -1326,6 +1327,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       crossbowSound.volume = 0.5;
       void crossbowSound.play().catch((err) => {
         console.warn('Pen crossbow sound could not play:', err);
+      });
+    }
+
+    if (kind === ItemKind.BinaryBeam) {
+      const binaryBeamSound = new Audio(BINARY_BEAM_SOUND_URL);
+      binaryBeamSound.volume = 0.5;
+      void binaryBeamSound.play().catch((err) => {
+        console.warn('Binary beam sound could not play:', err);
       });
     }
   }
