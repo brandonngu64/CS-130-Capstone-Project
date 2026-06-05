@@ -129,6 +129,9 @@ type ItemSlotState = {
 const CONTACT_ALLOWANCE = 0.15;
 const GROUND_RAY_OFFSET = 0.02;
 const GROUND_RAY_LENGTH = 0.25;
+const KNOCKBACK_BASE = 4;    // horizontal impulse at full health
+const KNOCKBACK_SCALE = 14;  // additional impulse at 0 health
+const KNOCKBACK_UP = 3;      // upward lift on every hit
 const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
 const SPAWN_ROTATION: readonly ItemKind[] = [
   ItemKind.BinaryBeam,
@@ -199,6 +202,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         characterId: characterIdToIndex(record.characterId),
         weaponCooldownTicks: record.weaponCooldownTicks,
         activeWeaponAttackTicksRemaining: record.activeWeaponAttack?.ticksRemaining ?? 0,
+        knockbackTicksRemaining: record.knockbackTicksRemaining,
       };
     });
 
@@ -206,7 +210,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
     let byteLength = 1;
     for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 16 + 17 + matchBytes;
+      byteLength += 2 + record.idBytes.length + 16 + 18 + matchBytes;
     }
 
     byteLength += 4 + 1 + 1 + 1;
@@ -249,6 +253,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.characterId); offset += 1;
       view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
       view.setUint8(offset, record.activeWeaponAttackTicksRemaining); offset += 1;
+      view.setUint8(offset, record.knockbackTicksRemaining); offset += 1;
 
       offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
     }
@@ -324,6 +329,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         characterId: number;
         weaponCooldownTicks: number;
         activeWeaponAttackTicksRemaining: number;
+        knockbackTicksRemaining: number;
       }
     >();
 
@@ -353,6 +359,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const characterId = view.getUint8(offset); offset += 1;
       const weaponCooldownTicks = view.getUint8(offset); offset += 1;
       const activeWeaponAttackTicksRemaining = view.getUint8(offset); offset += 1;
+      const knockbackTicksRemaining = view.getUint8(offset); offset += 1;
 
       incoming.set(id, {
         x,
@@ -374,6 +381,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         characterId,
         weaponCooldownTicks,
         activeWeaponAttackTicksRemaining,
+        knockbackTicksRemaining,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -411,6 +419,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.reloadPendingOnKill = state.reloadPendingOnKill;
       record.characterId = characterIdFromIndex(state.characterId);
       record.weaponCooldownTicks = state.weaponCooldownTicks;
+      record.knockbackTicksRemaining = state.knockbackTicksRemaining;
 
       // Reconstruct activeWeaponAttack from the serialized ticks + current heldItem
       if (state.activeWeaponAttackTicksRemaining > 0 && state.heldItem > 0) {
@@ -891,7 +900,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       return;
     }
 
-    body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
+    body.setLinvel({ x: record.knockbackTicksRemaining > 0 ? velocity.x : horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
   }
 
@@ -899,6 +908,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (const [, record] of this.players) {
       if (record.dashCooldownTicks > 0) {
         record.dashCooldownTicks -= 1;
+      }
+      if (record.knockbackTicksRemaining > 0) {
+        record.knockbackTicksRemaining -= 1;
       }
     }
   }
@@ -920,8 +932,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (record.activeWeaponAttack) {
         // Resolve melee hit on the very first tick of the lash phase
         if (record.isWhipHitboxActive()) {
-          const lashTicks = record.activeWeaponAttack.def.lashTicks ?? 0;
-          if (record.activeWeaponAttack.ticksRemaining === lashTicks) {
+          const def = record.activeWeaponAttack.def;
+          const lashStartTicks = (def.lashTicks ?? 0) + (def.recoilTicks ?? 0);
+          if (record.activeWeaponAttack.ticksRemaining === lashStartTicks) {
             this.resolveMeleeWeaponHits(id, record);
           }
         }
@@ -1016,6 +1029,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           const target = this.players.get(hitPlayerId);
           if (target) {
             const nextHealth = target.takeDamage(bullet.damage);
+            this.applyKnockback(target, Math.sign(bullet.vx) || 1);
             const shooter = this.players.get(bullet.ownerId);
             if (bullet.reloadOnHit && shooter) {
               shooter.reloadPending = false;
@@ -1361,6 +1375,20 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     };
   }
 
+  private applyKnockback(target: PlayerCharacter, directionX: number): void {
+    const healthFraction = target.health / target.maxHealth;
+    const magnitude = KNOCKBACK_BASE + KNOCKBACK_SCALE * (1 - healthFraction);
+    const currentVel = target.body.linvel();
+    target.knockbackTicksRemaining = 6;
+    target.body.setLinvel(
+      {
+        x: currentVel.x + directionX * magnitude,
+        y: currentVel.y + KNOCKBACK_UP,
+      },
+      true,
+    );
+  }
+
   private resolvePunchHits(attackerId: string, definition: AttackDefinition): void {
     const attacker = this.players.get(attackerId);
     if (!attacker) {
@@ -1386,6 +1414,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.y - center.y) < overlapHalfHeight
       ) {
         target.takeDamage(definition.damage);
+        const knockDir = Math.sign(targetPos.x - center.x) || attacker.facing;
+        this.applyKnockback(target, knockDir);
       }
     }
   }
@@ -1409,6 +1439,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.y - cy) < overlapHalfHeight
       ) {
         target.takeDamage(def.damage);
+        this.applyKnockback(target, attacker.facing);
       }
     }
   }
