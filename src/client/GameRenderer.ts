@@ -1548,6 +1548,10 @@ export class GameRenderer {
     };
   }
 
+  requestResize(): void {
+    this.resize();
+  }
+
   private resize(): void {
     const width  = this.container.clientWidth;
     const height = this.container.clientHeight;

@@ -1640,6 +1640,10 @@ export class MultiplayerApp {
   private readonly onFullscreenStateChange = (): void => {
     const active = document.fullscreenElement !== null;
     this.settingsMenu.setFullscreenEnabled(active);
+    // The browser sometimes lags before ResizeObserver fires after
+    // exiting fullscreen, so kick the renderer to recompute once the
+    // viewport has settled at its new size.
+    requestAnimationFrame(() => this.renderer.requestResize());
   };
 
   private updateUiState(): void {
