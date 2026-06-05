@@ -293,6 +293,8 @@ export class MultiplayerApp {
     right: false,
     up: false,
     down: false,
+    zoomin: false,
+    zoomout: false,
   };
   private readonly cameraMoveSpeed = 8;
 
@@ -353,6 +355,16 @@ export class MultiplayerApp {
       return;
     }
 
+    if (this.cameraMode === 'free' && (event.code === 'Minus' || event.code === 'Equal')) {
+      event.preventDefault();
+      if (event.code === 'Minus') {
+        this.cameraPanInput.zoomout = true;
+      } else {
+        this.cameraPanInput.zoomin = true;
+      }
+      return;
+    }
+
     if (
       event.code === 'ArrowLeft' ||
       event.code === 'KeyA' ||
@@ -404,6 +416,15 @@ export class MultiplayerApp {
         this.cameraPanInput.up = false;
       } else if (event.code === 'ArrowDown') {
         this.cameraPanInput.down = false;
+      }
+      return;
+    }
+
+    if (this.cameraMode === 'free' && (event.code === 'Minus' || event.code === 'Equal')) {
+      if (event.code === 'Minus') {
+        this.cameraPanInput.zoomout = false;
+      } else {
+        this.cameraPanInput.zoomin = false;
       }
       return;
     }
@@ -1753,6 +1774,8 @@ export class MultiplayerApp {
     this.cameraPanInput.right = false;
     this.cameraPanInput.up = false;
     this.cameraPanInput.down = false;
+    this.cameraPanInput.zoomin = false;
+    this.cameraPanInput.zoomout = false;
   }
 
   private updateCameraButton(): void {
@@ -1767,14 +1790,17 @@ export class MultiplayerApp {
     const moveX = (this.cameraPanInput.right ? 1 : 0) - (this.cameraPanInput.left ? 1 : 0);
     const moveY = (this.cameraPanInput.up ? 1 : 0) - (this.cameraPanInput.down ? 1 : 0);
 
-    if (moveX === 0 && moveY === 0) {
-      return;
+    if (moveX !== 0 || moveY !== 0) {
+      this.renderer.panFreeCamera(
+        moveX * this.cameraMoveSpeed * deltaSeconds,
+        moveY * this.cameraMoveSpeed * deltaSeconds,
+      );
     }
 
-    this.renderer.panFreeCamera(
-      moveX * this.cameraMoveSpeed * deltaSeconds,
-      moveY * this.cameraMoveSpeed * deltaSeconds,
-    );
+    const zoomDir = (this.cameraPanInput.zoomin ? 1 : 0) - (this.cameraPanInput.zoomout ? 1 : 0);
+    if (zoomDir !== 0) {
+      this.renderer.zoomFreeCamera(zoomDir * 1.5 * deltaSeconds);
+    }
   }
 
   private syncRespawnCamera(localPlayer: { eliminated: boolean; respawning: boolean }): void {

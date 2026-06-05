@@ -225,6 +225,7 @@ export class GameRenderer {
   private readonly baseViewHeight: number;
   private baseViewWidth = 0;
   private readonly freeCameraTarget = new THREE.Vector2();
+  private freeCameraZoom = 1;
   private readonly cameraTarget = new THREE.Vector2();
   private cameraMode: CameraMode = 'follow';
   private readonly textureLoader = new THREE.TextureLoader();
@@ -798,6 +799,7 @@ export class GameRenderer {
     this.cameraMode = mode;
     if (mode === 'free') {
       this.freeCameraTarget.set(this.camera.position.x, this.camera.position.y);
+      this.freeCameraZoom = this.camera.zoom;
     }
   }
 
@@ -821,6 +823,14 @@ export class GameRenderer {
     this.freeCameraTarget.x += deltaX;
     this.freeCameraTarget.y += deltaY;
     this.clampFreeCameraTarget();
+  }
+
+  zoomFreeCamera(delta: number): void {
+    if (this.cameraMode !== 'free') {
+      return;
+    }
+
+    this.freeCameraZoom = THREE.MathUtils.clamp(this.freeCameraZoom + delta, 0.4, 3);
   }
 
   dispose(): void {
@@ -1079,6 +1089,10 @@ export class GameRenderer {
   }
 
   private getTargetZoom(state: RenderState): number {
+    if (this.cameraMode === 'free') {
+      return this.freeCameraZoom;
+    }
+
     if (this.cameraMode !== 'action') {
       return 1;
     }
