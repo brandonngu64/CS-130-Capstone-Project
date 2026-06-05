@@ -68,6 +68,7 @@ const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 
 const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
+const FIGHT_START_SOUND_URL = new URL('../assets/sounds/fight_start.wav', import.meta.url).href;
 
 function requireElement<T extends HTMLElement>(
   parent: ParentNode,
@@ -1085,6 +1086,11 @@ export class MultiplayerApp {
     this.session.on('gameStart', () => {
       this.applyLobbyCharactersToGame();
       this.setStatus('Game started. Rollback simulation is active.');
+      const fightStartAudio = new Audio(FIGHT_START_SOUND_URL);
+      fightStartAudio.volume = 0.5;
+      void fightStartAudio.play().catch((err) => {
+        console.warn('Fight start sound could not play:', err);
+      });
     });
 
     this.session.on('desync', (tick, localHash, remoteHash) => {

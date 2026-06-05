@@ -42,6 +42,8 @@ import type { WeaponDefinition, WorldItem } from './items';
 import type { MapColliderRect, MapSpawnPoint, TiledMapDefinition } from './tiledMap';
 
 const PUNCH_SOUND_URL = new URL('../assets/sounds/punch.wav', import.meta.url).href;
+const WHIP_SOUND_URL = new URL('../assets/sounds/whip.wav', import.meta.url).href;
+const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
 
 export interface AttackRenderState {
   id: string;
@@ -860,6 +862,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           ticksRemaining: def.durationTicks ?? 0,
         };
         record.weaponCooldownTicks = def.cooldownTicks;
+        if (heldKind === ItemKind.EthernetWhip) {
+          const whipSound = new Audio(WHIP_SOUND_URL);
+          whipSound.volume = 0.5;
+          void whipSound.play().catch((err) => {
+            console.warn('Whip sound could not play:', err);
+          });
+        }
       } else if (def?.kind === 'projectile') {
         this.fireProjectileWeapon(record, def, heldKind);
         record.weaponCooldownTicks = def.cooldownTicks;
@@ -1311,6 +1320,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       reloadOnKill: def.reloadOnKill ?? false,
       projectileGravity: def.projectileGravity ?? 0,
     });
+
+    if (kind === ItemKind.PenCrossbow) {
+      const crossbowSound = new Audio(PEN_CROSSBOW_SOUND_URL);
+      crossbowSound.volume = 0.5;
+      void crossbowSound.play().catch((err) => {
+        console.warn('Pen crossbow sound could not play:', err);
+      });
+    }
   }
 
   private attackCenter(
