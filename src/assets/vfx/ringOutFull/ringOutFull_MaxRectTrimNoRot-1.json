@@ -1,0 +1,165 @@
+{"frames": {
+
+"SmashBrosRingOut001.png":
+{
+	"frame": {"x":1,"y":1004,"w":236,"h":223},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":72,"y":61,"w":236,"h":223},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut002.png":
+{
+	"frame": {"x":1,"y":1,"w":568,"h":262},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":65,"y":51,"w":568,"h":262},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut016.png":
+{
+	"frame": {"x":265,"y":1,"w":577,"h":202},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":83,"w":577,"h":202},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut017.png":
+{
+	"frame": {"x":239,"y":1203,"w":561,"h":209},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":79,"w":561,"h":209},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut023.png":
+{
+	"frame": {"x":246,"y":580,"w":588,"h":216},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":76,"w":588,"h":216},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut029.png":
+{
+	"frame": {"x":1,"y":1229,"w":585,"h":106},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":147,"w":585,"h":106},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut054.png":
+{
+	"frame": {"x":1,"y":571,"w":243,"h":61},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":187,"y":151,"w":243,"h":61},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut055.png":
+{
+	"frame": {"x":1,"y":634,"w":243,"h":61},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":187,"y":151,"w":243,"h":61},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut056.png":
+{
+	"frame": {"x":1,"y":697,"w":243,"h":60},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":188,"y":152,"w":243,"h":60},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut057.png":
+{
+	"frame": {"x":1,"y":759,"w":243,"h":60},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":188,"y":152,"w":243,"h":60},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut058.png":
+{
+	"frame": {"x":1,"y":821,"w":243,"h":59},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":189,"y":152,"w":243,"h":59},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut059.png":
+{
+	"frame": {"x":1,"y":943,"w":242,"h":59},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":190,"y":152,"w":242,"h":59},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut060.png":
+{
+	"frame": {"x":1,"y":882,"w":243,"h":59},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":190,"y":152,"w":243,"h":59},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut061.png":
+{
+	"frame": {"x":109,"y":1229,"w":233,"h":59},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":190,"y":152,"w":233,"h":59},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut062.png":
+{
+	"frame": {"x":170,"y":1229,"w":232,"h":59},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":191,"y":152,"w":232,"h":59},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut064.png":
+{
+	"frame": {"x":109,"y":1766,"w":232,"h":56},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":192,"y":153,"w":232,"h":56},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut068.png":
+{
+	"frame": {"x":170,"y":1463,"w":230,"h":56},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":195,"y":153,"w":230,"h":56},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut069.png":
+{
+	"frame": {"x":109,"y":1464,"w":230,"h":56},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":195,"y":153,"w":230,"h":56},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut081.png":
+{
+	"frame": {"x":239,"y":1170,"w":226,"h":31},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":201,"y":170,"w":226,"h":31},
+	"sourceSize": {"w":819,"h":364}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "ringOutFull_MaxRectTrimNoRot-1.png",
+	"format": "RGBA8888",
+	"size": {"w":468,"h":1823},
+	"scale": "1",
+	"related_multi_packs": [ "ringOutFull_MaxRectTrimNoRot-0.json" ],
+	"smartupdate": "$TexturePacker:SmartUpdate:988890f5a698975b073635e6567e934c:01919c4a64f7e09c2b3d8d37bd926b37:b12cf787223866aacc1e99cfea088673$"
+}
+}

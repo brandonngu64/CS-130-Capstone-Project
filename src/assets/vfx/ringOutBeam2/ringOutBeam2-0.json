@@ -1,0 +1,108 @@
+{"frames": {
+
+"SmashBrosRingOut244.png":
+{
+	"frame": {"x":685,"y":156,"w":17,"h":16},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":71,"y":171,"w":17,"h":16},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut245.png":
+{
+	"frame": {"x":475,"y":739,"w":140,"h":129},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":42,"y":121,"w":140,"h":129},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut246.png":
+{
+	"frame": {"x":730,"y":1,"w":214,"h":205},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":43,"y":82,"w":214,"h":205},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut247.png":
+{
+	"frame": {"x":732,"y":208,"w":301,"h":214},
+	"rotated": true,
+	"trimmed": true,
+	"spriteSourceSize": {"x":45,"y":71,"w":301,"h":214},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut248.png":
+{
+	"frame": {"x":561,"y":535,"w":409,"h":202},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":47,"y":82,"w":409,"h":202},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut249.png":
+{
+	"frame": {"x":1,"y":723,"w":472,"h":193},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":50,"y":86,"w":472,"h":193},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut250.png":
+{
+	"frame": {"x":1,"y":535,"w":558,"h":186},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":53,"y":91,"w":558,"h":186},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut251.png":
+{
+	"frame": {"x":1,"y":156,"w":682,"h":175},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":56,"y":93,"w":682,"h":175},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut252.png":
+{
+	"frame": {"x":1,"y":1,"w":727,"h":153},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":60,"y":109,"w":727,"h":153},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut253.png":
+{
+	"frame": {"x":1,"y":333,"w":729,"h":123},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":65,"y":124,"w":729,"h":123},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut254.png":
+{
+	"frame": {"x":1,"y":458,"w":717,"h":75},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":72,"y":144,"w":717,"h":75},
+	"sourceSize": {"w":819,"h":364}
+},
+"SmashBrosRingOut255.png":
+{
+	"frame": {"x":1,"y":918,"w":694,"h":28},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":76,"y":165,"w":694,"h":28},
+	"sourceSize": {"w":819,"h":364}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "ringOutBeam2-0.png",
+	"format": "RGBA8888",
+	"size": {"w":971,"h":947},
+	"scale": "1",
+	"smartupdate": "$TexturePacker:SmartUpdate:c6edd8fedc0bbf527e860347ee3e12d3:d1afe19ff029e46099d10521ee657d45:2f90ae4f80977b2b5a7615c3d28618f1$"
+}
+}

@@ -877,6 +877,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
+      const playerSlot = sortedIds.indexOf(id);
+      this.assignColorToPlayer(id, playerSlot);  // ← ADD THIS LIN
+
       const body = this.createPlayerBody(this.spawnPointForPlayer(id));
       this.registerPlayerColliders(body, id);
       const characterId =
@@ -1728,9 +1731,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return this.map.playerSpawnPoints[this.hashString(playerId) % this.map.playerSpawnPoints.length];
   }
 
-  private colorForPlayer(playerId: string): number {
-    return PLAYER_COLOR_PALETTE[this.hashString(playerId) % PLAYER_COLOR_PALETTE.length] ?? PLAYER_COLOR_PALETTE[0];
-  }
+  private playerColorMap = new Map<string, number>();
+
+assignColorToPlayer(playerId: string, playerSlot: number) {
+    this.playerColorMap.set(playerId, playerSlot % PLAYER_COLOR_PALETTE.length);
+}
+
+private colorForPlayer(playerId: string): number {
+    const colorIndex = this.playerColorMap.get(playerId);
+    return colorIndex !== undefined ? PLAYER_COLOR_PALETTE[colorIndex] : PLAYER_COLOR_PALETTE[0];
+}
+
 
   private handleRoundStartIfNeeded(): void {
     const connectedPlayerCount = this.players.size;
