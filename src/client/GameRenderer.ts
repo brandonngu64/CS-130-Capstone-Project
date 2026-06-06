@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SpriteSheetVFXManager, type VFXInstance } from './vfx/spriteSheetVFX';
 import {
   CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
@@ -235,6 +236,9 @@ export class GameRenderer {
   private readonly kyleBulletMeshes = new Map<number, THREE.Mesh>();
   private readonly weaponMeshes = new Map<string, THREE.Mesh>();
   private readonly laserSightMeshes = new Map<string, THREE.Line>();
+  private readonly vfxManager = new SpriteSheetVFXManager();
+  private readonly playerVFX = new Map<string, VFXInstance>();
+  private readonly prevRespawning = new Map<string, boolean>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
@@ -267,6 +271,8 @@ export class GameRenderer {
     });
     this.resizeObserver.observe(this.container);
     this.resize();
+
+    void this.vfxManager.load();
   }
 
   render(state: RenderState, localPlayerId: string): void {
@@ -313,7 +319,10 @@ export class GameRenderer {
 
       const material = playerSprite.mesh.material as THREE.MeshBasicMaterial;
 
-      if (player.respawnFlashTicksRemaining > 0) {
+      if (player.respawning && this.playerVFX.has(player.id)) {
+        // Hide the player sprite while the ring-out VFX plays over them
+        material.opacity = 0;
+      } else if (player.respawnFlashTicksRemaining > 0) {
         const flashStep = Math.max(1, Math.floor(RESPAWN_FLASH_TICKS / 24));
         const flashVisible = Math.floor(player.respawnFlashTicksRemaining / flashStep) % 2 === 0;
         material.opacity = flashVisible ? 1 : 0.22;
@@ -326,6 +335,47 @@ export class GameRenderer {
       const isTransparent = material.opacity < 1;
       material.transparent = isTransparent;
       material.depthWrite = !isTransparent;
+    }
+
+    // --- Ring-out VFX ---
+    const stageCenterX = (this.mapBounds.minX + this.mapBounds.maxX) / 2;
+    const stageCenterY = (this.mapBounds.minY + this.mapBounds.maxY) / 2;
+
+    for (const player of state.players) {
+      const wasRespawning = this.prevRespawning.get(player.id) ?? false;
+
+      if (player.respawning && !wasRespawning) {
+        const vfx = this.vfxManager.spawn(this.scene, player.color);
+        if (vfx) {
+          const dx = player.x - stageCenterX;
+          const dy = player.y - stageCenterY;
+          vfx.mesh.position.set(player.x, player.y, 0.5);
+          vfx.mesh.rotation.z = Math.atan2(dy, dx);
+          this.playerVFX.set(player.id, vfx);
+        }
+      }
+
+      const vfx = this.playerVFX.get(player.id);
+      if (vfx) {
+        vfx.tick();
+        if (vfx.isDone() || !player.respawning) {
+          this.scene.remove(vfx.mesh);
+          vfx.dispose();
+          this.playerVFX.delete(player.id);
+        }
+      }
+
+      this.prevRespawning.set(player.id, player.respawning);
+    }
+
+    // Cleanup VFX for players who left the match
+    for (const [id, vfx] of this.playerVFX) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(vfx.mesh);
+        vfx.dispose();
+        this.playerVFX.delete(id);
+        this.prevRespawning.delete(id);
+      }
     }
 
     for (const player of state.players) {

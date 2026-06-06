@@ -31,12 +31,10 @@ export const PEN_CROSSBOW_FIRE_COOLDOWN_TICKS = 24;
 export const PEN_CROSSBOW_BOLT_SPEED = 50;
 
 export const PLAYER_COLOR_PALETTE = [
-  0xe76f51,
-  0x2a9d8f,
-  0xf4a261,
-  0x457b9d,
-  0x8ab17d,
-  0xe9c46a,
+  0xe92626,
+  0x445edd,
+  0xf6db35,
+  0x4bd64b,
 ];
 
 export const DEFAULT_STOCKS = 3;
