@@ -40,24 +40,21 @@ type VFXPackDef = {
   pngPaths: string[];
 };
 
+const VFX_ANIM_FPS = 60; // animation playback rate; lower = slower/more visible
+const POOL_SIZE = 3;    // pre-allocated instances per pack; no new allocs after load
+
 const PACK_DEFS: Record<string, VFXPackDef> = {
   ringOutFull: {
     jsonPaths: [
-      '../../assets/vfx/ringOutFull/ringOutFull_MaxRectTrimNoRot-0.json',
-      '../../assets/vfx/ringOutFull/ringOutFull_MaxRectTrimNoRot-1.json',
+      '../../assets/vfx/ringOutFull/ringOutFullFix-0.json',
+      '../../assets/vfx/ringOutFull/ringOutFullFix-1.json',
+      '../../assets/vfx/ringOutFull/ringOutFullFix-2.json'
     ],
     pngPaths: [
-      '../../assets/vfx/ringOutFull/ringOutFull_MaxRectTrimNoRot-0.png',
-      '../../assets/vfx/ringOutFull/ringOutFull_MaxRectTrimNoRot-1.png',
+      '../../assets/vfx/ringOutFull/ringOutFullFix-0.png',
+      '../../assets/vfx/ringOutFull/ringOutFullFix-1.png',
+      '../../assets/vfx/ringOutFull/ringOutFullFix-2.png',
     ],
-  },
-  ringOutBeam1: {
-    jsonPaths: ['../../assets/vfx/ringOutBeam1/ringOutBeam1-0.json'],
-    pngPaths: ['../../assets/vfx/ringOutBeam1/ringOutBeam1-0.png'],
-  },
-  ringOutBeam2: {
-    jsonPaths: ['../../assets/vfx/ringOutBeam2/ringOutBeam2-0.json'],
-    pngPaths: ['../../assets/vfx/ringOutBeam2/ringOutBeam2-0.png'],
   },
 };
 
@@ -100,10 +97,14 @@ export class VFXInstance {
   private readonly frames: FrameData[];
   private readonly atlasImages: HTMLImageElement[];
   private currentFrame = 0;
+  private tickAccumulator = 0;
+  private readonly frameRate: number; // anim frames per game tick
 
-  constructor(frames: FrameData[], atlasImages: HTMLImageElement[], color: number = 0xffffff) {
+  // startIdle=true marks it as "done" so the pool can pick it up immediately
+  constructor(frames: FrameData[], atlasImages: HTMLImageElement[], animFps = VFX_ANIM_FPS, startIdle = false) {
     this.frames = frames;
     this.atlasImages = atlasImages;
+    this.frameRate = animFps / 60;
 
     const src = frames[0]?.sourceSize ?? { w: 256, h: 256 };
     this.canvas = document.createElement('canvas');
@@ -115,8 +116,6 @@ export class VFXInstance {
     this.canvasTexture.minFilter = THREE.NearestFilter;
     this.canvasTexture.magFilter = THREE.NearestFilter;
 
-
-    
     const worldPerPixel = VFX_WORLD_SCALE / src.h;
     const planeW = src.w * worldPerPixel;
     const planeH = src.h * worldPerPixel;
@@ -124,7 +123,6 @@ export class VFXInstance {
     const geometry = new THREE.PlaneGeometry(planeW, planeH);
     const material = new THREE.MeshBasicMaterial({
       alphaTest: 0.01,
-      color: color,
       depthWrite: false,
       map: this.canvasTexture,
       toneMapped: false,
@@ -132,13 +130,21 @@ export class VFXInstance {
     });
     this.mesh = new THREE.Mesh(geometry, material);
 
-    this.drawFrame();
+    if (startIdle) {
+      this.currentFrame = frames.length; // available in pool, not playing
+    } else {
+      this.drawFrame();
+    }
   }
 
   tick(): void {
-    this.currentFrame += 1;
-    if (this.currentFrame < this.frames.length) {
-      this.drawFrame();
+    this.tickAccumulator += this.frameRate;
+    const nextFrame = Math.floor(this.tickAccumulator);
+    if (nextFrame > this.currentFrame && this.currentFrame < this.frames.length) {
+      this.currentFrame = nextFrame;
+      if (this.currentFrame < this.frames.length) {
+        this.drawFrame();
+      }
     }
   }
 
@@ -146,7 +152,13 @@ export class VFXInstance {
     return this.currentFrame >= this.frames.length;
   }
 
-  dispose(): void {
+  reset(): void {
+    this.currentFrame = 0;
+    this.tickAccumulator = 0;
+    this.drawFrame();
+  }
+
+  disposeResources(): void {
     this.canvasTexture.dispose();
     this.mesh.geometry.dispose();
     (this.mesh.material as THREE.Material).dispose();
@@ -191,6 +203,7 @@ export class VFXInstance {
 type LoadedPack = {
   frames: FrameData[];
   atlasImages: HTMLImageElement[];
+  pool: VFXInstance[];
 };
 
 export class SpriteSheetVFXManager {
@@ -214,7 +227,12 @@ export class SpriteSheetVFXManager {
         promises.push(p);
         return img;
       });
-      this.packs.set(name, { frames, atlasImages: images });
+
+      const pool: VFXInstance[] = [];
+      for (let i = 0; i < POOL_SIZE; i++) {
+        pool.push(new VFXInstance(frames, images, VFX_ANIM_FPS, true));
+      }
+      this.packs.set(name, { frames, atlasImages: images, pool });
     }
 
     return Promise.all(promises).then(() => {
@@ -222,20 +240,37 @@ export class SpriteSheetVFXManager {
     });
   }
 
-  spawn(scene: THREE.Scene, color: number = 0xffffff): VFXInstance | null {
+  spawn(scene: THREE.Scene, _color?: number): VFXInstance | null {
     if (!this.loaded || this.packs.size === 0) return null;
 
-    const idx = Math.floor(Math.random() * this.packNames.length);
-    const packName = this.packNames[idx];
-    const pack = this.packs.get(packName);
-    if (!pack || pack.frames.length === 0) return null;
+    const startIdx = Math.floor(Math.random() * this.packNames.length);
+    for (let i = 0; i < this.packNames.length; i++) {
+      const packName = this.packNames[(startIdx + i) % this.packNames.length];
+      const pack = this.packs.get(packName);
+      if (!pack || pack.frames.length === 0) continue;
 
-    const c1 = new THREE.Color(color);
-    const c2 = new THREE.Color(0xffffff);
-    c1.lerp(c2, Math.random() * 0.2 + 0.4); // Adjust 0.5 for more/less tint (0 = pure color, 1 = white)
+      const instance = pack.pool.find(inst => inst.isDone());
+      if (!instance) continue;
 
-    const instance = new VFXInstance(pack.frames, pack.atlasImages, c1.getHex());
-    scene.add(instance.mesh);
-    return instance;
+      instance.reset();
+      scene.add(instance.mesh);
+      return instance;
+    }
+    return null;
+  }
+
+  release(scene: THREE.Scene, vfx: VFXInstance): void {
+    scene.remove(vfx.mesh);
+    // instance stays in pool for reuse; no GPU resources freed
+  }
+
+  disposeAll(): void {
+    for (const pack of this.packs.values()) {
+      for (const instance of pack.pool) {
+        instance.disposeResources();
+      }
+    }
+    this.packs.clear();
+    this.loaded = false;
   }
 }

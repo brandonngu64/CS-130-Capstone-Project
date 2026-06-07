@@ -239,6 +239,7 @@ export class GameRenderer {
   private readonly vfxManager = new SpriteSheetVFXManager();
   private readonly playerVFX = new Map<string, VFXInstance>();
   private readonly prevRespawning = new Map<string, boolean>();
+  private readonly prevEliminated = new Map<string, boolean>();
   private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
 
   // Reused per-frame scratch sets to avoid allocating fresh Set objects on
@@ -331,15 +332,14 @@ export class GameRenderer {
 
       const material = playerSprite.mesh.material as THREE.MeshBasicMaterial;
 
-      if (player.respawning && this.playerVFX.has(player.id)) {
-        // Hide the player sprite while the ring-out VFX plays over them
+      if (player.eliminated) {
+        material.opacity = 0;
+      } else if (player.respawning) {
         material.opacity = 0;
       } else if (player.respawnFlashTicksRemaining > 0) {
         const flashStep = Math.max(1, Math.floor(RESPAWN_FLASH_TICKS / 24));
         const flashVisible = Math.floor(player.respawnFlashTicksRemaining / flashStep) % 2 === 0;
         material.opacity = flashVisible ? 1 : 0.22;
-      } else if (player.respawning) {
-        material.opacity = 0.18;
       } else {
         material.opacity = 1;
       }
@@ -355,6 +355,7 @@ export class GameRenderer {
 
     for (const player of state.players) {
       const wasRespawning = this.prevRespawning.get(player.id) ?? false;
+      const wasEliminated = this.prevEliminated.get(player.id) ?? false;
 
       const isStageOut =
         player.x < this.mapBounds.minX ||
@@ -362,21 +363,24 @@ export class GameRenderer {
         player.y < this.mapBounds.minY ||
         player.y > this.mapBounds.maxY;
 
-      if (player.respawning && !wasRespawning && isStageOut) {
+      const justRingOut =
+        (player.respawning && !wasRespawning && isStageOut) ||
+        (player.eliminated && !wasEliminated && isStageOut);
+
+      if (justRingOut) {
         const vfx = this.vfxManager.spawn(this.scene, player.color);
         if (vfx) {
           const prev = this.prevVelocity.get(player.id);
+          // Negate both components of the exit vector so the beam points back
+          // toward the stage (opposite the direction of travel). Default graphic
+          // orientation is rightward (0 rad), matching atan2's 0° = +x.
           const dx = player.x - stageCenterX;
           const dy = player.y - stageCenterY;
-          // Negate Y because Three.js renders with y-up but the camera transform
-          // flips vertical screen direction relative to physics space. Horizontal
-          // exits are unaffected; vertical exits now point the correct way.
           const baseAngle =
-            prev && (Math.abs(prev.vx) > 0.01 || Math.abs(prev.vy) > 0.01)
-              ? Math.atan2(-prev.vy, prev.vx)
-              : Math.atan2(-dy, dx);
+            prev && (Math.abs(prev.vx) > 0.01 || Math.abs(prev.vy) > 0.01) ?
+              Math.atan2(-dy, -prev.vx - dx) : Math.atan2(0, 0);
           vfx.mesh.position.set(player.x, player.y, 0.5);
-          vfx.mesh.rotation.z = baseAngle + Math.PI;
+          vfx.mesh.rotation.z = baseAngle;
           this.playerVFX.set(player.id, vfx);
         }
       }
@@ -384,24 +388,24 @@ export class GameRenderer {
       const vfx = this.playerVFX.get(player.id);
       if (vfx) {
         vfx.tick();
-        if (vfx.isDone() || !player.respawning) {
-          this.scene.remove(vfx.mesh);
-          vfx.dispose();
+        if (vfx.isDone()) {
+          this.vfxManager.release(this.scene, vfx);
           this.playerVFX.delete(player.id);
         }
       }
 
       this.prevRespawning.set(player.id, player.respawning);
+      this.prevEliminated.set(player.id, player.eliminated);
       this.prevVelocity.set(player.id, { vx: player.vx, vy: player.vy });
     }
 
     // Cleanup VFX for players who left the match
     for (const [id, vfx] of this.playerVFX) {
       if (!activeIds.has(id)) {
-        this.scene.remove(vfx.mesh);
-        vfx.dispose();
+        this.vfxManager.release(this.scene, vfx);
         this.playerVFX.delete(id);
         this.prevRespawning.delete(id);
+        this.prevEliminated.delete(id);
         this.prevVelocity.delete(id);
       }
     }
@@ -1002,6 +1006,12 @@ export class GameRenderer {
       (laser.material as THREE.Material).dispose();
     }
     this.laserSightMeshes.clear();
+
+    for (const [, vfx] of this.playerVFX) {
+      this.scene.remove(vfx.mesh);
+    }
+    this.playerVFX.clear();
+    this.vfxManager.disposeAll();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
