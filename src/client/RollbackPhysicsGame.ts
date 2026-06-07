@@ -200,6 +200,49 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private previousConnectedPlayerCount = 0;
   private readonly pendingCharacterIds = new Map<string, CharacterId>();
 
+  // Hot-path scratch storage. Reused across every serialize/deserialize/step
+  // call to eliminate per-tick allocations that GC-pause rollback resimulation.
+  // The rollback library copies the bytes returned by serialize() into its own
+  // snapshot history (see SnapshotBuffer.save), so a single shared buffer is
+  // safe to reuse.
+  private static readonly SNAPSHOT_SCRATCH_BYTES = 16 * 1024;
+  private readonly snapshotScratchBuffer: ArrayBuffer = new ArrayBuffer(
+    RollbackPhysicsGame.SNAPSHOT_SCRATCH_BYTES,
+  );
+  private readonly snapshotScratchView: DataView = new DataView(this.snapshotScratchBuffer);
+  private readonly snapshotScratchBytes: Uint8Array = new Uint8Array(this.snapshotScratchBuffer);
+  private readonly playerIdBytes = new Map<string, Uint8Array>();
+  private sortedPlayerIds: string[] = [];
+  private readonly bulletScratch: Bullet[] = [];
+  private readonly previousStatesScratch = new Map<string, StepPlayerState>();
+  private readonly incomingScratch = new Map<
+    string,
+    {
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      inputFlags: number;
+      health: number;
+      facing: number;
+      attackKind: number;
+      attackTicksRemaining: number;
+      dashTicksRemaining: number;
+      dashCooldownTicks: number;
+      heldItem: number;
+      heldItemExpiryTick: number;
+      gunFireCooldownTicks: number;
+      reloadPending: boolean;
+      reloadPendingOnKill: boolean;
+      characterId: number;
+      weaponCooldownTicks: number;
+      activeWeaponAttackTicksRemaining: number;
+      knockbackTicksRemaining: number;
+    }
+  >();
+  private readonly deserializeIdsScratch: string[] = [];
+  private readonly stepIdsScratch: string[] = [];
+
   constructor(map: TiledMapDefinition) {
     this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
@@ -225,82 +268,57 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
   }
 
+  private getOrCacheIdBytes(id: string): Uint8Array {
+    let bytes = this.playerIdBytes.get(id);
+    if (!bytes) {
+      bytes = this.textEncoder.encode(id);
+      this.playerIdBytes.set(id, bytes);
+    }
+    return bytes;
+  }
+
   serialize(): Uint8Array {
-    const sortedIds = Array.from(this.players.keys()).sort();
-    const records = sortedIds.map((id) => {
+    const view = this.snapshotScratchView;
+    const output = this.snapshotScratchBytes;
+    const sortedIds = this.sortedPlayerIds;
+
+    // Stage bullets into the scratch array, sorted in place.
+    this.bulletScratch.length = 0;
+    for (const bullet of this.bullets.values()) {
+      this.bulletScratch.push(bullet);
+    }
+    this.bulletScratch.sort((left, right) => left.id - right.id);
+
+    let offset = 0;
+    view.setUint8(offset, sortedIds.length);
+    offset += 1;
+
+    for (const id of sortedIds) {
       const record = this.players.get(id);
       if (!record) {
         throw new Error(`Missing player record for ${id}`);
       }
 
-      const idBytes = this.textEncoder.encode(id);
+      const idBytes = this.getOrCacheIdBytes(id);
       const translation = record.body.translation();
       const velocity = record.body.linvel();
       const inputFlags = this.previousInputFlags.get(id) ?? 0;
       const activeAttack = record.activeAttack;
 
-      return {
-        idBytes,
-        inputFlags,
-        x: translation.x,
-        y: translation.y,
-        vx: velocity.x,
-        vy: velocity.y,
-        health: record.health,
-        facing: record.facing,
-        attackKind: activeAttack?.kind ?? 0,
-        attackTicksRemaining: activeAttack?.ticksRemaining ?? 0,
-        dashTicksRemaining: record.dashTicksRemaining,
-        dashCooldownTicks: record.dashCooldownTicks,
-        heldItem: record.heldItem ?? 0,
-        heldItemExpiryTick: record.heldItemExpiryTick,
-        gunFireCooldownTicks: record.gunFireCooldownTicks,
-        reloadPending: record.reloadPending,
-        reloadPendingOnKill: record.reloadPendingOnKill,
-        characterId: characterIdToIndex(record.characterId),
-        weaponCooldownTicks: record.weaponCooldownTicks,
-        activeWeaponAttackTicksRemaining: record.activeWeaponAttack?.ticksRemaining ?? 0,
-        knockbackTicksRemaining: record.knockbackTicksRemaining,
-      };
-    });
-
-    const matchBytes = this.matchState.matchBytesPerPlayer();
-    const bulletList = Array.from(this.bullets.values()).sort((left, right) => left.id - right.id);
-    let byteLength = 1;
-    for (const record of records) {
-      byteLength += 2 + record.idBytes.length + 16 + 18 + matchBytes;
-    }
-
-    byteLength += 4 + 1 + 1 + 1;
-    for (const bullet of bulletList) {
-      const ownerIdBytes = this.textEncoder.encode(bullet.ownerId);
-      byteLength += 1 + 4 + 4 + 4 + 4 + 1 + 2 + 1 + 2 + ownerIdBytes.length + 1 + 1 + 4;
-    }
-    byteLength += 1 + this.itemSlots.length * 10 + 1;
-
-    const buffer = new ArrayBuffer(byteLength);
-    const view = new DataView(buffer);
-    const output = new Uint8Array(buffer);
-
-    let offset = 0;
-    view.setUint8(offset, records.length);
-    offset += 1;
-
-    for (const record of records) {
-      view.setUint16(offset, record.idBytes.length, true);
+      view.setUint16(offset, idBytes.length, true);
       offset += 2;
-      output.set(record.idBytes, offset);
-      offset += record.idBytes.length;
+      output.set(idBytes, offset);
+      offset += idBytes.length;
 
-      view.setFloat32(offset, record.x, true); offset += 4;
-      view.setFloat32(offset, record.y, true); offset += 4;
-      view.setFloat32(offset, record.vx, true); offset += 4;
-      view.setFloat32(offset, record.vy, true); offset += 4;
-      view.setUint8(offset, record.inputFlags & 0xff); offset += 1;
+      view.setFloat32(offset, translation.x, true); offset += 4;
+      view.setFloat32(offset, translation.y, true); offset += 4;
+      view.setFloat32(offset, velocity.x, true); offset += 4;
+      view.setFloat32(offset, velocity.y, true); offset += 4;
+      view.setUint8(offset, inputFlags & 0xff); offset += 1;
       view.setUint8(offset, record.health); offset += 1;
       view.setInt8(offset, record.facing < 0 ? -1 : 1); offset += 1;
-      view.setUint8(offset, record.attackKind); offset += 1;
-      view.setUint8(offset, record.attackTicksRemaining); offset += 1;
+      view.setUint8(offset, activeAttack?.kind ?? 0); offset += 1;
+      view.setUint8(offset, activeAttack?.ticksRemaining ?? 0); offset += 1;
       view.setUint8(offset, record.dashTicksRemaining); offset += 1;
       view.setUint8(offset, record.dashCooldownTicks); offset += 1;
       view.setUint16(offset, record.heldItem ?? 0, true); offset += 2;
@@ -308,12 +326,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.gunFireCooldownTicks); offset += 1;
       view.setUint8(offset, record.reloadPending ? 1 : 0); offset += 1;
       view.setUint8(offset, record.reloadPendingOnKill ? 1 : 0); offset += 1;
-      view.setUint8(offset, record.characterId); offset += 1;
+      view.setUint8(offset, characterIdToIndex(record.characterId)); offset += 1;
       view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
-      view.setUint8(offset, record.activeWeaponAttackTicksRemaining); offset += 1;
+      view.setUint8(offset, record.activeWeaponAttack?.ticksRemaining ?? 0); offset += 1;
       view.setUint8(offset, record.knockbackTicksRemaining); offset += 1;
 
-      offset = this.matchState.writePlayer(view, offset, this.textDecoder.decode(record.idBytes));
+      offset = this.matchState.writePlayer(view, offset, id);
     }
 
     view.setUint32(offset, this.tickCount, true);
@@ -323,11 +341,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     view.setUint8(offset, this.previousConnectedPlayerCount & 0xff);
     offset += 1;
 
-    view.setUint8(offset, bulletList.length);
+    view.setUint8(offset, this.bulletScratch.length);
     offset += 1;
 
-    for (const bullet of bulletList) {
-      const ownerIdBytes = this.textEncoder.encode(bullet.ownerId);
+    for (const bullet of this.bulletScratch) {
+      const ownerIdBytes = this.getOrCacheIdBytes(bullet.ownerId);
       view.setUint8(offset, bullet.id); offset += 1;
       view.setFloat32(offset, bullet.x, true); offset += 4;
       view.setFloat32(offset, bullet.y, true); offset += 4;
@@ -355,7 +373,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     view.setUint8(offset, this.nextBulletId); offset += 1;
 
-    return output;
+    if (offset > RollbackPhysicsGame.SNAPSHOT_SCRATCH_BYTES) {
+      // Defensive: SNAPSHOT_SCRATCH_BYTES is sized for 4 players + 64 bullets
+      // + 8 item slots with generous headroom. Overflow means a new field was
+      // added without resizing the buffer.
+      throw new Error(
+        `Snapshot overflowed scratch buffer (${offset} > ${RollbackPhysicsGame.SNAPSHOT_SCRATCH_BYTES})`,
+      );
+    }
+
+    return output.subarray(0, offset);
   }
 
   deserialize(data: Uint8Array): void {
@@ -365,38 +392,18 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const count = view.getUint8(offset);
     offset += 1;
 
-    const incoming = new Map<
-      string,
-      {
-        x: number;
-        y: number;
-        vx: number;
-        vy: number;
-        inputFlags: number;
-        health: number;
-        facing: number;
-        attackKind: number;
-        attackTicksRemaining: number;
-        dashTicksRemaining: number;
-        dashCooldownTicks: number;
-        heldItem: number;
-        heldItemExpiryTick: number;
-        gunFireCooldownTicks: number;
-        reloadPending: boolean;
-        reloadPendingOnKill: boolean;
-        characterId: number;
-        weaponCooldownTicks: number;
-        activeWeaponAttackTicksRemaining: number;
-        knockbackTicksRemaining: number;
-      }
-    >();
+    const incoming = this.incomingScratch;
+    incoming.clear();
+    const incomingIds = this.deserializeIdsScratch;
+    incomingIds.length = 0;
 
     for (let i = 0; i < count; i += 1) {
       const idByteLength = view.getUint16(offset, true);
       offset += 2;
-      const idBytes = data.slice(offset, offset + idByteLength);
+      const idBytes = data.subarray(offset, offset + idByteLength);
       offset += idByteLength;
       const id = this.textDecoder.decode(idBytes);
+      incomingIds.push(id);
 
       const x = view.getFloat32(offset, true); offset += 4;
       const y = view.getFloat32(offset, true); offset += 4;
@@ -445,7 +452,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       offset = this.matchState.readPlayer(view, offset, id);
     }
 
-    this.syncPlayers(Array.from(incoming.keys()).sort());
+    incomingIds.sort();
+    this.syncPlayers(incomingIds);
 
     this.tickCount = view.getUint32(offset, true);
     offset += 4;
@@ -567,7 +575,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   step(inputs: Map<PlayerId, Uint8Array>): void {
     this.tickCount += 1;
 
-    const ids = Array.from(inputs.keys(), (id) => id as string).sort();
+    // Reuse sortedPlayerIds if the input membership matches it; otherwise
+    // rebuild from inputs.keys() and let syncPlayers refresh the cache.
+    const ids = this.stepIdsScratch;
+    ids.length = 0;
+    for (const id of inputs.keys()) {
+      ids.push(id as string);
+    }
+    ids.sort();
     this.syncPlayers(ids);
     this.handleRoundStartIfNeeded();
 
@@ -585,7 +600,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.tickGunCooldowns();
     this.tickWeaponCooldowns();
 
-    const previousStates = new Map<string, StepPlayerState>();
+    const previousStates = this.previousStatesScratch;
+    previousStates.clear();
 
     for (const id of ids) {
       if (!this.matchState.canReceiveInput(id)) {
@@ -861,6 +877,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   private syncPlayers(sortedIds: string[]): void {
     const keep = new Set(sortedIds);
+    let membershipChanged = false;
 
     for (const [id, record] of this.players) {
       if (!keep.has(id)) {
@@ -869,6 +886,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         this.players.delete(id);
         this.previousInputFlags.delete(id);
         this.matchState.removePlayer(id);
+        this.playerIdBytes.delete(id);
+        membershipChanged = true;
       }
     }
 
@@ -890,6 +909,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       );
       this.previousInputFlags.set(id, 0);
       this.matchState.ensurePlayer(id);
+      membershipChanged = true;
+    }
+
+    if (membershipChanged || this.sortedPlayerIds.length !== sortedIds.length) {
+      this.sortedPlayerIds.length = 0;
+      for (const id of sortedIds) {
+        this.sortedPlayerIds.push(id);
+      }
     }
   }
 

@@ -239,6 +239,13 @@ export class GameRenderer {
   private readonly vfxManager = new SpriteSheetVFXManager();
   private readonly playerVFX = new Map<string, VFXInstance>();
   private readonly prevRespawning = new Map<string, boolean>();
+
+  // Reused per-frame scratch sets to avoid allocating fresh Set objects on
+  // every render() — runs at 60+ Hz so the GC pressure adds up.
+  private readonly activePlayerIdsScratch = new Set<string>();
+  private readonly activeAttackIdsScratch = new Set<string>();
+  private readonly activeItemIdsScratch = new Set<number>();
+  private readonly activeBulletIdsScratch = new Set<number>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
@@ -277,7 +284,11 @@ export class GameRenderer {
 
   render(state: RenderState, localPlayerId: string): void {
     // --- Players ---
-    const activeIds = new Set(state.players.map((player: RenderState['players'][number]) => player.id));
+    const activeIds = this.activePlayerIdsScratch;
+    activeIds.clear();
+    for (const player of state.players) {
+      activeIds.add(player.id);
+    }
 
     for (const player of state.players) {
       let playerSprite = this.playerMeshes.get(player.id);
@@ -586,7 +597,11 @@ export class GameRenderer {
     }
 
     // --- Attacks ---
-    const activeAttackIds = new Set(state.attacks.map((attack: RenderState['attacks'][number]) => attack.id));
+    const activeAttackIds = this.activeAttackIdsScratch;
+    activeAttackIds.clear();
+    for (const attack of state.attacks) {
+      activeAttackIds.add(attack.id);
+    }
 
     for (const attack of state.attacks) {
       const variant = resolvePunchSpriteVariant(attack.characterId);
@@ -643,7 +658,11 @@ export class GameRenderer {
     }
 
     // --- Items ---
-    const activeItemIds = new Set(state.items.map((item: RenderState['items'][number]) => item.id));
+    const activeItemIds = this.activeItemIdsScratch;
+    activeItemIds.clear();
+    for (const item of state.items) {
+      activeItemIds.add(item.id);
+    }
 
     for (const item of state.items) {
       let mesh = this.itemMeshes.get(item.id);
@@ -726,7 +745,11 @@ export class GameRenderer {
     }
 
     // --- Bullets ---
-    const activeBulletIds = new Set(state.bullets.map((bullet: RenderState['bullets'][number]) => bullet.id));
+    const activeBulletIds = this.activeBulletIdsScratch;
+    activeBulletIds.clear();
+    for (const bullet of state.bullets) {
+      activeBulletIds.add(bullet.id);
+    }
 
     for (const bullet of state.bullets) {
       if (usesKyleGenericProjectileMesh(bullet.kind)) {

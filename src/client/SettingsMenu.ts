@@ -19,6 +19,8 @@ export interface SettingsMenuCallbacks {
   onArenaSideWallsChange(enabled: boolean): void;
   onFullscreenChange(enabled: boolean): void;
   onVolumeChange(volume: number): void;
+  onInputDelayChange(frames: number): void;
+  onForceRelayChange(enabled: boolean): void;
 }
 
 export class SettingsMenu {
@@ -36,6 +38,8 @@ export class SettingsMenu {
   private readonly fullscreenToggle: HTMLInputElement;
   private readonly volumeSlider: HTMLInputElement;
   private readonly volumeValue: HTMLElement;
+  private readonly inputDelaySelect: HTMLSelectElement;
+  private readonly forceRelayToggle: HTMLInputElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -95,6 +99,14 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuFullscreenToggle',
     );
+    this.inputDelaySelect = getElement<HTMLSelectElement>(
+      this.element,
+      '#settingsMenuInputDelaySelect',
+    );
+    this.forceRelayToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuForceRelayToggle',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
@@ -109,6 +121,15 @@ export class SettingsMenu {
       const volume = Number(this.volumeSlider.value) / 100;
       this.volumeValue.textContent = `${this.volumeSlider.value}%`;
       callbacks.onVolumeChange(volume);
+    });
+    this.inputDelaySelect.addEventListener('change', () => {
+      const frames = Number.parseInt(this.inputDelaySelect.value, 10);
+      if (Number.isFinite(frames)) {
+        callbacks.onInputDelayChange(frames);
+      }
+    });
+    this.forceRelayToggle.addEventListener('change', () => {
+      callbacks.onForceRelayChange(this.forceRelayToggle.checked);
     });
 
     this.element.addEventListener('click', (event) => {
@@ -172,6 +193,14 @@ export class SettingsMenu {
     this.volumeValue.textContent = `${percent}%`;
   }
 
+  setInputDelay(frames: number): void {
+    this.inputDelaySelect.value = String(Math.max(0, Math.floor(frames)));
+  }
+
+  setForceRelay(enabled: boolean): void {
+    this.forceRelayToggle.checked = enabled;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -226,6 +255,22 @@ export class SettingsMenu {
         <label class="range-field">
           <span>Master Volume <output id="settingsMenuVolumeValue">100%</output></span>
           <input id="settingsMenuVolumeSlider" type="range" min="0" max="100" step="1" value="100" />
+        </label>
+
+        <label class="select-field">
+          <span>Input delay (frames)</span>
+          <select id="settingsMenuInputDelaySelect">
+            <option value="0">0 (lowest latency, most rollback)</option>
+            <option value="1">1</option>
+            <option value="2" selected>2 (recommended)</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+
+        <label class="toggle-field">
+          <input id="settingsMenuForceRelayToggle" type="checkbox" />
+          <span>Force relay mode (TURN-only; use on restrictive networks). Takes effect on next room join.</span>
         </label>
 
         <button id="settingsMenuLeaveButton" class="action-danger" type="button">Leave Room</button>
