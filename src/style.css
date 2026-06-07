@@ -221,6 +221,10 @@ button:disabled {
   color: #0a7870;
 }
 
+.debug-toggle-btn--right {
+  margin-left: auto;
+}
+
 .debug-panels-row {
   display: flex;
   gap: 12px;
