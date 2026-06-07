@@ -24,7 +24,7 @@
 html,
 body {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
 }
@@ -40,26 +40,24 @@ body {
     linear-gradient(160deg, var(--bg-top) 0%, var(--bg-mid) 54%, var(--bg-bottom) 100%);
   background-attachment: fixed;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
 }
 
 #app {
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 8px;
 }
 
 .app-shell {
-  display: grid;
-  grid-template-columns: 1fr 280px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   width: 100%;
-  height: 100%;
-  max-width: 100%;
 }
 
 .state-pill {
@@ -190,13 +188,88 @@ button:disabled {
   color: var(--danger);
 }
 
+.debug-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.debug-toggle-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.debug-toggle-btn {
+  background: #f7f8fa;
+  color: #2f3f4f;
+  border: 1px solid rgba(56, 87, 120, 0.26);
+  border-radius: 10px;
+  padding: 6px 12px;
+  font: 600 0.82rem/1 var(--sans);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+  opacity: 0.55;
+}
+
+.debug-toggle-btn.active {
+  opacity: 1;
+  background: rgba(11, 127, 120, 0.12);
+  border-color: rgba(11, 127, 120, 0.4);
+  color: #0a7870;
+}
+
+.debug-panels-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
 .debug-panel {
+  flex: 0 0 auto;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.debug-console-panel {
+  flex: 1 1 400px;
+  min-width: 300px;
+  max-height: 180px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.debug-console-log {
+  flex: 1;
   overflow-y: auto;
-  max-height: 100%;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--ink-soft);
+}
+
+.debug-log-entry {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.debug-log-entry[data-level='warn'] {
+  color: #b45309;
+}
+
+.debug-log-entry[data-level='error'] {
+  color: var(--danger);
 }
 
 h2 {
@@ -206,7 +279,7 @@ h2 {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -770,16 +843,8 @@ h2 {
 }
 
 @media (max-width: 1024px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .debug-panel {
-    display: none;
-  }
-
   .metrics-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .overlay-actions {
