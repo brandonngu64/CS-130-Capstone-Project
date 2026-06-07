@@ -23,6 +23,7 @@ import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
 import { HealthBarOverlay } from './HealthBarOverlay';
 import { MainMenu, type StatusTone } from './MainMenu';
+import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
@@ -66,6 +67,10 @@ const SIGNALING_RECONNECT_BASE_DELAY_MS = 10000;
 const SIGNALING_RECONNECT_MAX_DELAY_MS = 10000;
 const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
+const INPUT_DELAY_STORAGE_KEY = 'cs130-input-delay';
+const FORCE_RELAY_STORAGE_KEY = 'cs130-force-relay';
+const DEFAULT_INPUT_DELAY_FRAMES = 2;
+const MAX_INPUT_DELAY_FRAMES = 6;
 
 const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
 const MENU_THEME_URL = new URL('../assets/sounds/menu.mp3', import.meta.url).href;
@@ -168,6 +173,50 @@ function clearStoredRecoveryState(): void {
   }
 }
 
+function readStoredInputDelayFrames(): number {
+  try {
+    const raw = globalThis.localStorage?.getItem(INPUT_DELAY_STORAGE_KEY);
+    if (raw === null || raw === undefined) {
+      return DEFAULT_INPUT_DELAY_FRAMES;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      return DEFAULT_INPUT_DELAY_FRAMES;
+    }
+    return Math.max(0, Math.min(parsed, MAX_INPUT_DELAY_FRAMES));
+  } catch {
+    return DEFAULT_INPUT_DELAY_FRAMES;
+  }
+}
+
+function storeInputDelayFrames(frames: number): void {
+  try {
+    globalThis.localStorage?.setItem(INPUT_DELAY_STORAGE_KEY, String(frames));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredForceRelay(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(FORCE_RELAY_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function storeForceRelay(enabled: boolean): void {
+  try {
+    if (enabled) {
+      globalThis.localStorage?.setItem(FORCE_RELAY_STORAGE_KEY, '1');
+    } else {
+      globalThis.localStorage?.removeItem(FORCE_RELAY_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function sessionStateLabel(state: SessionState): string {
   switch (state) {
     case SessionState.Disconnected:
@@ -185,31 +234,74 @@ function sessionStateLabel(state: SessionState): string {
   }
 }
 
-function makePeerId(): string {
-  const storedPeerId = readStoredPeerId();
-  if (storedPeerId) {
-    return storedPeerId;
-  }
-
+function generateFreshPeerId(): string {
   const cryptoApi = globalThis.crypto;
-  let peerId = '';
 
   if (cryptoApi?.randomUUID) {
-    peerId = `peer-${cryptoApi.randomUUID().slice(0, 8)}`;
-  } else if (cryptoApi?.getRandomValues) {
-    const bytes = new Uint8Array(4);
-    cryptoApi.getRandomValues(bytes);
-    const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0'))
-      .join('')
-      .slice(0, 8);
-    peerId = `peer-${hex}`;
-  } else {
-    const fallback = Math.floor(Math.random() * 0xffffffff)
-      .toString(16)
-      .padStart(8, '0');
-    peerId = `peer-${fallback}`;
+    return `peer-${cryptoApi.randomUUID().replace(/-/g, '').slice(0, 16)}`;
   }
 
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(8);
+    cryptoApi.getRandomValues(bytes);
+    const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+    return `peer-${hex}`;
+  }
+
+  const high = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  const low = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return `peer-${high}${low}`;
+}
+
+function summarizeIceTransport(report: RTCStatsReport): string | null {
+  let nominatedPair: RTCIceCandidatePairStats | null = null;
+  for (const stat of report.values()) {
+    if (stat.type !== 'candidate-pair') {
+      continue;
+    }
+    const pair = stat as RTCIceCandidatePairStats & { selected?: boolean; nominated?: boolean };
+    if (pair.state === 'succeeded' && (pair.selected === true || pair.nominated === true)) {
+      nominatedPair = pair;
+      break;
+    }
+  }
+  if (!nominatedPair) {
+    return null;
+  }
+  const localId = (nominatedPair as { localCandidateId?: string }).localCandidateId;
+  if (!localId) {
+    return null;
+  }
+  const local = report.get(localId) as
+    | (RTCStats & { candidateType?: string; protocol?: string })
+    | undefined;
+  const candidateType = local?.candidateType;
+  switch (candidateType) {
+    case 'host':
+      return 'direct (local network)';
+    case 'srflx':
+    case 'prflx':
+      return 'direct P2P via STUN';
+    case 'relay':
+      return 'relayed via TURN (extra latency)';
+    default:
+      return candidateType ? `via ${candidateType}` : null;
+  }
+}
+
+function makePeerId(): string {
+  // Only reuse a stored peer id when we are actively in a recovery flow.
+  // sessionStorage is copied by "Duplicate Tab" in Chromium browsers, so
+  // unconditional reuse caused the two-browsers-on-one-machine collision.
+  const recovery = readStoredRecoveryState();
+  if (recovery) {
+    const storedPeerId = readStoredPeerId();
+    if (storedPeerId) {
+      return storedPeerId;
+    }
+  }
+
+  const peerId = generateFreshPeerId();
   storePeerId(peerId);
   return peerId;
 }
@@ -241,7 +333,8 @@ export class MultiplayerApp {
   private readonly viewport: HTMLElement;
   private renderer: GameRenderer;
 
-  private readonly peerId: string;
+  private peerId: string;
+  private readonly peerIdClaim: PeerIdClaim;
   private readonly mainMenu: MainMenu;
   private readonly settingsMenu: SettingsMenu;
   private readonly stockHud: StockHud;
@@ -291,6 +384,10 @@ export class MultiplayerApp {
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
   private masterVolume = 1;
+  private inputDelayFrames = readStoredInputDelayFrames();
+  private readonly inputDelayBuffer: Uint8Array[] = [];
+  private localTickIndex = 0;
+  private forceRelay = readStoredForceRelay();
   private readonly cameraPanInput = {
     left: false,
     right: false,
@@ -456,6 +553,11 @@ export class MultiplayerApp {
   constructor(root: HTMLElement) {
     this.root = root;
     this.peerId = makePeerId();
+    this.peerIdClaim = claimPeerId(this.peerId, () => {
+      const replacement = generateFreshPeerId();
+      storePeerId(replacement);
+      return replacement;
+    });
 
     this.root.innerHTML = this.renderAppTemplate();
 
@@ -568,6 +670,12 @@ export class MultiplayerApp {
       onVolumeChange: (volume) => {
         this.setMasterVolume(volume);
       },
+      onInputDelayChange: (frames) => {
+        this.setInputDelayFrames(frames);
+      },
+      onForceRelayChange: (enabled) => {
+        this.setForceRelay(enabled);
+      },
     });
 
     document.addEventListener('fullscreenchange', this.onFullscreenStateChange);
@@ -577,6 +685,8 @@ export class MultiplayerApp {
     this.settingsMenu.setPeerId(this.peerId);
     this.settingsMenu.setMap(this.getSelectedMapManifest());
     this.settingsMenu.setVolume(this.masterVolume);
+    this.settingsMenu.setInputDelay(this.inputDelayFrames);
+    this.settingsMenu.setForceRelay(this.forceRelay);
 
     this.renderer.setCameraMode(this.cameraMode);
     this.updateCameraButton();
@@ -634,6 +744,15 @@ export class MultiplayerApp {
 
   async start(): Promise<void> {
     await RAPIER.init();
+
+    // Wait for the peer-id claim arbiter to resolve any duplicate-tab
+    // collision before doing anything network-facing.
+    const resolvedPeerId = await this.peerIdClaim.resolved;
+    if (resolvedPeerId !== this.peerId) {
+      this.peerId = resolvedPeerId;
+      this.mainMenu.setPeerId(this.peerId);
+      this.settingsMenu.setPeerId(this.peerId);
+    }
 
     const currentUrl = new URL(window.location.href);
     const storedRecovery = readStoredRecoveryState();
@@ -778,12 +897,53 @@ export class MultiplayerApp {
     this.animationFrameId = requestAnimationFrame(this.onFrame);
   };
 
+  private ensureInputDelayBuffer(): void {
+    const requiredLength = this.inputDelayFrames + 1;
+    if (this.inputDelayBuffer.length === requiredLength) {
+      return;
+    }
+    this.inputDelayBuffer.length = 0;
+    for (let i = 0; i < requiredLength; i += 1) {
+      this.inputDelayBuffer.push(new Uint8Array([0]));
+    }
+    this.localTickIndex = 0;
+  }
+
+  private getDelayedInput(currentInput: Uint8Array): Uint8Array {
+    if (this.inputDelayFrames === 0) {
+      return currentInput;
+    }
+    this.ensureInputDelayBuffer();
+    const buf = this.inputDelayBuffer;
+    const len = buf.length;
+    const writeSlot = this.localTickIndex % len;
+    const readSlot = (this.localTickIndex + 1) % len;
+    if (buf[writeSlot].length !== currentInput.length) {
+      buf[writeSlot] = new Uint8Array(currentInput.length);
+    }
+    buf[writeSlot].set(currentInput);
+    this.localTickIndex += 1;
+    return buf[readSlot];
+  }
+
+  setInputDelayFrames(frames: number): void {
+    const clamped = Math.max(0, Math.min(Math.floor(frames), MAX_INPUT_DELAY_FRAMES));
+    if (clamped === this.inputDelayFrames) {
+      return;
+    }
+    this.inputDelayFrames = clamped;
+    this.inputDelayBuffer.length = 0;
+    this.localTickIndex = 0;
+    storeInputDelayFrames(clamped);
+  }
+
   private tickSimulation(): void {
     if (!this.session) {
       return;
     }
 
-    const input = encodeInput(this.inputState);
+    const rawInput = encodeInput(this.inputState);
+    const input = this.getDelayedInput(rawInput);
 
     let tickResult: TickResult;
     try {
@@ -1055,6 +1215,7 @@ export class MultiplayerApp {
             credential: 'openrelayproject',
           },
         ],
+        iceTransportPolicy: this.forceRelay ? 'relay' : 'all',
       },
       maxReconnectAttempts: 5,
       reconnectDelay: 1000,
@@ -1079,10 +1240,7 @@ export class MultiplayerApp {
     });
 
     this.transport.onError = (peerId, error) => {
-      this.setStatus(
-        `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${error.message}`,
-        'error',
-      );
+      this.setStatus(this.formatTransportError(peerId, error), 'error');
     };
 
     this.session = createSession({
@@ -1095,8 +1253,8 @@ export class MultiplayerApp {
         topology: Topology.Star,
         hashInterval: TICK_RATE,
         disconnectTimeout: ROOM_DISCONNECT_GRACE_MS,
-        snapshotHistorySize: TICK_RATE * 4,
-        maxSpeculationTicks: TICK_RATE * 2,
+        snapshotHistorySize: TICK_RATE,
+        maxSpeculationTicks: Math.floor(TICK_RATE / 2),
         debug: false,
       },
     });
@@ -1115,6 +1273,9 @@ export class MultiplayerApp {
       this.lobbyReadyByPeer.set(player.id, false);
       this.assignDefaultCharacterIfMissing(player.id);
       this.updateUiState();
+      if (player.id !== this.peerId) {
+        this.probePeerConnectionType(player.id);
+      }
     });
 
     this.session.on('playerLeft', (player) => {
@@ -1658,6 +1819,71 @@ export class MultiplayerApp {
     if (this.game) {
       this.game.setVolume(this.masterVolume);
     }
+  }
+
+  setForceRelay(enabled: boolean): void {
+    if (enabled === this.forceRelay) {
+      return;
+    }
+    this.forceRelay = enabled;
+    storeForceRelay(enabled);
+    this.setStatus(
+      enabled
+        ? 'Force-relay mode enabled. Reconnect to the room for it to take effect.'
+        : 'Force-relay mode disabled. Reconnect to the room for it to take effect.',
+    );
+  }
+
+  private formatTransportError(peerId: string | null, error: Error): string {
+    const message = error.message || 'Unknown error';
+    const lower = message.toLowerCase();
+    const isLikelyIceFailure =
+      lower.includes('ice') ||
+      lower.includes('connection failed') ||
+      lower.includes('timeout') ||
+      lower.includes('unreachable');
+
+    if (isLikelyIceFailure) {
+      if (this.forceRelay) {
+        return (
+          `Couldn't reach the relay server${peerId ? ` (${peerId})` : ''}. ` +
+          'Check your internet connection or try a different network.'
+        );
+      }
+      return (
+        `Couldn't establish a peer connection${peerId ? ` (${peerId})` : ''}. ` +
+        'This network (school/office Wi-Fi, symmetric NAT) may be blocking UDP. ' +
+        "Try enabling 'Force relay mode' in Settings."
+      );
+    }
+
+    return `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${message}`;
+  }
+
+  private probePeerConnectionType(peerId: string): void {
+    if (!this.transport) {
+      return;
+    }
+    // Give ICE a moment to finalize candidate selection before reading stats.
+    window.setTimeout(() => {
+      if (!this.transport) {
+        return;
+      }
+      this.transport
+        .getConnectionStats(peerId)
+        .then((report) => {
+          if (!report) {
+            return;
+          }
+          const summary = summarizeIceTransport(report);
+          if (summary) {
+            this.setStatus(`Connection to ${peerId}: ${summary}`);
+          }
+        })
+        .catch(() => {
+          // Stats are best-effort; ignore failures.
+        });
+    }, 750);
   }
 
   private updateUiState(): void {
