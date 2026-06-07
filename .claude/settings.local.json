@@ -9,7 +9,11 @@
       "Bash(npx tsc *)",
       "Bash(node -e \"const p = require\\('rollback-netcode/package.json'\\); console.log\\(p.main, p.types\\);\")",
       "Bash(npm run *)",
-      "Bash(xargs grep -l \"overlay\\\\|panel\\\\|hud\\\\|HUD\\\\|console\\\\|Console\")"
+      "Bash(xargs grep -l \"overlay\\\\|panel\\\\|hud\\\\|HUD\\\\|console\\\\|Console\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\kydev\\\\Documents\\\\0_School_Files\\\\cs130\\\\CS-130-Capstone-Project\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\kydev\\\\Documents\\\\0_School_Files\\\\cs130\\\\CS-130-Capstone-Project\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)"
     ]
   }
 }

@@ -21,7 +21,7 @@ import {
   getEthernetWhipBottomInset,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
-import { PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
+import { type CharacterId, PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
 import {
   K_createDroppedItemMesh,
   K_createProjectileMesh,
@@ -313,7 +313,7 @@ export class GameRenderer {
       );
 
       const cachedSprite = this.getCachedSpriteTexture(player.characterId, frame);
-      if (playerSprite.lastFrameKey !== frameKey) {
+      if (playerSprite.lastFrameKey !== frameKey && cachedSprite.texture.image) {
         const previousMaterial = playerSprite.mesh.material as THREE.MeshBasicMaterial;
         previousMaterial.dispose();
         playerSprite.mesh.material = this.createPlayerSpriteMaterial(cachedSprite.texture);
@@ -614,15 +614,14 @@ export class GameRenderer {
         this.attackMeshes.set(attack.id, attackSprite);
       }
 
-      if (attackSprite.lastFrameKey !== frameKey) {
-        const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+      const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+      if (attackSprite.lastFrameKey !== frameKey && cachedTex.texture.image) {
         const prev = attackSprite.mesh.material as THREE.MeshBasicMaterial;
         prev.dispose();
         attackSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
         attackSprite.lastFrameKey = frameKey;
       }
 
-      const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
       const aspect = this.resolveSpriteAspectRatio(cachedTex);
       const displayHeight = attack.displayHeight * PUNCH_SPRITE_HEIGHT_RATIO;
       const displayWidth = displayHeight * aspect;
@@ -989,6 +988,22 @@ export class GameRenderer {
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
+  }
+
+  preloadCharacterTextures(characterIds: CharacterId[]): void {
+    const characterFrames = [
+      'idle_l', 'idle_r',
+      'walk_l1', 'walk_l2', 'walk_r1', 'walk_r2',
+      'hold_l', 'hold_r',
+    ];
+    for (const characterId of characterIds) {
+      for (const frame of characterFrames) {
+        this.getCachedSpriteTexture(characterId, frame);
+      }
+    }
+    for (const variant of ['var1', 'var2']) {
+      this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+    }
   }
 
   private setupLighting(): void {
