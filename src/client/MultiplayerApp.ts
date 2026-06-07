@@ -2468,6 +2468,7 @@ export class MultiplayerApp {
     }
 
     this.game.applyCharacterSelections(this.lobbyCharacterByPeer);
+    this.renderer.preloadCharacterTextures(Array.from(this.lobbyCharacterByPeer.values()));
   }
 
 }
