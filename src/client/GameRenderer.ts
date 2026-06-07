@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { SpriteSheetVFXManager, type VFXInstance } from './vfx/spriteSheetVFX';
+import type { VFXAssetCache } from './vfx/assetCache';
+import { VFXMeshPool, VFXMeshInstance } from './vfx/vfxMesh';
+import { RING_OUT_PACK } from './vfx/packs';
 import {
   CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
@@ -236,8 +238,9 @@ export class GameRenderer {
   private readonly kyleBulletMeshes = new Map<number, THREE.Mesh>();
   private readonly weaponMeshes = new Map<string, THREE.Mesh>();
   private readonly laserSightMeshes = new Map<string, THREE.Line>();
-  private readonly vfxManager = new SpriteSheetVFXManager();
-  private readonly playerVFX = new Map<string, VFXInstance>();
+  private readonly vfxCache: VFXAssetCache;
+  private vfxRingOutPool: VFXMeshPool | null = null;
+  private readonly playerVFX = new Map<string, VFXMeshInstance>();
   private readonly prevRespawning = new Map<string, boolean>();
   private readonly prevEliminated = new Map<string, boolean>();
   private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
@@ -251,10 +254,11 @@ export class GameRenderer {
   private cameraLockTarget: THREE.Vector2 | null = null;
   private readonly resizeObserver: ResizeObserver;
 
-  constructor(container: HTMLElement, map: TiledMapDefinition) {
+  constructor(container: HTMLElement, map: TiledMapDefinition, vfxCache: VFXAssetCache) {
     this.container = container;
     this.mapBounds = map.bounds;
     this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
+    this.vfxCache = vfxCache;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x131924);
@@ -281,10 +285,17 @@ export class GameRenderer {
     this.resizeObserver.observe(this.container);
     this.resize();
 
-    void this.vfxManager.load();
+    // Ring-out atlases are registered permanent at app boot in MultiplayerApp;
+    // here we wait for the resolved asset, then stand up a pool of 3 meshes.
+    void this.vfxCache.registerPermanent(RING_OUT_PACK).then((asset) => {
+      // 16 world units tall ≈ the dramatic scale the previous random formula
+      // averaged to. Now deterministic.
+      const RING_OUT_WORLD_HEIGHT = PLAYER_HALF_HEIGHT * 2 * 12;
+      this.vfxRingOutPool = new VFXMeshPool(asset, 3, RING_OUT_WORLD_HEIGHT);
+    });
   }
 
-  render(state: RenderState, localPlayerId: string): void {
+  render(state: RenderState, localPlayerId: string, vfxDeltaSeconds = 0): void {
     // --- Players ---
     const activeIds = this.activePlayerIdsScratch;
     activeIds.clear();
@@ -367,8 +378,8 @@ export class GameRenderer {
         (player.respawning && !wasRespawning && isStageOut) ||
         (player.eliminated && !wasEliminated && isStageOut);
 
-      if (justRingOut) {
-        const vfx = this.vfxManager.spawn(this.scene, player.color);
+      if (justRingOut && this.vfxRingOutPool) {
+        const vfx = this.vfxRingOutPool.spawn(this.scene);
         if (vfx) {
           const prev = this.prevVelocity.get(player.id);
           // Negate both components of the exit vector so the beam points back
@@ -387,9 +398,10 @@ export class GameRenderer {
 
       const vfx = this.playerVFX.get(player.id);
       if (vfx) {
-        vfx.tick();
-        if (vfx.isDone()) {
-          this.vfxManager.release(this.scene, vfx);
+        vfx.player.advance(vfxDeltaSeconds);
+        vfx.update();
+        if (vfx.isDone() && this.vfxRingOutPool) {
+          this.vfxRingOutPool.release(this.scene, vfx);
           this.playerVFX.delete(player.id);
         }
       }
@@ -402,7 +414,7 @@ export class GameRenderer {
     // Cleanup VFX for players who left the match
     for (const [id, vfx] of this.playerVFX) {
       if (!activeIds.has(id)) {
-        this.vfxManager.release(this.scene, vfx);
+        if (this.vfxRingOutPool) this.vfxRingOutPool.release(this.scene, vfx);
         this.playerVFX.delete(id);
         this.prevRespawning.delete(id);
         this.prevEliminated.delete(id);
@@ -1011,7 +1023,8 @@ export class GameRenderer {
       this.scene.remove(vfx.mesh);
     }
     this.playerVFX.clear();
-    this.vfxManager.disposeAll();
+    this.vfxRingOutPool?.disposeAll();
+    this.vfxRingOutPool = null;
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
