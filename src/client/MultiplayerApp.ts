@@ -21,6 +21,18 @@ import {
 import { defaultCharacterForPlayer, getCharacterPreviewUrl } from './CharacterSprites';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
+import { VFXAssetCache } from './vfx/assetCache';
+import { VFXClock } from './vfx/vfxClock';
+import { VFXPlayer } from './vfx/vfxPlayer';
+import { VFXCanvasOverlay } from './vfx/vfxCanvasOverlay';
+import {
+  COUNTDOWN_PACK,
+  COUNTDOWN_VFX_FPS,
+  COUNTDOWN_VFX_FRAME_OFFSET,
+  RING_OUT_PACK,
+} from './vfx/packs';
+import type { VFXAsset } from './vfx/assetLoader';
+import { ROUND_START_COUNTDOWN_TOTAL_TICKS } from './RollbackPhysicsGame';
 import { MainMenu, type StatusTone } from './MainMenu';
 import { LeavingManager } from './LeavingManager';
 import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
@@ -354,7 +366,14 @@ export class MultiplayerApp {
   private readonly winnerBanner: HTMLElement;
   private readonly winnerBannerTitle: HTMLElement;
   private readonly winnerBannerSubtitle: HTMLElement;
-  private readonly roundStartBanner: HTMLElement;
+  private readonly roundStartBanner: HTMLCanvasElement;
+  private readonly vfxCache = new VFXAssetCache();
+  private readonly vfxClock = new VFXClock();
+  private countdownAsset: VFXAsset | null = null;
+  private countdownPlayer: VFXPlayer | null = null;
+  private countdownOverlay: VFXCanvasOverlay | null = null;
+  private countdownLoading = false;
+  private countdownWasActive = false;
   private readonly gameThemeAudio: HTMLAudioElement;
   private readonly menuThemeAudio: HTMLAudioElement;
 
@@ -566,7 +585,8 @@ export class MultiplayerApp {
     this.root.innerHTML = this.renderAppTemplate();
 
     this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
-    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition, this.vfxCache);
+    void this.vfxCache.registerPermanent(RING_OUT_PACK);
     this.smashHud = new SmashHud(this.viewport);
 
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
@@ -599,7 +619,7 @@ export class MultiplayerApp {
     this.winnerBanner.appendChild(this.winnerBannerSubtitle);
     this.viewport.appendChild(this.winnerBanner);
 
-    this.roundStartBanner = document.createElement('div');
+    this.roundStartBanner = document.createElement('canvas');
     this.roundStartBanner.className = 'round-start-banner';
     this.roundStartBanner.dataset.visible = 'false';
     this.viewport.appendChild(this.roundStartBanner);
@@ -871,7 +891,8 @@ export class MultiplayerApp {
     if (this.game) {
       const renderDelaySeconds = this.accumulatedTimeMs / 1000;
       const renderState = this.game.getRenderState(renderDelaySeconds);
-      this.renderer.render(renderState, this.peerId);
+      const vfxDelta = this.vfxClock.tick(frameDelta);
+      this.renderer.render(renderState, this.peerId, vfxDelta);
       if (this.isInRoom() || this.connecting) {
         this.smashHud.update(renderState.players, this.peerId);
       }
@@ -886,7 +907,7 @@ export class MultiplayerApp {
       }
 
       this.updateWinnerBanner(renderState);
-      this.updateRoundStartBanner(renderState.roundStartCountdownLabel);
+      this.updateRoundStartBanner(renderState.roundStartCountdownTicks);
     } else {
       this.winnerBanner.dataset.visible = 'false';
       this.roundStartBanner.dataset.visible = 'false';
@@ -1138,6 +1159,8 @@ export class MultiplayerApp {
     this.cleanupNetworking({ sendLeave: true });
     this.clearCameraInput();
     this.setCameraMode('follow');
+    this.disposeCountdownAsset();
+    this.countdownWasActive = false;
 
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.delete('room');
@@ -1719,6 +1742,9 @@ export class MultiplayerApp {
     this.roomId = roomId;
     this.hostPeerId = hostPeerId;
 
+    // Preload the 3-2-1 countdown VFX so it's resident before the round starts.
+    this.ensureCountdownAsset();
+
     this.mainMenu.setRoomId(roomId);
     this.mainMenu.setHostPeerId(hostPeerId);
     this.settingsMenu.setRoomId(roomId);
@@ -2014,7 +2040,7 @@ export class MultiplayerApp {
     this.settingsMenu.setMap(this.getSelectedMapManifest());
 
     this.renderer.dispose();
-    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition, this.vfxCache);
     this.renderer.setCameraMode(this.cameraMode);
 
     if (this.game) {
@@ -2207,14 +2233,67 @@ export class MultiplayerApp {
     this.winnerBanner.dataset.visible = 'true';
   }
 
-  private updateRoundStartBanner(label: string | null): void {
-    if (label === null) {
+  private updateRoundStartBanner(ticksRemaining: number | null): void {
+    if (ticksRemaining === null) {
       this.roundStartBanner.dataset.visible = 'false';
+      if (this.countdownWasActive) {
+        this.countdownWasActive = false;
+        this.disposeCountdownAsset();
+        // Preload again for the next round if we're still in a room.
+        if (this.isInRoom()) this.ensureCountdownAsset();
+      }
       return;
     }
 
-    this.roundStartBanner.textContent = label;
+    this.countdownWasActive = true;
+    if (!this.countdownOverlay) {
+      // First frame of countdown; load on demand if not already preloaded.
+      this.ensureCountdownAsset();
+      return;
+    }
+
+    // Only resize when the CSS-driven size actually changes — assigning to
+    // canvas.width/height clears the bitmap, so doing it every frame would
+    // flicker on render frames where the VFX frame index didn't advance.
+    const desiredW = this.roundStartBanner.offsetWidth;
+    const desiredH = this.roundStartBanner.offsetHeight;
+    if (this.roundStartBanner.width !== desiredW) this.roundStartBanner.width = desiredW;
+    if (this.roundStartBanner.height !== desiredH) this.roundStartBanner.height = desiredH;
     this.roundStartBanner.dataset.visible = 'true';
+    const elapsedSeconds = (ROUND_START_COUNTDOWN_TOTAL_TICKS - ticksRemaining) / TICK_RATE;
+    this.countdownPlayer!.setProgress(elapsedSeconds, COUNTDOWN_VFX_FPS, COUNTDOWN_VFX_FRAME_OFFSET);
+    this.countdownOverlay.update();
+  }
+
+  private ensureCountdownAsset(): void {
+    if (this.countdownAsset || this.countdownLoading) return;
+    this.countdownLoading = true;
+    void this.vfxCache
+      .acquire(COUNTDOWN_PACK)
+      .then((asset) => {
+        // If we were released before the load resolved (e.g. player left room),
+        // bail out — assetCache.release() already disposed.
+        if (!this.countdownLoading) return;
+        this.countdownAsset = asset;
+        this.countdownPlayer = new VFXPlayer(asset, { fps: COUNTDOWN_VFX_FPS });
+        this.countdownOverlay = new VFXCanvasOverlay(this.countdownPlayer, this.roundStartBanner);
+      })
+      .finally(() => {
+        this.countdownLoading = false;
+      });
+  }
+
+  private disposeCountdownAsset(): void {
+    if (this.countdownOverlay) {
+      this.countdownOverlay.dispose();
+      this.countdownOverlay = null;
+    }
+    this.countdownPlayer = null;
+    if (this.countdownAsset || this.countdownLoading) {
+      this.vfxCache.release(COUNTDOWN_PACK.id);
+      this.countdownAsset = null;
+      this.countdownLoading = false;
+    }
   }
 
   private truncatePeerId(peerId: string): string {

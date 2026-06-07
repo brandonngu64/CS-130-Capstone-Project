@@ -103,7 +103,7 @@ export interface RenderState {
   items: ItemRenderState[];
   bullets: BulletRenderState[];
   winnerId: string | null;
-  roundStartCountdownLabel: string | null;
+  roundStartCountdownTicks: number | null;
   animTick: number;
 }
 
@@ -141,7 +141,7 @@ const GROUND_RAY_LENGTH = 0.25;
 const KNOCKBACK_BASE = 4;    // horizontal impulse at full health
 const KNOCKBACK_SCALE = 14;  // additional impulse at 0 health
 const KNOCKBACK_UP = 3;      // upward lift on every hit
-const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
+export const ROUND_START_COUNTDOWN_TOTAL_TICKS = TICK_RATE * 4;
 const SPAWN_ROTATION: readonly ItemKind[] = [
   ItemKind.BinaryBeam,
   ItemKind.PenCrossbow,
@@ -776,7 +776,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       items,
       bullets,
       winnerId,
-      roundStartCountdownLabel: this.getRoundStartCountdownLabel(),
+      roundStartCountdownTicks: this.getRoundStartCountdownTicks(),
       animTick: this.tickCount + renderDelay * TICK_RATE,
     };
   }
@@ -1843,22 +1843,8 @@ private colorForPlayer(playerId: string): number {
     }
   }
 
-  private getRoundStartCountdownLabel(): string | null {
-    if (this.roundStartCountdownTicks <= 0) {
-      return null;
-    }
-
-    const oneSecond = TICK_RATE;
-    if (this.roundStartCountdownTicks > oneSecond * 3) {
-      return '3';
-    }
-    if (this.roundStartCountdownTicks > oneSecond * 2) {
-      return '2';
-    }
-    if (this.roundStartCountdownTicks > oneSecond) {
-      return '1';
-    }
-    return 'GO!';
+  private getRoundStartCountdownTicks(): number | null {
+    return this.roundStartCountdownTicks > 0 ? this.roundStartCountdownTicks : null;
   }
 
   private hasOpponentInMatch(): boolean {
