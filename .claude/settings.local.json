@@ -8,7 +8,8 @@
       "Bash(python -c ' *)",
       "Bash(npx tsc *)",
       "Bash(node -e \"const p = require\\('rollback-netcode/package.json'\\); console.log\\(p.main, p.types\\);\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(xargs grep -l \"overlay\\\\|panel\\\\|hud\\\\|HUD\\\\|console\\\\|Console\")"
     ]
   }
 }

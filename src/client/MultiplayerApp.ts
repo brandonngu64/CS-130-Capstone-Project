@@ -371,6 +371,12 @@ export class MultiplayerApp {
   private readonly playerCountValue: HTMLElement;
   private readonly rttValue: HTMLElement;
 
+  private netCountersPanel!: HTMLElement;
+  private debugConsolePanel!: HTMLElement;
+  private debugConsoleLog!: HTMLElement;
+  private toggleNetCountersBtn!: HTMLButtonElement;
+  private toggleDebugConsoleBtn!: HTMLButtonElement;
+
   private signaling: SignalingClient | null = null;
   private transport: WebRTCTransport | null = null;
   private session: Session | null = null;
@@ -631,6 +637,14 @@ export class MultiplayerApp {
       '#playerCountValue',
     );
     this.rttValue = requireElement<HTMLElement>(this.root, '#rttValue');
+
+    this.netCountersPanel = requireElement<HTMLElement>(this.root, '#netCountersPanel');
+    this.debugConsolePanel = requireElement<HTMLElement>(this.root, '#debugConsolePanel');
+    this.debugConsoleLog = requireElement<HTMLElement>(this.root, '#debugConsoleLog');
+    this.toggleNetCountersBtn = requireElement<HTMLButtonElement>(this.root, '#toggleNetCounters');
+    this.toggleDebugConsoleBtn = requireElement<HTMLButtonElement>(this.root, '#toggleDebugConsole');
+
+    this.bindDebugToggleButtons();
 
     this.mainMenu = new MainMenu(this.viewport, {
       onHost: () => {
@@ -948,22 +962,28 @@ export class MultiplayerApp {
     const input = this.getDelayedInput(rawInput);
 
     let tickResult: TickResult;
+    const t0 = performance.now();
     try {
       tickResult = this.session.tick(input);
     } catch (error) {
       this.debugCounters.errorCount += 1;
-      this.setStatus(
-        `Session tick failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        'error',
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Session tick failed: ${msg}`, 'error');
+      this.debugLog('ERR', `Session tick failed: ${msg}`, 'error');
       return;
     }
 
     if (tickResult.rolledBack) {
       this.debugCounters.rollbackCount += 1;
       this.debugCounters.rollbackTicks += tickResult.rollbackTicks ?? 0;
+      const elapsed = performance.now() - t0;
+      if (elapsed > 50) {
+        this.debugLog(
+          'ROLLBACK',
+          `Slow recalc: ${elapsed.toFixed(1)}ms, ${tickResult.rollbackTicks ?? 0} ticks rolled back`,
+          'warn',
+        );
+      }
     }
   }
 
@@ -1028,13 +1048,11 @@ export class MultiplayerApp {
           ? `Recovered host room ${roomId}. Waiting in lobby.`
           : `Hosting room ${roomId}. Waiting in lobby for players before start.`,
       );
+      this.debugLog('MATCH', `Hosting room ${roomId}`);
     } catch (error) {
-      this.setStatus(
-        `Unable to host room: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        'error',
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Unable to host room: ${msg}`, 'error');
+      this.debugLog('MATCH', `Host failed: ${msg}`, 'error');
       this.cleanupNetworking();
     } finally {
       this.connecting = false;
@@ -1105,13 +1123,11 @@ export class MultiplayerApp {
       this.setStatus(
         `Joined room ${roomId}. Waiting for host to relay and start the session.`,
       );
+      this.debugLog('MATCH', `Joined room ${roomId} (host: ${resolvedHostPeer})`);
     } catch (error) {
-      this.setStatus(
-        `Unable to join room: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        'error',
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Unable to join room: ${msg}`, 'error');
+      this.debugLog('MATCH', `Join failed: ${msg}`, 'error');
       this.cleanupNetworking();
     } finally {
       this.connecting = false;
@@ -1134,6 +1150,7 @@ export class MultiplayerApp {
   }
 
   private leaveRoom(): void {
+    this.debugLog('DC', `Local player left room ${this.roomId ?? '?'}`);
     this.settingsOpen = false;
     this.cleanupNetworking({ sendLeave: true });
     this.clearCameraInput();
@@ -1282,6 +1299,7 @@ export class MultiplayerApp {
 
     this.session.on('playerJoined', (player) => {
       this.setStatus(`Player joined: ${player.id}`);
+      this.debugLog('JOIN', `Player joined: ${player.id}`);
       this.lobbyMembers.add(player.id);
       this.lobbyReadyByPeer.set(player.id, false);
       this.assignDefaultCharacterIfMissing(player.id);
@@ -1293,6 +1311,7 @@ export class MultiplayerApp {
 
     this.session.on('playerLeft', (player) => {
       this.setStatus(`Player left cleanly: ${player.id}`);
+      this.debugLog('DC', `Player left cleanly: ${player.id}`);
       this.lobbyMembers.delete(player.id);
       this.lobbyReadyByPeer.delete(player.id);
       this.lobbyCharacterByPeer.delete(player.id);
@@ -1301,6 +1320,7 @@ export class MultiplayerApp {
 
     this.session.on('playerDropped', (playerId) => {
       this.setStatus(`Player disconnected abruptly and was removed: ${playerId}`);
+      this.debugLog('DC', `Player dropped (abrupt disconnect): ${playerId}`, 'warn');
       this.lobbyMembers.delete(playerId);
       this.lobbyReadyByPeer.delete(playerId);
       this.lobbyCharacterByPeer.delete(playerId);
@@ -1323,6 +1343,7 @@ export class MultiplayerApp {
         `Desync at tick ${tick}: local=${localHash} remote=${remoteHash}`,
         'error',
       );
+      this.debugLog('DESYNC', `Tick ${tick}: local=${localHash} remote=${remoteHash}`, 'error');
     });
 
     this.session.on('error', (error, context) => {
@@ -1331,6 +1352,7 @@ export class MultiplayerApp {
         `Session error (${context.source}): ${error.message}`,
         'error',
       );
+      this.debugLog('ERR', `(${context.source}): ${error.message}`, 'error');
     });
 
     const sessionOnConnect = this.transport.onConnect;
@@ -1339,6 +1361,7 @@ export class MultiplayerApp {
     this.transport.onConnect = (peerId: string) => {
       sessionOnConnect?.(peerId);
       this.setStatus(`WebRTC peer connected: ${peerId}`);
+      this.debugLog('ICE', `WebRTC connected to ${peerId}`);
     };
 
     this.transport.onDisconnect = (peerId: string) => {
@@ -1348,6 +1371,7 @@ export class MultiplayerApp {
         peerId !== this.peerId;
 
       if (isHostDroppingPeer) {
+        this.debugLog('DC', `Host dropped peer ${peerId} (will trigger rollback)`, 'warn');
         try {
           const hostSession = this.session;
           if (hostSession) {
@@ -1359,10 +1383,12 @@ export class MultiplayerApp {
         return;
       }
 
+      this.debugLog('DC', `Disconnected from peer ${peerId}`, 'warn');
       sessionOnDisconnect?.(peerId);
     };
 
     this.setStatus('Connected to signaling server.');
+    this.debugLog('MATCH', 'Connected to signaling server');
     this.statusBadge.textContent = sessionStateLabel(this.session.state);
   }
 
@@ -1649,6 +1675,15 @@ export class MultiplayerApp {
 
       case 'lobby_ready':
         this.lobbyReadyByPeer.set(message.peerId, message.ready);
+        this.debugLog('LOBBY', `${message.peerId} is ${message.ready ? 'ready' : 'not ready'}`);
+        if (!message.ready || !this.areAllLobbyPlayersReady()) {
+          const notReady = Array.from(this.lobbyMembers).filter(
+            (id) => this.lobbyReadyByPeer.get(id) !== true,
+          );
+          if (notReady.length > 0) {
+            this.debugLog('LOBBY', `Waiting on: ${notReady.join(', ')}`);
+          }
+        }
         this.updateUiState();
         break;
 
@@ -1776,6 +1811,32 @@ export class MultiplayerApp {
     this.settingsMenu.setStatus(message, tone);
   }
 
+  private bindDebugToggleButtons(): void {
+    this.toggleNetCountersBtn.addEventListener('click', () => {
+      const visible = this.netCountersPanel.style.display !== 'none';
+      this.netCountersPanel.style.display = visible ? 'none' : '';
+      this.toggleNetCountersBtn.classList.toggle('active', !visible);
+    });
+    this.toggleDebugConsoleBtn.addEventListener('click', () => {
+      const visible = this.debugConsolePanel.style.display !== 'none';
+      this.debugConsolePanel.style.display = visible ? 'none' : '';
+      this.toggleDebugConsoleBtn.classList.toggle('active', !visible);
+    });
+  }
+
+  debugLog(tag: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+    const entry = document.createElement('div');
+    entry.className = 'debug-log-entry';
+    entry.dataset.level = level;
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    entry.textContent = `[${time}] [${tag}] ${message}`;
+    this.debugConsoleLog.appendChild(entry);
+    while (this.debugConsoleLog.children.length > 200) {
+      this.debugConsoleLog.firstElementChild?.remove();
+    }
+    this.debugConsoleLog.scrollTop = this.debugConsoleLog.scrollHeight;
+  }
+
   private isInRoom(): boolean {
     return (
       this.session !== null && this.session.state !== SessionState.Disconnected
@@ -1895,6 +1956,8 @@ export class MultiplayerApp {
           const summary = summarizeIceTransport(report);
           if (summary) {
             this.setStatus(`Connection to ${peerId}: ${summary}`);
+            const level = summary.includes('TURN') ? 'warn' : 'info';
+            this.debugLog('ICE', `${peerId}: ${summary}`, level);
           }
         })
         .catch(() => {
@@ -2033,19 +2096,31 @@ export class MultiplayerApp {
           </div>
         </section>
 
-        <section class="panel debug-panel">
-          <h2>Net Debug Counters</h2>
-          <div class="metrics-grid">
-            <article><span>Tick</span><strong id="tickValue">-1</strong></article>
-            <article><span>Confirmed Tick</span><strong id="confirmedTickValue">-1</strong></article>
-            <article><span>Rollbacks</span><strong id="rollbackCountValue">0</strong></article>
-            <article><span>Rollback Ticks</span><strong id="rollbackTicksValue">0</strong></article>
-            <article><span>Desync Events</span><strong id="desyncCountValue">0</strong></article>
-            <article><span>Connected Peers</span><strong id="peerCountValue">0</strong></article>
-            <article><span>Players</span><strong id="playerCountValue">0</strong></article>
-            <article><span>RTT</span><strong id="rttValue">-</strong></article>
+        <div class="debug-footer">
+          <div class="debug-toggle-bar">
+            <button id="toggleNetCounters" class="debug-toggle-btn active" type="button">Net Counters</button>
+            <button id="toggleDebugConsole" class="debug-toggle-btn active" type="button">Debug Console</button>
           </div>
-        </section>
+          <div class="debug-panels-row">
+            <section id="netCountersPanel" class="panel debug-panel">
+              <h2>Net Debug Counters</h2>
+              <div class="metrics-grid">
+                <article><span>Tick</span><strong id="tickValue">-1</strong></article>
+                <article><span>Confirmed Tick</span><strong id="confirmedTickValue">-1</strong></article>
+                <article><span>Rollbacks</span><strong id="rollbackCountValue">0</strong></article>
+                <article><span>Rollback Ticks</span><strong id="rollbackTicksValue">0</strong></article>
+                <article><span>Desync Events</span><strong id="desyncCountValue">0</strong></article>
+                <article><span>Connected Peers</span><strong id="peerCountValue">0</strong></article>
+                <article><span>Players</span><strong id="playerCountValue">0</strong></article>
+                <article><span>RTT</span><strong id="rttValue">-</strong></article>
+              </div>
+            </section>
+            <section id="debugConsolePanel" class="panel debug-console-panel">
+              <h2>Debug Console</h2>
+              <div id="debugConsoleLog" class="debug-console-log"></div>
+            </section>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -2229,6 +2304,7 @@ export class MultiplayerApp {
     }
     const nextReady = !this.isLocalReadyInLobby();
     this.lobbyReadyByPeer.set(this.peerId, nextReady);
+    this.debugLog('LOBBY', `Local player is ${nextReady ? 'ready' : 'not ready'}`);
     this.signaling.send({
       type: 'lobby_ready',
       roomId: this.roomId,
