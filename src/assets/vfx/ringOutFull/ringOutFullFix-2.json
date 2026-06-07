@@ -1,0 +1,53 @@
+{"frames": {
+
+"ringOutFull017.png":
+{
+	"frame": {"x":1,"y":1151,"w":1492,"h":526},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":287,"w":1492,"h":526},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"ringOutFull018.png":
+{
+	"frame": {"x":1,"y":2256,"w":1436,"h":544},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":278,"w":1436,"h":544},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"ringOutFull019.png":
+{
+	"frame": {"x":1,"y":589,"w":1517,"h":560},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":270,"w":1517,"h":560},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"ringOutFull020.png":
+{
+	"frame": {"x":1,"y":1679,"w":1463,"h":575},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":262,"w":1463,"h":575},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"ringOutFull021.png":
+{
+	"frame": {"x":1,"y":1,"w":1521,"h":586},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":257,"w":1521,"h":586},
+	"sourceSize": {"w":1920,"h":1080}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "ringOutFullFix-2.png",
+	"format": "RGBA8888",
+	"size": {"w":1523,"h":2801},
+	"scale": "1",
+	"related_multi_packs": [ "ringOutFullFix-0.json", "ringOutFullFix-1.json" ],
+	"smartupdate": "$TexturePacker:SmartUpdate:02c55e623e3c7fda40fb0617bfbf9600:74dade066ee629a62898a12edc620c97:76e707064f18c98d983bcedbc71c26a8$"
+}
+}
