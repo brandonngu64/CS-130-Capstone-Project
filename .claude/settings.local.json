@@ -13,7 +13,9 @@
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\kydev\\\\Documents\\\\0_School_Files\\\\cs130\\\\CS-130-Capstone-Project\" -Directory)",
       "Bash(Select-Object Name)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\kydev\\\\Documents\\\\0_School_Files\\\\cs130\\\\CS-130-Capstone-Project\" -Recurse -Directory)",
-      "Bash(Select-Object -ExpandProperty FullName)"
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\kydev\\\\Documents\\\\0_School_Files\\\\cs130\\\\CS-130-Capstone-Project\\\\src\" -Recurse -Force)",
+      "PowerShell($base = \"c:\\\\Users\\\\kydev\\\\Documents\\\\0_School_Files\\\\cs130\\\\CS-130-Capstone-Project\\\\src\\\\assets\\\\characters\"; Get-ChildItem -Path $base -Directory | ForEach-Object { Write-Host \"Directory: $\\($_.Name\\)\"; Get-ChildItem -Path $_.FullName -File | ForEach-Object { Write-Host \"  - $\\($_.Name\\)\" } })"
     ]
   }
 }

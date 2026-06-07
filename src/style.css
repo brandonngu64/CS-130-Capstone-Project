@@ -1,5 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
+@font-face {
+  font-family: 'DFGGothic-UB';
+  src: url('./assets/fonts/DFGothic-UB-WING-RKSJ-H.ttf') format('truetype');
+}
+
 :root {
   --bg-top: #d9f0f6;
   --bg-mid: #f8f1df;
@@ -655,96 +660,97 @@ h2 {
   line-height: 1.35;
 }
 
-.game-hud {
+.smash-hud {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 12px;
+  bottom: 0;
+  left: 0;
+  right: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  z-index: 3;
+  justify-content: space-evenly;
+  align-items: flex-end;
+  z-index: 4;
   pointer-events: none;
 }
 
-.game-hud[data-visible='false'] {
+.smash-hud[data-visible='false'] {
   display: none;
 }
 
-.game-hud > * {
-  pointer-events: auto;
-}
-
-.game-hud .state-pill {
-  background: rgba(255, 255, 255, 0.85);
-  border-color: rgba(40, 65, 82, 0.28);
-  box-shadow: 0 6px 18px rgba(11, 28, 44, 0.18);
-}
-
-.game-hud-actions {
+.smash-card {
   display: flex;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  border-top: 3px solid rgba(255, 255, 255, 0.25);
+  padding: 8px 12px 8px 8px;
+  flex: 1;
+  max-width: 25%;
 }
 
-.health-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 220px;
-  max-width: 320px;
-  padding: 10px 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(40, 65, 82, 0.16);
-  box-shadow: 0 10px 24px rgba(11, 28, 44, 0.12);
+.smash-card--eliminated {
+  opacity: 0.45;
 }
 
-.health-bar[data-visible='false'] {
-  display: none;
-}
-
-.health-bar__label {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 0.78rem;
-  color: var(--ink-soft);
-}
-
-.health-bar__title {
-  font-weight: 700;
-  color: var(--ink);
-}
-
-.health-bar__value {
-  font-family: var(--mono);
-  color: var(--ink);
-}
-
-.health-bar__track {
-  position: relative;
-  width: 100%;
-  height: 14px;
-  border-radius: 999px;
-  background: rgba(31, 49, 63, 0.14);
+.smash-card-portrait {
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  border: 2px solid rgba(255, 255, 255, 0.35);
   overflow: hidden;
 }
 
-.health-bar__fill {
-  width: 0%;
+.smash-card-headshot {
+  width: 100%;
   height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #ef6461, #f7a955);
-  transition: width 120ms ease;
+  object-fit: cover;
+  display: block;
 }
 
-.health-bar__fill[data-low='true'] {
-  background: linear-gradient(135deg, #d43f26, #e27a53);
+.smash-card-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
 }
 
-.game-hud-actions button {
-  box-shadow: 0 6px 18px rgba(11, 28, 44, 0.18);
+.smash-health-value {
+  font-family: 'DFGGothic-UB', sans-serif;
+  font-size: 40px;
+  font-style: italic;
+  line-height: 1;
+  text-shadow: 2px 3px 0px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+}
+
+.smash-stocks {
+  display: flex;
+  gap: 5px;
+}
+
+.smash-stock-pip {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: transparent;
+}
+
+.smash-stock-pip--filled {
+  background: #ffffff;
+  border-color: transparent;
+}
+
+.debug-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 2px 6px;
+  white-space: nowrap;
 }
 
 .stock-hud {
