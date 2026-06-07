@@ -21,14 +21,13 @@ import {
 import { defaultCharacterForPlayer, getCharacterPreviewUrl } from './CharacterSprites';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
-import { HealthBarOverlay } from './HealthBarOverlay';
 import { MainMenu, type StatusTone } from './MainMenu';
 import { LeavingManager } from './LeavingManager';
 import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
-import { StockHud } from './StockHud';
+import { SmashHud } from './SmashHud';
 import { encodeInput } from './input';
 import { AVAILABLE_MAPS, DEFAULT_MAP_ID, loadMapDefinition } from './tiledMap';
 
@@ -338,9 +337,8 @@ export class MultiplayerApp {
   private readonly peerIdClaim: PeerIdClaim;
   private readonly mainMenu: MainMenu;
   private readonly settingsMenu: SettingsMenu;
-  private readonly stockHud: StockHud;
+  private readonly smashHud: SmashHud;
 
-  private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
   private readonly startGameButton: HTMLButtonElement;
   private readonly lobbyOverlay: HTMLElement;
@@ -353,8 +351,6 @@ export class MultiplayerApp {
   private readonly lobbyShareUrlValue: HTMLInputElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
-  private readonly settingsToggleButton: HTMLButtonElement;
-  private readonly healthBarOverlay: HealthBarOverlay;
   private readonly winnerBanner: HTMLElement;
   private readonly winnerBannerTitle: HTMLElement;
   private readonly winnerBannerSubtitle: HTMLElement;
@@ -571,9 +567,8 @@ export class MultiplayerApp {
 
     this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
     this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
-    this.stockHud = new StockHud(this.viewport);
+    this.smashHud = new SmashHud(this.viewport);
 
-    this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
     this.startGameButton = requireElement<HTMLButtonElement>(this.root, '#startGameButton');
     this.lobbyOverlay = requireElement<HTMLElement>(this.root, '#lobbyOverlay');
@@ -588,15 +583,10 @@ export class MultiplayerApp {
       this.root,
       '#leaveButton',
     );
-    this.settingsToggleButton = requireElement<HTMLButtonElement>(
-      this.root,
-      '#settingsToggleButton',
-    );
     this.cameraToggleButton = requireElement<HTMLButtonElement>(
       this.root,
       '#cameraModeButton',
     );
-    this.healthBarOverlay = new HealthBarOverlay(this.gameHud);
 
     this.winnerBanner = document.createElement('div');
     this.winnerBanner.className = 'winner-banner';
@@ -709,9 +699,6 @@ export class MultiplayerApp {
 
     this.leaveButton.addEventListener('click', () => {
       this.leaveRoom();
-    });
-    this.settingsToggleButton.addEventListener('click', () => {
-      this.toggleSettings();
     });
     this.cameraToggleButton.addEventListener('click', () => {
       this.toggleCameraMode();
@@ -835,8 +822,7 @@ export class MultiplayerApp {
     this.cleanupNetworking();
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
-    this.stockHud.destroy();
-    this.healthBarOverlay.dispose();
+    this.smashHud.destroy();
     this.renderer.dispose();
 
     if (this.game) {
@@ -887,19 +873,16 @@ export class MultiplayerApp {
       const renderState = this.game.getRenderState(renderDelaySeconds);
       this.renderer.render(renderState, this.peerId);
       if (this.isInRoom() || this.connecting) {
-        this.stockHud.update(renderState.players, this.peerId);
+        this.smashHud.update(renderState.players, this.peerId);
       }
 
       const localPlayer = renderState.players.find(
-        (player: { id: string; health: number; maxHealth: number }) =>
-          player.id === this.peerId,
+        (player: { id: string }) => player.id === this.peerId,
       );
       if (localPlayer) {
         this.syncRespawnCamera(localPlayer);
-        this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
       } else {
         this.releaseRespawnCamera();
-        this.healthBarOverlay.hide();
       }
 
       this.updateWinnerBanner(renderState);
@@ -1984,8 +1967,7 @@ export class MultiplayerApp {
     const inLobby = inRoom && this.session?.state === SessionState.Lobby;
     const inPlayingSession = inRoom && this.session?.state === SessionState.Playing;
 
-    this.gameHud.dataset.visible = inPlayingSession ? 'true' : 'false';
-    this.stockHud.setVisible(inPlayingSession);
+    this.smashHud.setVisible(inPlayingSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
     this.lobbyOverlay.dataset.visible = inLobby ? 'true' : 'false';
     this.renderCharacterPicker();
@@ -2080,24 +2062,16 @@ export class MultiplayerApp {
               </div>
             </div>
           </div>
-          <div id="gameHud" class="game-hud" data-visible="false">
-            <div class="state-pill">
-              <span>Session</span>
-              <strong id="statusBadge">Disconnected</strong>
-            </div>
-            <div class="game-hud-actions">
-              <button id="cameraModeButton" class="action-ghost" type="button">Camera: Follow</button>
-              <button id="settingsToggleButton" class="action-ghost" type="button">Settings</button>
-              <button id="leaveButton" class="action-ghost" type="button">Leave</button>
-            </div>
-          </div>
         </section>
 
         <div class="debug-footer">
           <div class="debug-toggle-bar">
+            <span class="debug-status-badge">Session: <strong id="statusBadge">Disconnected</strong></span>
             <button id="toggleNetCounters" class="debug-toggle-btn active" type="button">Net Counters</button>
             <button id="toggleDebugConsole" class="debug-toggle-btn active" type="button">Debug Console</button>
-            <button id="debugSettingsBtn" class="debug-toggle-btn debug-toggle-btn--right" type="button">Settings</button>
+            <button id="cameraModeButton" class="debug-toggle-btn debug-toggle-btn--right" type="button">Camera: Follow</button>
+            <button id="leaveButton" class="debug-toggle-btn" type="button">Leave</button>
+            <button id="debugSettingsBtn" class="debug-toggle-btn" type="button">Settings</button>
           </div>
           <div class="debug-panels-row">
             <section id="netCountersPanel" class="panel debug-panel">

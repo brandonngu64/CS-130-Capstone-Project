@@ -49,6 +49,7 @@ const JUMP_SOUND_URL = new URL('../assets/sounds/jump.mp3', import.meta.url).hre
 const FOOTSTEPS_SOUND_URL = new URL('../assets/sounds/Footsteps.wav', import.meta.url).href;
 const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
 const BINARY_BEAM_SOUND_URL = new URL('../assets/sounds/binary_beam.wav', import.meta.url).href;
+const STAGE_OUT_SOUND_URL = new URL('../assets/sounds/sfx/se_common_stage_fall.wav', import.meta.url).href;
 
 export interface AttackRenderState {
   id: string;
@@ -76,6 +77,7 @@ export interface PlayerRenderState {
   heldItem: ItemKind | null;
   facing: number;
   vx: number;
+  vy: number;
   gunFireCooldownTicks: number;
   activeWeaponAttack: { defKind: ItemKind; ticksRemaining: number } | null;
 }
@@ -192,6 +194,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return audio;
   });
   private footstepsAudioPoolIndex = 0;
+  private readonly stageOutAudioPool: HTMLAudioElement[] = Array.from({ length: 2 }, () => {
+    const audio = new Audio(STAGE_OUT_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 0.8;
+    audio.load();
+    return audio;
+  });
+  private stageOutAudioPoolIndex = 0;
   private readonly previousHorizontalDir = new Map<string, number>();
   private masterVolume = 1;
   private nextBulletId = 1;
@@ -265,6 +275,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
     this.footstepsAudioPool.forEach((audio) => {
       audio.volume = 0.9 * this.masterVolume;
+    });
+    this.stageOutAudioPool.forEach((audio) => {
+      audio.volume = 0.8 * this.masterVolume;
     });
   }
 
@@ -701,6 +714,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           heldItem: record.heldItem,
           facing: record.facing,
           vx: velocity.x,
+          vy: velocity.y,
           gunFireCooldownTicks: record.gunFireCooldownTicks,
           activeWeaponAttack: record.activeWeaponAttack
             ? { defKind: record.heldItem!, ticksRemaining: record.activeWeaponAttack.ticksRemaining }
@@ -1061,6 +1075,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousInputFlags.set(id, inputFlags);
   }
 
+  private playStageOutSound(): void {
+    const audio = this.stageOutAudioPool[this.stageOutAudioPoolIndex];
+    this.stageOutAudioPoolIndex = (this.stageOutAudioPoolIndex + 1) % this.stageOutAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('Stage-out sound could not play:', err);
+    });
+  }
+
   private playPunchSound(): void {
     const audio = this.punchAudioPool[this.punchAudioPoolIndex];
     this.punchAudioPoolIndex = (this.punchAudioPoolIndex + 1) % this.punchAudioPool.length;
@@ -1404,6 +1427,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
+      this.playStageOutSound();
       record.body.setLinvel({ x: 0, y: 0 }, true);
       record.body.sleep();
       this.matchState.startRespawn(id);

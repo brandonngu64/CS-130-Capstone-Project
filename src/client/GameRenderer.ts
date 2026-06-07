@@ -239,6 +239,7 @@ export class GameRenderer {
   private readonly vfxManager = new SpriteSheetVFXManager();
   private readonly playerVFX = new Map<string, VFXInstance>();
   private readonly prevRespawning = new Map<string, boolean>();
+  private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
 
   // Reused per-frame scratch sets to avoid allocating fresh Set objects on
   // every render() — runs at 60+ Hz so the GC pressure adds up.
@@ -355,13 +356,27 @@ export class GameRenderer {
     for (const player of state.players) {
       const wasRespawning = this.prevRespawning.get(player.id) ?? false;
 
-      if (player.respawning && !wasRespawning) {
+      const isStageOut =
+        player.x < this.mapBounds.minX ||
+        player.x > this.mapBounds.maxX ||
+        player.y < this.mapBounds.minY ||
+        player.y > this.mapBounds.maxY;
+
+      if (player.respawning && !wasRespawning && isStageOut) {
         const vfx = this.vfxManager.spawn(this.scene, player.color);
         if (vfx) {
+          const prev = this.prevVelocity.get(player.id);
           const dx = player.x - stageCenterX;
           const dy = player.y - stageCenterY;
+          // Negate Y because Three.js renders with y-up but the camera transform
+          // flips vertical screen direction relative to physics space. Horizontal
+          // exits are unaffected; vertical exits now point the correct way.
+          const baseAngle =
+            prev && (Math.abs(prev.vx) > 0.01 || Math.abs(prev.vy) > 0.01)
+              ? Math.atan2(-prev.vy, prev.vx)
+              : Math.atan2(-dy, dx);
           vfx.mesh.position.set(player.x, player.y, 0.5);
-          vfx.mesh.rotation.z = Math.atan2(dy, dx);
+          vfx.mesh.rotation.z = baseAngle + Math.PI;
           this.playerVFX.set(player.id, vfx);
         }
       }
@@ -377,6 +392,7 @@ export class GameRenderer {
       }
 
       this.prevRespawning.set(player.id, player.respawning);
+      this.prevVelocity.set(player.id, { vx: player.vx, vy: player.vy });
     }
 
     // Cleanup VFX for players who left the match
@@ -386,6 +402,7 @@ export class GameRenderer {
         vfx.dispose();
         this.playerVFX.delete(id);
         this.prevRespawning.delete(id);
+        this.prevVelocity.delete(id);
       }
     }
 
