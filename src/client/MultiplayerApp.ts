@@ -510,7 +510,7 @@ export class MultiplayerApp {
       this.inputState.dash = true;
     }
 
-    if (event.code === 'Escape' && this.isInRoom()) {
+    if (event.code === 'Escape') {
       this.toggleSettings();
     }
   };
@@ -1822,6 +1822,9 @@ export class MultiplayerApp {
       this.debugConsolePanel.style.display = visible ? 'none' : '';
       this.toggleDebugConsoleBtn.classList.toggle('active', !visible);
     });
+    requireElement<HTMLButtonElement>(this.root, '#debugSettingsBtn').addEventListener('click', () => {
+      this.toggleSettings();
+    });
   }
 
   debugLog(tag: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
@@ -1844,9 +1847,6 @@ export class MultiplayerApp {
   }
 
   private toggleSettings(): void {
-    if (!this.isInRoom() && !this.connecting) {
-      return;
-    }
     this.settingsOpen = !this.settingsOpen;
     this.updateUiState();
   }
@@ -2005,13 +2005,10 @@ export class MultiplayerApp {
       ? 'inline-flex'
       : 'none';
 
-    if (this.settingsOpen && inActiveSession) {
+    if (this.settingsOpen) {
       this.settingsMenu.show();
     } else {
       this.settingsMenu.hide();
-      if (!inActiveSession) {
-        this.settingsOpen = false;
-      }
     }
   }
 
@@ -2100,6 +2097,7 @@ export class MultiplayerApp {
           <div class="debug-toggle-bar">
             <button id="toggleNetCounters" class="debug-toggle-btn active" type="button">Net Counters</button>
             <button id="toggleDebugConsole" class="debug-toggle-btn active" type="button">Debug Console</button>
+            <button id="debugSettingsBtn" class="debug-toggle-btn debug-toggle-btn--right" type="button">Settings</button>
           </div>
           <div class="debug-panels-row">
             <section id="netCountersPanel" class="panel debug-panel">
