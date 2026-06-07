@@ -105,6 +105,7 @@ type Room = {
   members: Set<string>;
   sockets: Map<string, WebSocket>;
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
+  broadcastedLeave: Set<string>;
 };
 
 const rooms = new Map<string, Room>();
@@ -116,7 +117,7 @@ const host = process.env.HOST ?? '0.0.0.0';
 const staticRoot = path.resolve(process.cwd(), 'dist');
 const websocketPath = '/ws';
 const roomDisconnectGraceMs = Number(
-  process.env.ROOM_DISCONNECT_GRACE_MS ?? '15000',
+  process.env.ROOM_DISCONNECT_GRACE_MS ?? '7000',
 );
 
 const httpServer = createServer((request, response) => {
@@ -406,6 +407,7 @@ function hostRoom(
     members: new Set([message.peerId]),
     sockets: new Map([[message.peerId, socket]]),
     disconnectTimers: new Map(),
+    broadcastedLeave: new Set(),
   };
 
   rooms.set(message.roomId, room);
@@ -474,6 +476,7 @@ function joinRoom(
   room.members.add(message.peerId);
   room.sockets.set(message.peerId, socket);
   clearDisconnectTimer(room, message.peerId);
+  room.broadcastedLeave.delete(message.peerId);
   peerToRoom.set(message.peerId, room.roomId);
   socketToPeer.set(socket, message.peerId);
 
@@ -754,11 +757,10 @@ function finalizeDisconnect(roomId: string, peerId: string): void {
     return;
   }
 
-  broadcastToRoom(room, {
-    type: 'peer_left',
-    roomId,
-    peerId,
-  });
+  if (!room.broadcastedLeave.has(peerId)) {
+    broadcastToRoom(room, { type: 'peer_left', roomId, peerId });
+  }
+  room.broadcastedLeave.delete(peerId);
 
   console.log(`Peer disconnected after grace period ${roomId}: ${peerId}`);
 }
@@ -807,6 +809,9 @@ function onSocketClosed(socket: WebSocket): void {
 
   if (peerId === room.hostPeerId) {
     room.hostConnected = false;
+  } else if (!room.broadcastedLeave.has(peerId)) {
+    room.broadcastedLeave.add(peerId);
+    broadcastToRoom(room, { type: 'peer_left', roomId, peerId });
   }
 
   scheduleDisconnect(roomId, peerId);

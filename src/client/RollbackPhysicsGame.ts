@@ -781,6 +781,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
   }
 
+  // Creates physics bodies for all given players so that serialize() succeeds
+  // at tick 0 when session.start() is called before any step() runs.
+  initializePlayers(sortedIds: string[]): void {
+    this.syncPlayers(sortedIds);
+  }
+
   reset(): void {
     for (const [, record] of this.players) {
       this.unregisterPlayerColliders(record.body);

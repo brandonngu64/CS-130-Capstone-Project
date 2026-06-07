@@ -9,7 +9,7 @@ const port = Number(process.env.SIGNALING_PORT ?? process.env.PORT ?? '3000');
 const host = process.env.HOST ?? '0.0.0.0';
 const staticRoot = path.resolve(process.cwd(), 'dist');
 const websocketPath = '/ws';
-const roomDisconnectGraceMs = Number(process.env.ROOM_DISCONNECT_GRACE_MS ?? '15000');
+const roomDisconnectGraceMs = Number(process.env.ROOM_DISCONNECT_GRACE_MS ?? '7000');
 const httpServer = createServer((request, response) => {
     void handleHttpRequest(request, response).catch((error) => {
         console.error('HTTP server error:', error);
@@ -237,6 +237,7 @@ function hostRoom(socket, message) {
         members: new Set([message.peerId]),
         sockets: new Map([[message.peerId, socket]]),
         disconnectTimers: new Map(),
+        broadcastedLeave: new Set(),
     };
     rooms.set(message.roomId, room);
     peerToRoom.set(message.peerId, message.roomId);
@@ -291,6 +292,7 @@ function joinRoom(socket, message) {
     room.members.add(message.peerId);
     room.sockets.set(message.peerId, socket);
     clearDisconnectTimer(room, message.peerId);
+    room.broadcastedLeave.delete(message.peerId);
     peerToRoom.set(message.peerId, room.roomId);
     socketToPeer.set(socket, message.peerId);
     if (message.peerId === room.hostPeerId) {
@@ -514,11 +516,10 @@ function finalizeDisconnect(roomId, peerId) {
         console.log(`Room closed because host disconnected: ${roomId}`);
         return;
     }
-    broadcastToRoom(room, {
-        type: 'peer_left',
-        roomId,
-        peerId,
-    });
+    if (!room.broadcastedLeave.has(peerId)) {
+        broadcastToRoom(room, { type: 'peer_left', roomId, peerId });
+    }
+    room.broadcastedLeave.delete(peerId);
     console.log(`Peer disconnected after grace period ${roomId}: ${peerId}`);
 }
 function broadcastToRoom(room, message, excludePeerId) {
@@ -555,6 +556,10 @@ function onSocketClosed(socket) {
     socketToPeer.delete(socket);
     if (peerId === room.hostPeerId) {
         room.hostConnected = false;
+    }
+    else if (!room.broadcastedLeave.has(peerId)) {
+        room.broadcastedLeave.add(peerId);
+        broadcastToRoom(room, { type: 'peer_left', roomId, peerId });
     }
     scheduleDisconnect(roomId, peerId);
 }

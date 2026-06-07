@@ -23,6 +23,7 @@ import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
 import { HealthBarOverlay } from './HealthBarOverlay';
 import { MainMenu, type StatusTone } from './MainMenu';
+import { LeavingManager } from './LeavingManager';
 import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
@@ -419,6 +420,7 @@ export class MultiplayerApp {
   private reconnectTimerId: number | null = null;
   private reconnectAttempt = 0;
   private reconnectingSignaling = false;
+  private leavingManager: LeavingManager | null = null;
   private isCleaningUp = false;
   private respawnCameraLocked = false;
 
@@ -1264,6 +1266,17 @@ export class MultiplayerApp {
       if (nextState !== SessionState.Lobby) {
         this.lobbyOverlay.dataset.visible = 'false';
       }
+      if (nextState === SessionState.Lobby) {
+        if (!this.leavingManager) {
+          this.leavingManager = new LeavingManager(() => {
+            this.setStatus('You were removed from the lobby after tabbing out.');
+            this.leaveRoom();
+          });
+        }
+      } else {
+        this.leavingManager?.dispose();
+        this.leavingManager = null;
+      }
       this.updateUiState();
     });
 
@@ -1355,6 +1368,9 @@ export class MultiplayerApp {
 
   private cleanupNetworking(options: { sendLeave?: boolean } = {}): void {
     const { sendLeave = false } = options;
+
+    this.leavingManager?.dispose();
+    this.leavingManager = null;
 
     this.isCleaningUp = true;
 
@@ -1592,6 +1608,7 @@ export class MultiplayerApp {
         this.lobbyReadyByPeer.set(message.peerId, false);
         this.assignDefaultCharacterIfMissing(message.peerId);
         this.broadcastLocalCharacterSelection();
+        this.broadcastLocalReadyState();
         this.updateUiState();
         break;
 
@@ -2162,6 +2179,8 @@ export class MultiplayerApp {
       return;
     }
     this.applyLobbyCharactersToGame();
+    const sortedSessionIds = Array.from(this.session.players.keys()).sort();
+    this.game?.initializePlayers(sortedSessionIds);
     this.session.start();
     this.setStatus(`Match started in room ${this.roomId}.`);
     this.updateUiState();
@@ -2347,6 +2366,18 @@ export class MultiplayerApp {
       roomId: this.roomId,
       peerId: this.peerId,
       characterId,
+    });
+  }
+
+  private broadcastLocalReadyState(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
+    this.signaling.send({
+      type: 'lobby_ready',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      ready: this.isLocalReadyInLobby(),
     });
   }
 
