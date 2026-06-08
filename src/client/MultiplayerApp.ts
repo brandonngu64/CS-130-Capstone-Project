@@ -40,7 +40,15 @@ import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { SmashHud } from './SmashHud';
-import { encodeInput } from './input';
+import { encodeInput, type InputState } from './input';
+import {
+  DEFAULT_INPUT_SCHEME_ID,
+  INPUT_SCHEMES,
+  isInputSchemeId,
+  type GameAction,
+  type InputScheme,
+  type InputSchemeId,
+} from './inputSchemes';
 import { AVAILABLE_MAPS, DEFAULT_MAP_ID, loadMapDefinition } from './tiledMap';
 
 type DebugCounters = {
@@ -48,16 +56,6 @@ type DebugCounters = {
   rollbackTicks: number;
   desyncCount: number;
   errorCount: number;
-};
-
-type InputState = {
-  left: boolean;
-  right: boolean;
-  jump: boolean;
-  duck: boolean;
-  punch: boolean;
-  dash: boolean;
-  shoot: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
@@ -81,6 +79,7 @@ const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 const INPUT_DELAY_STORAGE_KEY = 'cs130-input-delay';
 const FORCE_RELAY_STORAGE_KEY = 'cs130-force-relay';
+const INPUT_SCHEME_STORAGE_KEY = 'cs130-input-scheme';
 const DEFAULT_INPUT_DELAY_FRAMES = 2;
 const MAX_INPUT_DELAY_FRAMES = 6;
 
@@ -224,6 +223,26 @@ function storeForceRelay(enabled: boolean): void {
     } else {
       globalThis.localStorage?.removeItem(FORCE_RELAY_STORAGE_KEY);
     }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredInputSchemeId(): InputSchemeId {
+  try {
+    const raw = globalThis.localStorage?.getItem(INPUT_SCHEME_STORAGE_KEY);
+    if (raw && isInputSchemeId(raw)) {
+      return raw;
+    }
+  } catch {
+    // Ignore storage failures and use the default.
+  }
+  return DEFAULT_INPUT_SCHEME_ID;
+}
+
+function storeInputSchemeId(id: InputSchemeId): void {
+  try {
+    globalThis.localStorage?.setItem(INPUT_SCHEME_STORAGE_KEY, id);
   } catch {
     // Ignore storage failures.
   }
@@ -426,9 +445,11 @@ export class MultiplayerApp {
     jump: false,
     duck: false,
     punch: false,
-    dash: false,
-    shoot: false,
+    dodge: false,
+    shield: false,
   };
+
+  private currentScheme: InputScheme = INPUT_SCHEMES[readStoredInputSchemeId()];
 
   private readonly debugCounters: DebugCounters = {
     rollbackCount: 0,
@@ -456,7 +477,12 @@ export class MultiplayerApp {
   private gameThemeStarted = false;
   private menuThemeStarted = false;
 
+  private setInputAction(action: GameAction, pressed: boolean): void {
+    this.inputState[action] = pressed;
+  }
+
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    // System keys take precedence over any scheme binding.
     if (event.code === 'KeyC') {
       event.preventDefault();
       if (this.isInRoom() || this.connecting) {
@@ -489,44 +515,15 @@ export class MultiplayerApp {
       return;
     }
 
-    if (
-      event.code === 'ArrowLeft' ||
-      event.code === 'KeyA' ||
-      event.code === 'ArrowRight' ||
-      event.code === 'KeyD' ||
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space' ||
-      event.code === 'ArrowDown' ||
-      event.code === 'KeyS' ||
-      event.code === 'KeyU' ||
-      event.code === 'ShiftLeft' ||
-      event.code === 'ShiftRight'
-    ) {
-      event.preventDefault();
-    }
-
-    if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
-      this.inputState.left = true;
-    }
-    if (event.code === 'ArrowRight' || event.code === 'KeyD') {
-      this.inputState.right = true;
-    }
-    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
-      this.inputState.jump = true;
-    }
-    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
-      this.inputState.duck = true;
-    }
-    if (event.code === 'KeyU') {
-      this.inputState.punch = true;
-    }
-    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-      this.inputState.dash = true;
-    }
-
     if (event.code === 'Escape') {
       this.toggleSettings();
+      return;
+    }
+
+    const action = this.currentScheme.keys[event.code];
+    if (action) {
+      event.preventDefault();
+      this.setInputAction(action, true);
     }
   };
 
@@ -553,25 +550,76 @@ export class MultiplayerApp {
       return;
     }
 
-    if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
-      this.inputState.left = false;
-    }
-    if (event.code === 'ArrowRight' || event.code === 'KeyD') {
-      this.inputState.right = false;
-    }
-    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
-      this.inputState.jump = false;
-    }
-    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
-      this.inputState.duck = false;
-    }
-    if (event.code === 'KeyU') {
-      this.inputState.punch = false;
-    }
-    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-      this.inputState.dash = false;
+    const action = this.currentScheme.keys[event.code];
+    if (action) {
+      this.setInputAction(action, false);
     }
   };
+
+  private readonly onMouseDown = (event: MouseEvent): void => {
+    if (!this.shouldRouteMouseToGame(event)) {
+      return;
+    }
+    const action = this.currentScheme.mouse?.[event.button];
+    if (action) {
+      event.preventDefault();
+      this.setInputAction(action, true);
+    }
+  };
+
+  private readonly onMouseUp = (event: MouseEvent): void => {
+    if (!this.currentScheme.mouse) {
+      return;
+    }
+    const action = this.currentScheme.mouse[event.button];
+    if (action) {
+      this.setInputAction(action, false);
+    }
+  };
+
+  private readonly onContextMenu = (event: MouseEvent): void => {
+    // Suppress the browser context menu over the game viewport so M&K
+    // right-click-to-shield doesn't pop a menu.
+    if (this.currentScheme.mouse && this.shouldRouteMouseToGame(event)) {
+      event.preventDefault();
+    }
+  };
+
+  private shouldRouteMouseToGame(event: MouseEvent): boolean {
+    if (!this.currentScheme.mouse) {
+      return false;
+    }
+    if (!this.isInRoom() || this.settingsOpen) {
+      return false;
+    }
+    // Avoid hijacking clicks on overlays / buttons that live on top of the viewport.
+    const target = event.target as Element | null;
+    if (target && target.closest('button, a, input, select, textarea, .overlay-card')) {
+      return false;
+    }
+    return true;
+  }
+
+  private resetInputState(): void {
+    this.inputState.left = false;
+    this.inputState.right = false;
+    this.inputState.jump = false;
+    this.inputState.duck = false;
+    this.inputState.punch = false;
+    this.inputState.dodge = false;
+    this.inputState.shield = false;
+  }
+
+  setInputScheme(id: InputSchemeId): void {
+    const scheme = INPUT_SCHEMES[id];
+    if (!scheme || scheme === this.currentScheme) {
+      return;
+    }
+    this.currentScheme = scheme;
+    this.resetInputState();
+    storeInputSchemeId(id);
+    this.settingsMenu.setInputScheme(scheme);
+  }
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -702,6 +750,9 @@ export class MultiplayerApp {
       onForceRelayChange: (enabled) => {
         this.setForceRelay(enabled);
       },
+      onInputSchemeChange: (id) => {
+        this.setInputScheme(id);
+      },
     });
 
     document.addEventListener('fullscreenchange', this.onFullscreenStateChange);
@@ -713,6 +764,7 @@ export class MultiplayerApp {
     this.settingsMenu.setVolume(this.masterVolume);
     this.settingsMenu.setInputDelay(this.inputDelayFrames);
     this.settingsMenu.setForceRelay(this.forceRelay);
+    this.settingsMenu.setInputScheme(this.currentScheme);
 
     this.renderer.setCameraMode(this.cameraMode);
     this.updateCameraButton();
@@ -750,6 +802,9 @@ export class MultiplayerApp {
 
     window.addEventListener('keydown', this.onKeyDown, { passive: false });
     window.addEventListener('keyup', this.onKeyUp);
+    this.viewport.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
+    this.viewport.addEventListener('contextmenu', this.onContextMenu);
 
     this.updateUiState();
     this.refreshDebugValues();
@@ -837,6 +892,9 @@ export class MultiplayerApp {
 
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    this.viewport.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
+    this.viewport.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('fullscreenchange', this.onFullscreenStateChange);
 
     this.cleanupNetworking();

@@ -530,6 +530,31 @@ h2 {
   gap: 10px;
 }
 
+.input-bindings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 30, 45, 0.06);
+  font-size: 0.85rem;
+}
+
+.input-bindings-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.input-bindings-action {
+  color: var(--ink-soft);
+}
+
+.input-bindings-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+}
+
 .overlay-close {
   position: absolute;
   top: 8px;

@@ -12,12 +12,34 @@ export const PLAYER_HALF_WIDTH = 0.45;
 export const PLAYER_HALF_HEIGHT = 0.9;
 export const PLAYER_MAX_HEALTH = 100;
 
+// MOVE_SPEED is now the airborne horizontal control speed only.
+// Ground horizontal speed is driven by the dash/run state machine below.
 export const MOVE_SPEED = 10;
 export const JUMP_SPEED = 16;
-export const DASH_SPEED = 20;
-export const DASH_DURATION_TICKS = 20;
-export const DASH_COOLDOWN_TICKS = 50;
 export const GRAVITY_Y = -40;
+
+// Smash-style ground movement state machine
+export const INITIAL_DASH_SPEED = 16;
+export const INITIAL_DASH_TICKS = 5;
+export const DASH_TURN_LOCK_TICKS = 10;
+export const RUN_SPEED = 10;
+export const SKID_TICKS = 15;
+export const DASH_INPUT_COOLDOWN_TICKS = 15;
+
+// Double jump
+export const DOUBLE_JUMP_SPEED = 14;
+
+// Dodge (Shift button — was the old "dash"; now grants i-frames)
+export const DODGE_SPEED = 20;
+export const DODGE_DURATION_TICKS = 20;
+export const DODGE_COOLDOWN_TICKS = 50;
+
+// Shield
+export const SHIELD_MAX_HP = 100;
+export const SHIELD_DRAIN_PER_TICK = 15 / TICK_RATE;
+export const SHIELD_RECHARGE_PER_TICK = 100 / (5 * TICK_RATE);
+export const SHIELD_BROKEN_LOCKOUT_TICKS = 5 * TICK_RATE;
+export const SHIELD_RELEASE_COOLDOWN_TICKS = 2 * TICK_RATE;
 
 export const BULLET_SPEED = 28;
 export const BULLET_LIFETIME_TICKS = 120;
