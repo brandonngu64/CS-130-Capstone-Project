@@ -1,7 +1,7 @@
 import type { RigidBody } from '@dimforge/rapier2d-compat';
 import { AttackKind } from './attacks';
 import type { CharacterId } from './constants';
-import { DEFAULT_CHARACTER_ID, SHIELD_MAX_HP } from './constants';
+import { AIR_DODGES_PER_AIRTIME, DEFAULT_CHARACTER_ID, SHIELD_MAX_HP } from './constants';
 import { ItemKind, whipHitboxActive } from './items';
 import type { WeaponDefinition } from './items';
 import { PLAYER_MAX_HEALTH } from './constants';
@@ -46,6 +46,12 @@ export class PlayerCharacter {
   public reloadPendingOnKill: boolean;
   public knockbackTicksRemaining: number;
 
+  // Stage-out KO state: nonzero means the player is vulnerable to inner-blast ring out.
+  public koableTicksRemaining: number;
+
+  // Air dodges remaining in this airtime. Reset to AIR_DODGES_PER_AIRTIME on grounding.
+  public airDodgesRemaining: number;
+
   // Smash-style ground movement state machine
   public moveState: MoveState;
   public moveStateTicks: number;
@@ -88,6 +94,8 @@ export class PlayerCharacter {
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
     this.knockbackTicksRemaining = 0;
+    this.koableTicksRemaining = 0;
+    this.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
 
     this.moveState = MoveState.Idle;
     this.moveStateTicks = 0;
@@ -196,6 +204,8 @@ export class PlayerCharacter {
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
     this.knockbackTicksRemaining = 0;
+    this.koableTicksRemaining = 0;
+    this.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
 
     this.moveState = MoveState.Idle;
     this.moveStateTicks = 0;

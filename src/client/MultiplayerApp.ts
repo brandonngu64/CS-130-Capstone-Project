@@ -13,7 +13,10 @@ import {
 import {
   CHARACTER_DISPLAY_NAMES,
   CHARACTER_IDS,
+  DEFAULT_STOCKS,
   MAX_PLAYERS,
+  MAX_STOCKS,
+  MIN_STOCKS,
   TICK_RATE,
   type CharacterId,
   isCharacterId,
@@ -380,6 +383,8 @@ export class MultiplayerApp {
   private readonly lobbyCopyButton: HTMLButtonElement;
   private readonly lobbyRoomIdValue: HTMLElement;
   private readonly lobbyShareUrlValue: HTMLInputElement;
+  private readonly lobbyStockSettings: HTMLElement;
+  private readonly lobbyStockCountSelect: HTMLSelectElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly winnerBanner: HTMLElement;
@@ -425,6 +430,8 @@ export class MultiplayerApp {
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
   private masterVolume = 1;
+  private startingStocks: number = DEFAULT_STOCKS;
+  private koBarEnabled = false;
   private inputDelayFrames = readStoredInputDelayFrames();
   private readonly inputDelayBuffer: Uint8Array[] = [];
   private localTickIndex = 0;
@@ -647,6 +654,8 @@ export class MultiplayerApp {
     this.lobbyCopyButton = requireElement<HTMLButtonElement>(this.root, '#lobbyCopyButton');
     this.lobbyRoomIdValue = requireElement<HTMLElement>(this.root, '#lobbyRoomIdValue');
     this.lobbyShareUrlValue = requireElement<HTMLInputElement>(this.root, '#lobbyShareUrlValue');
+    this.lobbyStockSettings = requireElement<HTMLElement>(this.root, '#lobbyStockSettings');
+    this.lobbyStockCountSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyStockCountSelect');
     this.leaveButton = requireElement<HTMLButtonElement>(
       this.root,
       '#leaveButton',
@@ -753,6 +762,9 @@ export class MultiplayerApp {
       onInputSchemeChange: (id) => {
         this.setInputScheme(id);
       },
+      onKoBarEnabledChange: (enabled) => {
+        this.setKoBarEnabled(enabled);
+      },
     });
 
     document.addEventListener('fullscreenchange', this.onFullscreenStateChange);
@@ -786,6 +798,12 @@ export class MultiplayerApp {
     });
     this.lobbyCopyButton.addEventListener('click', () => {
       void this.copyShareLink();
+    });
+    this.lobbyStockCountSelect.addEventListener('change', () => {
+      const value = Number.parseInt(this.lobbyStockCountSelect.value, 10);
+      if (Number.isFinite(value)) {
+        this.setStartingStocks(value);
+      }
     });
     this.lobbyCharacterGrid.addEventListener('click', (event) => {
       const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -840,7 +858,9 @@ export class MultiplayerApp {
     }
 
     if (!this.game) {
-      this.game = new RollbackPhysicsGame(this.mapDefinition);
+      this.game = new RollbackPhysicsGame(this.mapDefinition, {
+        startingStocks: this.startingStocks,
+      });
     }
 
     this.setStatus('Ready. Host a room or join from a shared URL.');
@@ -1927,6 +1947,23 @@ export class MultiplayerApp {
     this.setStatus(`Arena side walls ${wallLabel}.${syncHint}`);
   }
 
+  private setStartingStocks(stocks: number): void {
+    const clamped = Math.max(MIN_STOCKS, Math.min(MAX_STOCKS, Math.floor(stocks)));
+    this.startingStocks = clamped;
+    this.lobbyStockCountSelect.value = String(clamped);
+    this.game?.setStartingStocks(clamped);
+    const syncHint = this.isInRoom()
+      ? ' Applies to the next match.'
+      : ' Applies to the next match.';
+    this.setStatus(`Stocks set to ${clamped}.${syncHint}`);
+  }
+
+  private setKoBarEnabled(enabled: boolean): void {
+    this.koBarEnabled = enabled;
+    this.settingsMenu.setKoBarEnabled(enabled);
+    this.smashHud.setKoBarEnabled(enabled);
+  }
+
   private toggleFullscreen(enabled: boolean): void {
     if (enabled) {
       if (document.fullscreenElement) {
@@ -2071,6 +2108,9 @@ export class MultiplayerApp {
       ? 'inline-flex'
       : 'none';
 
+    const isHost = Boolean(this.session?.isHost);
+    this.lobbyStockSettings.style.display = inLobby && isHost ? '' : 'none';
+
     if (this.settingsOpen) {
       this.settingsMenu.show();
     } else {
@@ -2103,7 +2143,9 @@ export class MultiplayerApp {
 
     if (this.game) {
       this.game.reset();
-      this.game = new RollbackPhysicsGame(this.mapDefinition);
+      this.game = new RollbackPhysicsGame(this.mapDefinition, {
+        startingStocks: this.startingStocks,
+      });
     }
   }
 
@@ -2116,6 +2158,12 @@ export class MultiplayerApp {
   }
 
   private renderAppTemplate(): string {
+    const stockOptions = Array.from({ length: MAX_STOCKS - MIN_STOCKS + 1 }, (_, i) => {
+      const n = MIN_STOCKS + i;
+      const selected = n === DEFAULT_STOCKS ? ' selected' : '';
+      return `<option value="${n}"${selected}>${n}</option>`;
+    }).join('');
+
     return `
       <div class="app-shell">
         <section id="viewport" class="panel viewport-panel">
@@ -2139,6 +2187,12 @@ export class MultiplayerApp {
                 </div>
               </label>
               <div id="lobbyPlayersList" class="lobby-players-list"></div>
+              <div id="lobbyStockSettings" class="lobby-stock-settings" style="display:none">
+                <label class="select-field lobby-stock-field">
+                  <span>Stocks per player</span>
+                  <select id="lobbyStockCountSelect">${stockOptions}</select>
+                </label>
+              </div>
               <div class="lobby-actions">
                 <button id="lobbyReadyButton" class="action-secondary" type="button">Ready</button>
                 <button id="startGameButton" class="action-primary" type="button">Start Game</button>

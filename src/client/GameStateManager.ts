@@ -1,5 +1,7 @@
 import {
   DEFAULT_STOCKS,
+  MAX_STOCKS,
+  MIN_STOCKS,
   RESPAWN_FLASH_TICKS,
   RESPAWN_DELAY_TICKS,
 } from './constants';
@@ -30,11 +32,21 @@ const MATCH_BYTES_PER_PLAYER = 5; // uint8 stocks + uint16 respawn ticks + uint1
 
 export class GameStateManager {
   private readonly byPlayer = new Map<string, PlayerMatchState>();
+  private startingStocks: number = DEFAULT_STOCKS;
+
+  setStartingStocks(stocks: number): void {
+    const clamped = Math.max(MIN_STOCKS, Math.min(MAX_STOCKS, Math.floor(stocks)));
+    this.startingStocks = clamped;
+  }
+
+  getStartingStocks(): number {
+    return this.startingStocks;
+  }
 
   ensurePlayer(playerId: string): void {
     if (!this.byPlayer.has(playerId)) {
       this.byPlayer.set(playerId, {
-        stocks: DEFAULT_STOCKS,
+        stocks: this.startingStocks,
         respawnTicksRemaining: 0,
         respawnFlashTicksRemaining: 0,
       });
