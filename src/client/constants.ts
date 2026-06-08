@@ -103,6 +103,23 @@ export function isCharacterId(value: string): value is CharacterId {
   return (CHARACTER_IDS as readonly string[]).includes(value);
 }
 
+// Sentinel used in the lobby for "pick a random character on match start".
+// Resolved by the host into a real CharacterId immediately before the match.
+export const RANDOM_CHARACTER_SELECTION = 'random' as const;
+export type RandomCharacterSelection = typeof RANDOM_CHARACTER_SELECTION;
+export type LobbyCharacterSelection = CharacterId | RandomCharacterSelection;
+
+export function isLobbyCharacterSelection(value: string): value is LobbyCharacterSelection {
+  return value === RANDOM_CHARACTER_SELECTION || isCharacterId(value);
+}
+
+// Sentinel for "pick a random map on match start". The host resolves and
+// broadcasts the final map id before calling session.start().
+export const RANDOM_MAP_SELECTION = 'random' as const;
+export type RandomMapSelection = typeof RANDOM_MAP_SELECTION;
+
+export const LOBBY_NAME_MAX_LENGTH = 16;
+
 export function characterIdToIndex(characterId: CharacterId): number {
   return CHARACTER_IDS.indexOf(characterId);
 }

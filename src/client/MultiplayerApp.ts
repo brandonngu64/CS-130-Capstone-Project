@@ -17,16 +17,25 @@ import {
   DEFAULT_STOCKS,
   GAME_MODES,
   GAME_MODE_DISPLAY_NAMES,
+  LOBBY_NAME_MAX_LENGTH,
   MAX_PLAYERS,
   MAX_STOCKS,
   MIN_STOCKS,
+  PLAYER_COLOR_PALETTE,
+  RANDOM_CHARACTER_SELECTION,
+  RANDOM_MAP_SELECTION,
   TICK_RATE,
   type CharacterId,
   type GameMode,
+  type LobbyCharacterSelection,
   isCharacterId,
   isGameMode,
+  isLobbyCharacterSelection,
 } from './constants';
-import { defaultCharacterForPlayer, getCharacterPreviewUrl } from './CharacterSprites';
+import {
+  defaultCharacterForPlayer,
+  getCharacterHeadshotUrl,
+} from './CharacterSprites';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
 import { VFXAssetCache } from './vfx/assetCache';
@@ -94,6 +103,49 @@ const MAX_INPUT_DELAY_FRAMES = 6;
 const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
 const MENU_THEME_URL = new URL('../assets/sounds/menu.mp3', import.meta.url).href;
 const FIGHT_START_SOUND_URL = new URL('../assets/sounds/fight_start.wav', import.meta.url).href;
+
+const LOBBY_NAME_STORAGE_KEY = 'cs130-lobby-name';
+
+// Announcer SFX files are named with a character-based prefix; one source of
+// truth that maps a real CharacterId to its announcer clip. `sahai` is spelled
+// `saihai` in the asset name — keep this map authoritative.
+const CHARACTER_ANNOUNCER_FILENAMES: Record<CharacterId, string> = {
+  eggert: 'eggertAnnounce.mp3',
+  nachenburg: 'nachenbergAnnounce.mp3',
+  sahai: 'saihaiAnnounce.mp3',
+  smallberg: 'smallbergAnnounce.mp3',
+};
+
+const ANNOUNCER_SOUND_MODULES = import.meta.glob('../assets/sounds/announcer/*.mp3', {
+  eager: true,
+  import: 'default',
+}) as Record<string, string>;
+
+function getAnnouncerUrl(characterId: CharacterId): string | null {
+  const filename = CHARACTER_ANNOUNCER_FILENAMES[characterId];
+  const url = ANNOUNCER_SOUND_MODULES[`../assets/sounds/announcer/${filename}`];
+  return url ?? null;
+}
+
+function readStoredDisplayName(): string {
+  try {
+    const raw = globalThis.localStorage?.getItem(LOBBY_NAME_STORAGE_KEY);
+    if (raw && raw.trim().length > 0) {
+      return raw.trim().slice(0, LOBBY_NAME_MAX_LENGTH);
+    }
+  } catch {
+    // Ignore storage failures and fall back to the default.
+  }
+  return '';
+}
+
+function storeDisplayName(name: string): void {
+  try {
+    globalThis.localStorage?.setItem(LOBBY_NAME_STORAGE_KEY, name);
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 function requireElement<T extends HTMLElement>(
   parent: ParentNode,
@@ -391,6 +443,8 @@ export class MultiplayerApp {
   private readonly lobbyStockSettings: HTMLElement;
   private readonly lobbyStockCountSelect: HTMLSelectElement;
   private readonly lobbyGameModeSelect: HTMLSelectElement;
+  private readonly lobbyMapSelect: HTMLSelectElement;
+  private readonly lobbyNameInput: HTMLInputElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly winnerBanner: HTMLElement;
@@ -432,12 +486,25 @@ export class MultiplayerApp {
   private readonly lobbyMembers = new Set<string>();
   private readonly lobbyReadyByPeer = new Map<string, boolean>();
   private readonly lobbyCharacterByPeer = new Map<string, CharacterId>();
+  // Tracks raw lobby selections — including the `'random'` sentinel which is
+  // resolved on match start. `lobbyCharacterByPeer` always holds a concrete
+  // CharacterId for rendering / game wiring; this map is the source of truth
+  // for the picker UI and for resolving randoms at start time.
+  private readonly lobbySelectionByPeer = new Map<string, LobbyCharacterSelection>();
+  private readonly lobbyNameByPeer = new Map<string, string>();
+  private localDisplayName: string = readStoredDisplayName();
+  // Currently playing announcer SFX so we can interrupt previous playback when
+  // a different character tile is clicked (and ignore re-clicks of the same).
+  private currentAnnouncerAudio: HTMLAudioElement | null = null;
   private currentShareUrl = '';
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
   private masterVolume = 1;
   private startingStocks: number = DEFAULT_STOCKS;
   private gameMode: GameMode = DEFAULT_GAME_MODE;
+  // What the host has selected in the lobby map dropdown. May be a real map id
+  // or the `'random'` sentinel; resolved into `selectedMapId` on match start.
+  private lobbyMapSelectionId: string = this.selectedMapId;
   private koBarEnabled = false;
   private inputDelayFrames = readStoredInputDelayFrames();
   private readonly inputDelayBuffer: Uint8Array[] = [];
@@ -664,6 +731,10 @@ export class MultiplayerApp {
     this.lobbyStockSettings = requireElement<HTMLElement>(this.root, '#lobbyStockSettings');
     this.lobbyStockCountSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyStockCountSelect');
     this.lobbyGameModeSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyGameModeSelect');
+    this.lobbyMapSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyMapSelect');
+    this.lobbyNameInput = requireElement<HTMLInputElement>(this.root, '#lobbyNameInput');
+    this.lobbyNameInput.maxLength = LOBBY_NAME_MAX_LENGTH;
+    this.lobbyNameInput.value = this.localDisplayName;
     this.leaveButton = requireElement<HTMLButtonElement>(
       this.root,
       '#leaveButton',
@@ -819,6 +890,12 @@ export class MultiplayerApp {
         this.setGameMode(value, { broadcast: true });
       }
     });
+    this.lobbyMapSelect.addEventListener('change', () => {
+      this.setLobbyMap(this.lobbyMapSelect.value, { broadcast: true });
+    });
+    this.lobbyNameInput.addEventListener('input', () => {
+      this.setLocalDisplayName(this.lobbyNameInput.value, { broadcast: true });
+    });
     this.lobbyCharacterGrid.addEventListener('click', (event) => {
       const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
         '[data-character-id]',
@@ -827,7 +904,7 @@ export class MultiplayerApp {
         return;
       }
       const characterId = target.dataset.characterId;
-      if (characterId && isCharacterId(characterId)) {
+      if (characterId && isLobbyCharacterSelection(characterId)) {
         this.selectLocalCharacter(characterId);
       }
     });
@@ -1415,6 +1492,8 @@ export class MultiplayerApp {
       this.lobbyMembers.delete(player.id);
       this.lobbyReadyByPeer.delete(player.id);
       this.lobbyCharacterByPeer.delete(player.id);
+      this.lobbySelectionByPeer.delete(player.id);
+      this.lobbyNameByPeer.delete(player.id);
       this.updateUiState();
     });
 
@@ -1424,6 +1503,8 @@ export class MultiplayerApp {
       this.lobbyMembers.delete(playerId);
       this.lobbyReadyByPeer.delete(playerId);
       this.lobbyCharacterByPeer.delete(playerId);
+      this.lobbySelectionByPeer.delete(playerId);
+      this.lobbyNameByPeer.delete(playerId);
       this.updateUiState();
     });
 
@@ -1547,6 +1628,9 @@ export class MultiplayerApp {
       this.lobbyMembers.clear();
       this.lobbyReadyByPeer.clear();
       this.lobbyCharacterByPeer.clear();
+      this.lobbySelectionByPeer.clear();
+      this.lobbyNameByPeer.clear();
+      this.stopAnnouncer();
     } finally {
       this.isCleaningUp = false;
     }
@@ -1735,16 +1819,23 @@ export class MultiplayerApp {
         this.assignDefaultCharacterIfMissing(message.peerId);
         this.broadcastLocalCharacterSelection();
         this.broadcastLocalReadyState();
-        // Host owns the game mode — re-broadcast it so the joining peer adopts
-        // it. Without this, joiners stay at DEFAULT_GAME_MODE and their local
-        // sim diverges from the host's (e.g. classic knockback vs smash),
-        // which manifests as rubber-banding and out-of-sync damage percent.
+        this.broadcastLocalDisplayName();
+        // Host owns the game mode and map — re-broadcast them so the joining
+        // peer adopts them. Without this, joiners stay at the defaults and
+        // their local sim diverges from the host's (e.g. classic knockback vs
+        // smash), which manifests as rubber-banding and out-of-sync damage.
         if (this.session?.isHost && this.signaling && this.roomId) {
           this.signaling.send({
             type: 'lobby_game_mode_select',
             roomId: this.roomId,
             peerId: this.peerId,
             gameMode: this.gameMode,
+          });
+          this.signaling.send({
+            type: 'lobby_map_select',
+            roomId: this.roomId,
+            peerId: this.peerId,
+            mapId: this.lobbyMapSelectionId,
           });
         }
         this.updateUiState();
@@ -1755,6 +1846,8 @@ export class MultiplayerApp {
         this.lobbyMembers.delete(message.peerId);
         this.lobbyReadyByPeer.delete(message.peerId);
         this.lobbyCharacterByPeer.delete(message.peerId);
+        this.lobbySelectionByPeer.delete(message.peerId);
+        this.lobbyNameByPeer.delete(message.peerId);
         this.updateUiState();
         break;
 
@@ -1800,9 +1893,12 @@ export class MultiplayerApp {
         break;
 
       case 'lobby_character_select':
-        if (isCharacterId(message.characterId)) {
-          this.lobbyCharacterByPeer.set(message.peerId, message.characterId);
-          this.game?.setCharacterSelection(message.peerId, message.characterId);
+        if (isLobbyCharacterSelection(message.characterId)) {
+          this.lobbySelectionByPeer.set(message.peerId, message.characterId);
+          if (isCharacterId(message.characterId)) {
+            this.lobbyCharacterByPeer.set(message.peerId, message.characterId);
+            this.game?.setCharacterSelection(message.peerId, message.characterId);
+          }
         }
         this.updateUiState();
         break;
@@ -1814,6 +1910,26 @@ export class MultiplayerApp {
           if (!this.session?.isHost) {
             this.setGameMode(message.gameMode, { broadcast: false });
           }
+        }
+        break;
+
+      case 'lobby_name_change':
+        this.lobbyNameByPeer.set(message.peerId, message.name);
+        this.updateUiState();
+        break;
+
+      case 'lobby_map_select':
+        // Server enforces host-only; mirror the same defensive check.
+        if (!this.session?.isHost) {
+          this.setLobbyMap(message.mapId, { broadcast: false });
+        }
+        break;
+
+      case 'lobby_random_resolved':
+        // Host has finalized random selections — apply them locally so all
+        // clients agree on character/map before the rollback session starts.
+        if (!this.session?.isHost) {
+          this.applyResolvedSelections(message.mapId, message.characters);
         }
         break;
 
@@ -1875,6 +1991,17 @@ export class MultiplayerApp {
     this.lobbyMembers.add(this.peerId);
     this.seedLobbyMembers();
     this.ensureLocalCharacterSelection();
+    // Seed our own display-name entry and tell the rest of the room what to
+    // call us. Joiners overwrite this if they later edit the name input.
+    if (this.localDisplayName) {
+      this.lobbyNameByPeer.set(this.peerId, this.localDisplayName);
+      this.broadcastLocalDisplayName();
+    }
+    // Host's lobby map starts mirroring the loaded selection; joiners adopt
+    // whatever the host re-broadcasts via lobby_map_select shortly after.
+    if (this.session?.isHost) {
+      this.lobbyMapSelectionId = this.selectedMapId;
+    }
 
     this.publishShareUrl(roomId, hostPeerId);
   }
@@ -1994,6 +2121,120 @@ export class MultiplayerApp {
       ? ' Applies to the next match.'
       : ' Applies to the next match.';
     this.setStatus(`Stocks set to ${clamped}.${syncHint}`);
+  }
+
+  private setLobbyMap(mapId: string, options?: { broadcast?: boolean }): void {
+    const normalized = mapId.trim();
+    const isRandom = normalized === RANDOM_MAP_SELECTION;
+    const isKnown = isRandom || this.availableMaps.some((entry) => entry.id === normalized);
+    if (!isKnown) {
+      return;
+    }
+    if (this.lobbyMapSelectionId === normalized) {
+      // No change — avoid a redundant broadcast / map reload.
+      return;
+    }
+    this.lobbyMapSelectionId = normalized;
+    if (this.lobbyMapSelect.value !== normalized) {
+      this.lobbyMapSelect.value = normalized;
+    }
+    if (!isRandom) {
+      // Concrete picks update the loaded map immediately so everyone sees the
+      // same preview behind the lobby UI. 'random' keeps whatever map is
+      // currently loaded as a placeholder until start resolves the pick.
+      this.applySelectedMapForPreview(normalized);
+    }
+    if (
+      options?.broadcast &&
+      this.session?.isHost &&
+      this.signaling &&
+      this.roomId
+    ) {
+      this.signaling.send({
+        type: 'lobby_map_select',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        mapId: normalized,
+      });
+    }
+  }
+
+  private applySelectedMapForPreview(mapId: string): void {
+    if (this.isInRoom() && this.session?.state !== SessionState.Lobby) {
+      return;
+    }
+    if (mapId === this.selectedMapId) {
+      return;
+    }
+    // setSelectedMap normally bails when in a room — bypass that guard here
+    // because lobby map changes are explicitly intended to swap the preview.
+    this.selectedMapId = mapId;
+    this.mapDefinition = loadMapDefinition(this.selectedMapId);
+    this.mainMenu.setMaps(this.availableMaps, this.selectedMapId);
+    this.settingsMenu.setMap(this.getSelectedMapManifest());
+
+    this.renderer.dispose();
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition, this.vfxCache);
+    this.renderer.setCameraMode(this.cameraMode);
+    // Newly constructed renderer defaults to gameplay camera; re-apply lobby
+    // preview mode immediately so the shifted/zoomed framing kicks in right
+    // away rather than waiting for the next updateUiState pass.
+    this.renderer.setLobbyPreviewMode(true);
+
+    if (this.game) {
+      this.game.reset();
+      this.game = new RollbackPhysicsGame(this.mapDefinition, {
+        startingStocks: this.startingStocks,
+        gameMode: this.gameMode,
+      });
+    }
+  }
+
+  private setLocalDisplayName(name: string, options?: { broadcast?: boolean }): void {
+    const trimmed = name.slice(0, LOBBY_NAME_MAX_LENGTH);
+    if (trimmed === this.localDisplayName) {
+      return;
+    }
+    this.localDisplayName = trimmed;
+    storeDisplayName(trimmed);
+    this.lobbyNameByPeer.set(this.peerId, trimmed);
+    if (options?.broadcast) {
+      this.broadcastLocalDisplayName();
+    }
+    this.updateUiState();
+  }
+
+  private broadcastLocalDisplayName(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
+    this.signaling.send({
+      type: 'lobby_name_change',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      name: this.localDisplayName,
+    });
+  }
+
+  private applyResolvedSelections(mapId: string, characters: Record<string, string>): void {
+    for (const [peerId, characterId] of Object.entries(characters)) {
+      if (!isCharacterId(characterId)) {
+        continue;
+      }
+      this.lobbySelectionByPeer.set(peerId, characterId);
+      this.lobbyCharacterByPeer.set(peerId, characterId);
+      this.game?.setCharacterSelection(peerId, characterId);
+    }
+    // Adopt the resolved map even if we'd previously had a different one
+    // selected — host is authoritative on randoms.
+    if (this.availableMaps.some((entry) => entry.id === mapId)) {
+      this.lobbyMapSelectionId = mapId;
+      if (this.lobbyMapSelect.value !== mapId) {
+        this.lobbyMapSelect.value = mapId;
+      }
+      this.applySelectedMapForPreview(mapId);
+    }
+    this.updateUiState();
   }
 
   private setGameMode(mode: GameMode, options?: { broadcast?: boolean }): void {
@@ -2146,6 +2387,9 @@ export class MultiplayerApp {
 
     const inLobby = inRoom && this.session?.state === SessionState.Lobby;
     const inPlayingSession = inRoom && this.session?.state === SessionState.Playing;
+    // Out-of-room idle and lobby both want the "fit the whole map" preview;
+    // gameplay swaps back to the regular follow/action camera.
+    this.renderer.setLobbyPreviewMode(!inPlayingSession);
 
     this.smashHud.setVisible(inPlayingSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
@@ -2169,6 +2413,16 @@ export class MultiplayerApp {
 
     const isHost = Boolean(this.session?.isHost);
     this.lobbyStockSettings.style.display = inLobby && isHost ? '' : 'none';
+    if (inLobby) {
+      // Keep the dropdown synced with the authoritative state in case some
+      // other code path mutated it (or the host re-broadcast a value).
+      if (this.lobbyMapSelect.value !== this.lobbyMapSelectionId) {
+        this.lobbyMapSelect.value = this.lobbyMapSelectionId;
+      }
+      if (this.lobbyNameInput.value !== this.localDisplayName) {
+        this.lobbyNameInput.value = this.localDisplayName;
+      }
+    }
 
     if (this.settingsOpen) {
       this.settingsMenu.show();
@@ -2229,44 +2483,68 @@ export class MultiplayerApp {
       return `<option value="${mode}"${selected}>${GAME_MODE_DISPLAY_NAMES[mode]}</option>`;
     }).join('');
 
+    const mapOptionsHtml = [
+      `<option value="${RANDOM_MAP_SELECTION}">Random</option>`,
+      ...this.availableMaps.map((manifest) => {
+        const selected = manifest.id === this.selectedMapId ? ' selected' : '';
+        return `<option value="${manifest.id}"${selected}>${manifest.name}</option>`;
+      }),
+    ].join('');
+
     return `
       <div class="app-shell">
         <section id="viewport" class="panel viewport-panel">
           <div id="lobbyOverlay" class="lobby-overlay" data-visible="false">
-            <div class="lobby-card">
-              <p class="overlay-eyebrow">Lobby</p>
-              <h2 class="overlay-title--small">Waiting Room</h2>
-              <div class="lobby-character-select">
-                <span class="lobby-section-label">Choose Your Character</span>
+            <div class="lobby-card lobby-card--wide">
+              <aside class="lobby-column lobby-column--left">
+                <p class="overlay-eyebrow">Lobby</p>
+                <h2 class="overlay-title--small">Choose Your Character</h2>
                 <div id="lobbyCharacterGrid" class="lobby-character-grid"></div>
-              </div>
-              <label>
-                <span>Lobby ID</span>
-                <output id="lobbyRoomIdValue">-</output>
-              </label>
-              <label class="share-field">
-                <span>Invite URL</span>
-                <div>
-                  <input id="lobbyShareUrlValue" type="text" readonly placeholder="Host to generate URL" />
-                  <button id="lobbyCopyButton" type="button">Copy</button>
+                <div id="lobbyPlayersList" class="lobby-players-row"></div>
+              </aside>
+
+              <section class="lobby-column lobby-column--middle">
+                <h2 class="overlay-title--small">Match Setup</h2>
+                <label class="lobby-field">
+                  <span>Display Name</span>
+                  <input id="lobbyNameInput" type="text" autocomplete="off" spellcheck="false" placeholder="Enter a name" />
+                </label>
+                <div id="lobbyStockSettings" class="lobby-stock-settings" style="display:none">
+                  <label class="select-field lobby-stock-field">
+                    <span>Stocks per player</span>
+                    <select id="lobbyStockCountSelect">${stockOptions}</select>
+                  </label>
+                  <label class="select-field lobby-gamemode-field">
+                    <span>Game mode</span>
+                    <select id="lobbyGameModeSelect">${gameModeOptions}</select>
+                  </label>
+                  <label class="select-field lobby-map-field">
+                    <span>Map</span>
+                    <select id="lobbyMapSelect">${mapOptionsHtml}</select>
+                  </label>
                 </div>
-              </label>
-              <div id="lobbyPlayersList" class="lobby-players-list"></div>
-              <div id="lobbyStockSettings" class="lobby-stock-settings" style="display:none">
-                <label class="select-field lobby-stock-field">
-                  <span>Stocks per player</span>
-                  <select id="lobbyStockCountSelect">${stockOptions}</select>
+                <label class="lobby-field">
+                  <span>Lobby ID</span>
+                  <output id="lobbyRoomIdValue">-</output>
                 </label>
-                <label class="select-field lobby-gamemode-field">
-                  <span>Game mode</span>
-                  <select id="lobbyGameModeSelect">${gameModeOptions}</select>
+                <label class="lobby-field share-field">
+                  <span>Invite URL</span>
+                  <div>
+                    <input id="lobbyShareUrlValue" type="text" readonly placeholder="Host to generate URL" />
+                    <button id="lobbyCopyButton" type="button">Copy</button>
+                  </div>
                 </label>
-              </div>
-              <div class="lobby-actions">
-                <button id="lobbyReadyButton" class="action-secondary" type="button">Ready</button>
-                <button id="startGameButton" class="action-primary" type="button">Start Game</button>
-                <button id="lobbyLeaveButton" class="action-ghost" type="button">Leave Lobby</button>
-              </div>
+                <div class="lobby-actions">
+                  <button id="lobbyReadyButton" class="action-secondary" type="button">Ready</button>
+                  <button id="startGameButton" class="action-primary" type="button">Start Game</button>
+                  <button id="lobbyLeaveButton" class="action-ghost" type="button">Leave Lobby</button>
+                </div>
+              </section>
+
+              <aside class="lobby-column lobby-column--right">
+                <h2 class="overlay-title--small">Stage Preview</h2>
+                <div class="lobby-map-preview"></div>
+              </aside>
             </div>
           </div>
         </section>
@@ -2500,12 +2778,55 @@ export class MultiplayerApp {
     if (!this.canHostStartGame() || !this.session || !this.roomId) {
       return;
     }
+
+    // Host resolves every 'random' character selection and (if applicable) a
+    // random map pick. Broadcast the resolved choices so every client agrees
+    // before the rollback session starts.
+    const resolvedCharacters = this.resolveRandomCharacters();
+    const resolvedMapId = this.resolveRandomMap();
+
+    if (this.signaling) {
+      this.signaling.send({
+        type: 'lobby_random_resolved',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        mapId: resolvedMapId,
+        characters: resolvedCharacters,
+      });
+    }
+    this.applyResolvedSelections(resolvedMapId, resolvedCharacters);
+
     this.applyLobbyCharactersToGame();
     const sortedSessionIds = Array.from(this.session.players.keys()).sort();
     this.game?.initializePlayers(sortedSessionIds);
     this.session.start();
     this.setStatus(`Match started in room ${this.roomId}.`);
     this.updateUiState();
+  }
+
+  private resolveRandomCharacters(): Record<string, string> {
+    const resolved: Record<string, string> = {};
+    for (const peerId of this.lobbyMembers) {
+      const selection = this.lobbySelectionByPeer.get(peerId) ?? RANDOM_CHARACTER_SELECTION;
+      if (selection === RANDOM_CHARACTER_SELECTION) {
+        const pick = CHARACTER_IDS[Math.floor(Math.random() * CHARACTER_IDS.length)];
+        resolved[peerId] = pick;
+      } else {
+        resolved[peerId] = selection;
+      }
+    }
+    return resolved;
+  }
+
+  private resolveRandomMap(): string {
+    if (this.lobbyMapSelectionId !== RANDOM_MAP_SELECTION) {
+      return this.lobbyMapSelectionId;
+    }
+    if (this.availableMaps.length === 0) {
+      return this.selectedMapId;
+    }
+    const pick = this.availableMaps[Math.floor(Math.random() * this.availableMaps.length)];
+    return pick.id;
   }
 
   private shouldShowHostStartControl(): boolean {
@@ -2584,27 +2905,61 @@ export class MultiplayerApp {
     }
 
     const ids = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    this.lobbyPlayersList.innerHTML = ids
-      .map((playerId) => {
+    const slots: Array<string | null> = Array.from({ length: MAX_PLAYERS }, (_, i) =>
+      ids[i] ?? null,
+    );
+
+    this.lobbyPlayersList.innerHTML = slots
+      .map((playerId, index) => {
+        const slotNumber = index + 1;
+        if (!playerId) {
+          return `
+            <article class="lobby-player-tile lobby-player-tile--empty" data-slot="${slotNumber}">
+              <span class="lobby-player-tile__slot">Player ${slotNumber}</span>
+              <span class="lobby-player-tile__portrait lobby-player-tile__portrait--empty">—</span>
+              <span class="lobby-player-tile__character">Waiting…</span>
+              <span class="lobby-player-tile__name">&nbsp;</span>
+            </article>
+          `;
+        }
         const ready = this.lobbyReadyByPeer.get(playerId) === true;
-        const isHost = playerId === this.hostPeerId;
         const isLocal = playerId === this.peerId;
-        const role = isHost ? 'Host' : 'Player';
-        const characterId =
+        const colorHex = this.peerColorHex(playerId, ids);
+        const selection = this.lobbySelectionByPeer.get(playerId) ?? RANDOM_CHARACTER_SELECTION;
+        const isRandom = selection === RANDOM_CHARACTER_SELECTION;
+        const concreteCharacter =
           this.lobbyCharacterByPeer.get(playerId) ??
           defaultCharacterForPlayer(playerId, ids);
-        const characterName = CHARACTER_DISPLAY_NAMES[characterId];
+        const characterLabel = isRandom
+          ? 'Random'
+          : CHARACTER_DISPLAY_NAMES[concreteCharacter];
+        const portrait = isRandom
+          ? `<span class="lobby-player-tile__random">?</span>`
+          : `<img src="${getCharacterHeadshotUrl(concreteCharacter)}" alt="${CHARACTER_DISPLAY_NAMES[concreteCharacter]} headshot" />`;
+        const displayName = this.lobbyNameByPeer.get(playerId)?.trim() || this.truncatePeerId(playerId);
         return `
-          <article class="lobby-player-card" data-ready="${ready ? 'true' : 'false'}">
-            <div class="lobby-player-meta">
-              <strong>${this.truncatePeerId(playerId)}${isLocal ? ' (You)' : ''}</strong>
-              <span>${role} · ${characterName}</span>
-            </div>
-            <span class="lobby-player-ready">${ready ? 'Ready' : 'Not Ready'}</span>
+          <article
+            class="lobby-player-tile${isLocal ? ' lobby-player-tile--local' : ''}"
+            data-slot="${slotNumber}"
+            data-ready="${ready ? 'true' : 'false'}"
+            style="--player-color: ${colorHex}"
+          >
+            <span class="lobby-player-tile__slot">Player ${slotNumber}</span>
+            <span class="lobby-player-tile__portrait">${portrait}</span>
+            <span class="lobby-player-tile__character">${characterLabel}</span>
+            <span class="lobby-player-tile__name">${displayName}${isLocal ? ' (You)' : ''}</span>
+            <span class="lobby-player-tile__ready" data-ready="${ready ? 'true' : 'false'}" aria-label="${ready ? 'Ready' : 'Not ready'}"></span>
           </article>
         `;
       })
       .join('');
+  }
+
+  private peerColorHex(peerId: string, sortedIds: string[]): string {
+    const index = sortedIds.indexOf(peerId);
+    const palette = PLAYER_COLOR_PALETTE;
+    const colorInt = palette[((index >= 0 ? index : 0) % palette.length + palette.length) % palette.length];
+    return `#${colorInt.toString(16).padStart(6, '0')}`;
   }
 
   private renderCharacterPicker(): void {
@@ -2613,12 +2968,25 @@ export class MultiplayerApp {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    const localSelection = this.getLocalCharacterSelection(sortedMembers);
+    const localSelection = this.getLocalCharacterSelection();
 
-    this.lobbyCharacterGrid.innerHTML = CHARACTER_IDS.map((characterId) => {
+    const randomTile = `
+      <button
+        type="button"
+        class="lobby-character-option lobby-character-option--random${
+          localSelection === RANDOM_CHARACTER_SELECTION ? ' lobby-character-option--selected' : ''
+        }"
+        data-character-id="${RANDOM_CHARACTER_SELECTION}"
+        aria-pressed="${localSelection === RANDOM_CHARACTER_SELECTION ? 'true' : 'false'}"
+      >
+        <span class="lobby-character-random-glyph">?</span>
+        <span class="lobby-character-name">Random</span>
+      </button>
+    `;
+
+    const characterTiles = CHARACTER_IDS.map((characterId) => {
       const isSelected = localSelection === characterId;
-      const previewUrl = getCharacterPreviewUrl(characterId);
+      const previewUrl = getCharacterHeadshotUrl(characterId);
 
       return `
         <button
@@ -2627,25 +2995,33 @@ export class MultiplayerApp {
           data-character-id="${characterId}"
           aria-pressed="${isSelected ? 'true' : 'false'}"
         >
-          <img src="${previewUrl}" alt="${CHARACTER_DISPLAY_NAMES[characterId]} idle sprite" />
+          <img src="${previewUrl}" alt="${CHARACTER_DISPLAY_NAMES[characterId]} headshot" />
           <span class="lobby-character-name">${CHARACTER_DISPLAY_NAMES[characterId]}</span>
         </button>
       `;
     }).join('');
+
+    this.lobbyCharacterGrid.innerHTML = randomTile + characterTiles;
   }
 
-  private getLocalCharacterSelection(sortedMembers: string[]): CharacterId {
-    return (
-      this.lobbyCharacterByPeer.get(this.peerId) ??
-      defaultCharacterForPlayer(this.peerId, sortedMembers)
-    );
+  private getLocalCharacterSelection(): LobbyCharacterSelection {
+    return this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
   }
 
   private assignDefaultCharacterIfMissing(playerId: string): void {
+    if (!this.lobbySelectionByPeer.has(playerId)) {
+      // First time we've seen this peer in the lobby. Default everyone to
+      // Random; the host resolves randoms into concrete characters when the
+      // match starts.
+      this.lobbySelectionByPeer.set(playerId, RANDOM_CHARACTER_SELECTION);
+    }
     if (this.lobbyCharacterByPeer.has(playerId)) {
       return;
     }
 
+    // Even when the selection is `random`, we still need *some* concrete
+    // CharacterId staged in the game so things like preview rendering can
+    // proceed. The host overrides this with the resolved pick on start.
     const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
     const defaultCharacter = defaultCharacterForPlayer(playerId, sortedMembers);
     this.lobbyCharacterByPeer.set(playerId, defaultCharacter);
@@ -2657,21 +3033,65 @@ export class MultiplayerApp {
       return;
     }
 
-    if (!this.lobbyCharacterByPeer.has(this.peerId)) {
+    if (!this.lobbySelectionByPeer.has(this.peerId)) {
       this.assignDefaultCharacterIfMissing(this.peerId);
       this.broadcastLocalCharacterSelection();
     }
   }
 
-  private selectLocalCharacter(characterId: CharacterId): void {
+  private selectLocalCharacter(selection: LobbyCharacterSelection): void {
     if (!this.roomId || !this.signaling || !this.isInRoom() || this.session?.state !== SessionState.Lobby) {
       return;
     }
+    const previousSelection = this.lobbySelectionByPeer.get(this.peerId);
+    if (previousSelection === selection) {
+      // Re-clicking the same tile must not retrigger the announcer SFX.
+      return;
+    }
 
-    this.lobbyCharacterByPeer.set(this.peerId, characterId);
-    this.game?.setCharacterSelection(this.peerId, characterId);
+    this.lobbySelectionByPeer.set(this.peerId, selection);
+    if (selection !== RANDOM_CHARACTER_SELECTION) {
+      this.lobbyCharacterByPeer.set(this.peerId, selection);
+      this.game?.setCharacterSelection(this.peerId, selection);
+      this.playAnnouncerForCharacter(selection);
+    } else {
+      this.stopAnnouncer();
+    }
     this.broadcastLocalCharacterSelection();
     this.updateUiState();
+  }
+
+  private playAnnouncerForCharacter(characterId: CharacterId): void {
+    const url = getAnnouncerUrl(characterId);
+    if (!url) {
+      return;
+    }
+    // Cut off the previously-playing announcer regardless of which character
+    // it belonged to. The duplicate-character guard sits in selectLocalCharacter
+    // — by the time we get here we know the selection actually changed.
+    this.stopAnnouncer();
+    const audio = new Audio(url);
+    audio.volume = Math.max(0, Math.min(1, this.masterVolume));
+    this.currentAnnouncerAudio = audio;
+    audio.addEventListener('ended', () => {
+      if (this.currentAnnouncerAudio === audio) {
+        this.currentAnnouncerAudio = null;
+      }
+    });
+    void audio.play().catch(() => {
+      // Autoplay or asset failures shouldn't break selection — just drop the SFX.
+      if (this.currentAnnouncerAudio === audio) {
+        this.currentAnnouncerAudio = null;
+      }
+    });
+  }
+
+  private stopAnnouncer(): void {
+    if (this.currentAnnouncerAudio) {
+      this.currentAnnouncerAudio.pause();
+      this.currentAnnouncerAudio.currentTime = 0;
+      this.currentAnnouncerAudio = null;
+    }
   }
 
   private broadcastLocalCharacterSelection(): void {
@@ -2679,16 +3099,17 @@ export class MultiplayerApp {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    const characterId = this.getLocalCharacterSelection(sortedMembers);
-    this.lobbyCharacterByPeer.set(this.peerId, characterId);
-    this.game?.setCharacterSelection(this.peerId, characterId);
+    const selection = this.getLocalCharacterSelection();
+    if (selection !== RANDOM_CHARACTER_SELECTION) {
+      this.lobbyCharacterByPeer.set(this.peerId, selection);
+      this.game?.setCharacterSelection(this.peerId, selection);
+    }
 
     this.signaling.send({
       type: 'lobby_character_select',
       roomId: this.roomId,
       peerId: this.peerId,
-      characterId,
+      characterId: selection,
     });
   }
 
