@@ -1,5 +1,11 @@
 import type { MapManifest } from './tiledMap';
 import type { StatusTone } from './MainMenu';
+import {
+  INPUT_SCHEMES,
+  isInputSchemeId,
+  type InputScheme,
+  type InputSchemeId,
+} from './inputSchemes';
 
 function getElement<T extends HTMLElement>(
   parent: ParentNode,
@@ -12,6 +18,15 @@ function getElement<T extends HTMLElement>(
   return element;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export interface SettingsMenuCallbacks {
   onLeave(): void;
   onCopyShareUrl(): void;
@@ -21,6 +36,7 @@ export interface SettingsMenuCallbacks {
   onVolumeChange(volume: number): void;
   onInputDelayChange(frames: number): void;
   onForceRelayChange(enabled: boolean): void;
+  onInputSchemeChange(id: InputSchemeId): void;
 }
 
 export class SettingsMenu {
@@ -40,6 +56,8 @@ export class SettingsMenu {
   private readonly volumeValue: HTMLElement;
   private readonly inputDelaySelect: HTMLSelectElement;
   private readonly forceRelayToggle: HTMLInputElement;
+  private readonly inputSchemeSelect: HTMLSelectElement;
+  private readonly inputBindingsList: HTMLElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -107,6 +125,14 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuForceRelayToggle',
     );
+    this.inputSchemeSelect = getElement<HTMLSelectElement>(
+      this.element,
+      '#settingsMenuInputSchemeSelect',
+    );
+    this.inputBindingsList = getElement<HTMLElement>(
+      this.element,
+      '#settingsMenuInputBindings',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
@@ -130,6 +156,12 @@ export class SettingsMenu {
     });
     this.forceRelayToggle.addEventListener('change', () => {
       callbacks.onForceRelayChange(this.forceRelayToggle.checked);
+    });
+    this.inputSchemeSelect.addEventListener('change', () => {
+      const value = this.inputSchemeSelect.value;
+      if (isInputSchemeId(value)) {
+        callbacks.onInputSchemeChange(value);
+      }
     });
 
     this.element.addEventListener('click', (event) => {
@@ -201,6 +233,21 @@ export class SettingsMenu {
     this.forceRelayToggle.checked = enabled;
   }
 
+  setInputScheme(scheme: InputScheme): void {
+    this.inputSchemeSelect.value = scheme.id;
+    this.renderInputBindings(scheme);
+  }
+
+  private renderInputBindings(scheme: InputScheme): void {
+    const rows = scheme.bindings
+      .map(
+        (row) =>
+          `<div class="input-bindings-row"><span class="input-bindings-action">${escapeHtml(row.action)}</span><span class="input-bindings-key">${escapeHtml(row.key)}</span></div>`,
+      )
+      .join('');
+    this.inputBindingsList.innerHTML = rows;
+  }
+
   destroy(): void {
     this.element.remove();
   }
@@ -267,6 +314,20 @@ export class SettingsMenu {
             <option value="4">4</option>
           </select>
         </label>
+
+        <label class="select-field">
+          <span>Input scheme</span>
+          <select id="settingsMenuInputSchemeSelect">
+            ${Object.values(INPUT_SCHEMES)
+              .map(
+                (scheme) =>
+                  `<option value="${escapeHtml(scheme.id)}">${escapeHtml(scheme.displayName)}</option>`,
+              )
+              .join('')}
+          </select>
+        </label>
+
+        <div class="input-bindings" id="settingsMenuInputBindings"></div>
 
         <label class="toggle-field">
           <input id="settingsMenuForceRelayToggle" type="checkbox" />

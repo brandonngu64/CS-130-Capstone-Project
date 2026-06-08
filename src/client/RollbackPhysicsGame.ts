@@ -8,17 +8,29 @@ import {
   BULLET_ID_MAX,
   BULLET_LIFETIME_TICKS,
   BULLET_SPEED,
-  DASH_COOLDOWN_TICKS,
-  DASH_DURATION_TICKS,
-  DASH_SPEED,
+  DASH_INPUT_COOLDOWN_TICKS,
+  DASH_TURN_LOCK_TICKS,
+  DODGE_COOLDOWN_TICKS,
+  DODGE_DURATION_TICKS,
+  DODGE_SPEED,
+  DOUBLE_JUMP_SPEED,
   FIXED_STEP_SECONDS,
   FLOOR_Y,
   GRAVITY_Y,
+  INITIAL_DASH_SPEED,
+  INITIAL_DASH_TICKS,
   JUMP_SPEED,
   MOVE_SPEED,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
   PLAYER_HALF_WIDTH,
+  RUN_SPEED,
+  SHIELD_BROKEN_LOCKOUT_TICKS,
+  SHIELD_DRAIN_PER_TICK,
+  SHIELD_MAX_HP,
+  SHIELD_RECHARGE_PER_TICK,
+  SHIELD_RELEASE_COOLDOWN_TICKS,
+  SKID_TICKS,
   TICK_RATE,
   type CharacterId,
   characterIdFromIndex,
@@ -29,7 +41,7 @@ import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import type { AttackDefinition } from './attacks';
 import { InputBits, decodeInputBits } from './input';
-import { PlayerCharacter } from './PlayerCharacter';
+import { MoveState, PlayerCharacter } from './PlayerCharacter';
 import { K_getWeaponDefinition } from './kyleWeapons';
 import {
   ITEM_LIFETIME_TICKS,
@@ -237,8 +249,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       facing: number;
       attackKind: number;
       attackTicksRemaining: number;
-      dashTicksRemaining: number;
-      dashCooldownTicks: number;
+      dodgeTicksRemaining: number;
+      dodgeCooldownTicks: number;
       heldItem: number;
       heldItemExpiryTick: number;
       gunFireCooldownTicks: number;
@@ -248,6 +260,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       weaponCooldownTicks: number;
       activeWeaponAttackTicksRemaining: number;
       knockbackTicksRemaining: number;
+      moveState: number;
+      moveStateTicks: number;
+      moveDirection: number;
+      dashInputCooldownTicks: number;
+      doubleJumpAvailable: boolean;
+      shieldHp: number;
+      shieldActive: boolean;
+      shieldBlockedSinceRaise: boolean;
+      shieldBrokenLockoutTicks: number;
+      shieldReleaseCooldownTicks: number;
     }
   >();
   private readonly deserializeIdsScratch: string[] = [];
@@ -332,8 +354,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setInt8(offset, record.facing < 0 ? -1 : 1); offset += 1;
       view.setUint8(offset, activeAttack?.kind ?? 0); offset += 1;
       view.setUint8(offset, activeAttack?.ticksRemaining ?? 0); offset += 1;
-      view.setUint8(offset, record.dashTicksRemaining); offset += 1;
-      view.setUint8(offset, record.dashCooldownTicks); offset += 1;
+      view.setUint8(offset, record.dodgeTicksRemaining); offset += 1;
+      view.setUint8(offset, record.dodgeCooldownTicks); offset += 1;
       view.setUint16(offset, record.heldItem ?? 0, true); offset += 2;
       view.setUint16(offset, record.heldItemExpiryTick, true); offset += 2;
       view.setUint8(offset, record.gunFireCooldownTicks); offset += 1;
@@ -343,6 +365,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
       view.setUint8(offset, record.activeWeaponAttack?.ticksRemaining ?? 0); offset += 1;
       view.setUint8(offset, record.knockbackTicksRemaining); offset += 1;
+      view.setUint8(offset, record.moveState & 0xff); offset += 1;
+      view.setUint8(offset, record.moveStateTicks & 0xff); offset += 1;
+      view.setInt8(offset, record.moveDirection < 0 ? -1 : record.moveDirection > 0 ? 1 : 0); offset += 1;
+      view.setUint8(offset, record.dashInputCooldownTicks & 0xff); offset += 1;
+      view.setUint8(offset, record.doubleJumpAvailable ? 1 : 0); offset += 1;
+      view.setFloat32(offset, record.shieldHp, true); offset += 4;
+      view.setUint8(offset, record.shieldActive ? 1 : 0); offset += 1;
+      view.setUint8(offset, record.shieldBlockedSinceRaise ? 1 : 0); offset += 1;
+      view.setUint16(offset, Math.min(0xffff, record.shieldBrokenLockoutTicks), true); offset += 2;
+      view.setUint16(offset, Math.min(0xffff, record.shieldReleaseCooldownTicks), true); offset += 2;
 
       offset = this.matchState.writePlayer(view, offset, id);
     }
@@ -427,8 +459,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const facing = view.getInt8(offset); offset += 1;
       const attackKind = view.getUint8(offset); offset += 1;
       const attackTicksRemaining = view.getUint8(offset); offset += 1;
-      const dashTicksRemaining = view.getUint8(offset); offset += 1;
-      const dashCooldownTicks = view.getUint8(offset); offset += 1;
+      const dodgeTicksRemaining = view.getUint8(offset); offset += 1;
+      const dodgeCooldownTicks = view.getUint8(offset); offset += 1;
       const heldItem = view.getUint16(offset, true); offset += 2;
       const heldItemExpiryTick = view.getUint16(offset, true); offset += 2;
       const gunFireCooldownTicks = view.getUint8(offset); offset += 1;
@@ -438,6 +470,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const weaponCooldownTicks = view.getUint8(offset); offset += 1;
       const activeWeaponAttackTicksRemaining = view.getUint8(offset); offset += 1;
       const knockbackTicksRemaining = view.getUint8(offset); offset += 1;
+      const moveState = view.getUint8(offset); offset += 1;
+      const moveStateTicks = view.getUint8(offset); offset += 1;
+      const moveDirection = view.getInt8(offset); offset += 1;
+      const dashInputCooldownTicks = view.getUint8(offset); offset += 1;
+      const doubleJumpAvailable = view.getUint8(offset) !== 0; offset += 1;
+      const shieldHp = view.getFloat32(offset, true); offset += 4;
+      const shieldActive = view.getUint8(offset) !== 0; offset += 1;
+      const shieldBlockedSinceRaise = view.getUint8(offset) !== 0; offset += 1;
+      const shieldBrokenLockoutTicks = view.getUint16(offset, true); offset += 2;
+      const shieldReleaseCooldownTicks = view.getUint16(offset, true); offset += 2;
 
       incoming.set(id, {
         x,
@@ -449,8 +491,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         facing,
         attackKind,
         attackTicksRemaining,
-        dashTicksRemaining,
-        dashCooldownTicks,
+        dodgeTicksRemaining,
+        dodgeCooldownTicks,
         heldItem,
         heldItemExpiryTick,
         gunFireCooldownTicks,
@@ -460,6 +502,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         weaponCooldownTicks,
         activeWeaponAttackTicksRemaining,
         knockbackTicksRemaining,
+        moveState,
+        moveStateTicks,
+        moveDirection,
+        dashInputCooldownTicks,
+        doubleJumpAvailable,
+        shieldHp,
+        shieldActive,
+        shieldBlockedSinceRaise,
+        shieldBrokenLockoutTicks,
+        shieldReleaseCooldownTicks,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -489,8 +541,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         state.attackKind > 0 && state.attackTicksRemaining > 0
           ? { kind: state.attackKind as AttackKind, ticksRemaining: state.attackTicksRemaining }
           : null;
-      record.dashTicksRemaining = state.dashTicksRemaining;
-      record.dashCooldownTicks = state.dashCooldownTicks;
+      record.dodgeTicksRemaining = state.dodgeTicksRemaining;
+      record.dodgeCooldownTicks = state.dodgeCooldownTicks;
       record.heldItem = state.heldItem > 0 ? (state.heldItem as ItemKind) : null;
       record.heldItemExpiryTick = state.heldItemExpiryTick;
       record.gunFireCooldownTicks = state.gunFireCooldownTicks;
@@ -499,6 +551,16 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.characterId = characterIdFromIndex(state.characterId);
       record.weaponCooldownTicks = state.weaponCooldownTicks;
       record.knockbackTicksRemaining = state.knockbackTicksRemaining;
+      record.moveState = state.moveState as MoveState;
+      record.moveStateTicks = state.moveStateTicks;
+      record.moveDirection = state.moveDirection < 0 ? -1 : state.moveDirection > 0 ? 1 : 0;
+      record.dashInputCooldownTicks = state.dashInputCooldownTicks;
+      record.doubleJumpAvailable = state.doubleJumpAvailable;
+      record.shieldHp = Math.max(0, Math.min(SHIELD_MAX_HP, state.shieldHp));
+      record.shieldActive = state.shieldActive;
+      record.shieldBlockedSinceRaise = state.shieldBlockedSinceRaise;
+      record.shieldBrokenLockoutTicks = state.shieldBrokenLockoutTicks;
+      record.shieldReleaseCooldownTicks = state.shieldReleaseCooldownTicks;
 
       // Reconstruct activeWeaponAttack from the serialized ticks + current heldItem
       if (state.activeWeaponAttackTicksRemaining > 0 && state.heldItem > 0) {
@@ -609,7 +671,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     const respawnedIds = this.matchState.advanceTimers();
     this.respawnPlayers(respawnedIds);
-    this.tickDashCooldowns();
+    this.tickPlayerCooldowns();
     this.tickGunCooldowns();
     this.tickWeaponCooldowns();
 
@@ -831,7 +893,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       const previous = previousStates.get(id);
       const record = this.players.get(id);
-      if (!previous || !record || record.dashTicksRemaining > 0) {
+      if (!previous || !record) {
+        continue;
+      }
+      // Only correct horizontal drift when the player is in the air-control
+      // state (or skid/idle on ground). The smash-style ground states
+      // (initial-dash, dash-turn-lock, run) write their own velocity each
+      // tick and don't benefit from MOVE_SPEED drift correction.
+      if (record.moveState !== MoveState.Airborne) {
+        continue;
+      }
+      if (record.dodgeTicksRemaining > 0 || record.shieldActive) {
         continue;
       }
 
@@ -986,28 +1058,85 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       (inputFlags & InputBits.Left ? -1 : 0) +
       (inputFlags & InputBits.Right ? 1 : 0);
 
-    if (horizontalDir !== 0) {
-      record.facing = horizontalDir;
-    }
-
     const jumpPressed = (inputFlags & InputBits.Jump) !== 0 && (previousFlags & InputBits.Jump) === 0;
     const ducking = (inputFlags & InputBits.Duck) !== 0;
     const attackPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
-    const dashPressed = (inputFlags & InputBits.Dash) !== 0 && (previousFlags & InputBits.Dash) === 0;
+    const dodgePressed = (inputFlags & InputBits.Dodge) !== 0 && (previousFlags & InputBits.Dodge) === 0;
+    const shieldHeld = (inputFlags & InputBits.Shield) !== 0;
+    const shieldWasHeld = (previousFlags & InputBits.Shield) !== 0;
+    const shieldPressed = shieldHeld && !shieldWasHeld;
+    const shieldReleased = !shieldHeld && shieldWasHeld;
 
-    if (record.dashTicksRemaining > 0) {
-      body.setLinvel({ x: record.facing * DASH_SPEED, y: velocity.y }, true);
-      record.dashTicksRemaining -= 1;
+    const grounded = this.isGrounded(body, false);
+
+    // 1. Active dodge: maintain burst velocity, decrement, ignore other input.
+    if (record.dodgeTicksRemaining > 0) {
+      body.setLinvel({ x: record.facing * DODGE_SPEED, y: velocity.y }, true);
+      record.dodgeTicksRemaining -= 1;
       this.previousInputFlags.set(id, inputFlags);
       return;
     }
 
-    let nextYVelocity = velocity.y;
-    if (jumpPressed && this.isGrounded(body, ducking)) {
-      nextYVelocity = JUMP_SPEED;
-      this.playJumpSound();
+    // 2. Shield raise (rising edge).
+    if (
+      shieldPressed &&
+      !record.shieldActive &&
+      record.shieldBrokenLockoutTicks === 0 &&
+      record.shieldReleaseCooldownTicks === 0 &&
+      record.shieldHp > 0
+    ) {
+      record.shieldActive = true;
+      record.shieldBlockedSinceRaise = false;
+      if (grounded) {
+        // Hard standstill cancels any ground movement state instantly.
+        record.moveState = MoveState.Idle;
+        record.moveStateTicks = 0;
+        record.moveDirection = 0;
+        body.setLinvel({ x: 0, y: velocity.y }, true);
+      }
+      // Airborne: preserve horizontal momentum.
     }
 
+    // While shield is active, drain HP and skip all other input.
+    if (record.shieldActive) {
+      record.shieldHp -= SHIELD_DRAIN_PER_TICK;
+      if (record.shieldHp <= 0) {
+        record.shieldHp = 0;
+        record.shieldActive = false;
+        record.shieldBlockedSinceRaise = false;
+        record.shieldBrokenLockoutTicks = SHIELD_BROKEN_LOCKOUT_TICKS;
+      } else {
+        if (grounded) {
+          body.setLinvel({ x: 0, y: velocity.y }, true);
+        }
+        this.previousInputFlags.set(id, inputFlags);
+        return;
+      }
+    }
+
+    // Shield released this tick: apply 2s cooldown unless something was blocked.
+    if (shieldReleased) {
+      if (!record.shieldBlockedSinceRaise) {
+        record.shieldReleaseCooldownTicks = SHIELD_RELEASE_COOLDOWN_TICKS;
+      }
+      record.shieldBlockedSinceRaise = false;
+    }
+
+    // 3. Jump (rising edge) — ground or double jump.
+    let nextYVelocity = velocity.y;
+    if (jumpPressed) {
+      if (this.isGrounded(body, ducking)) {
+        nextYVelocity = JUMP_SPEED;
+        record.doubleJumpAvailable = true;
+        this.playJumpSound();
+      } else if (record.doubleJumpAvailable && !ducking) {
+        nextYVelocity = DOUBLE_JUMP_SPEED;
+        record.doubleJumpAvailable = false;
+        this.playJumpSound();
+      }
+    }
+
+    // 4. Attack branches (gun, melee weapon, default punch).
     if (
       attackPressed &&
       record.gunFireCooldownTicks === 0 &&
@@ -1022,7 +1151,6 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
     }
 
-    // Use U key input for weapon and default attacks.
     if (attackPressed && record.canUseWeapon()) {
       const heldKind = record.heldItem!;
       const def = WEAPON_DEFINITIONS[heldKind];
@@ -1055,23 +1183,128 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       this.resolvePunchHits(id, definition);
     }
 
-    if (dashPressed && record.canDash()) {
-      const dashDir = horizontalDir !== 0 ? horizontalDir : record.facing;
-      record.facing = dashDir;
-      record.dashTicksRemaining = DASH_DURATION_TICKS;
-      record.dashCooldownTicks = DASH_COOLDOWN_TICKS;
-      body.setLinvel({ x: dashDir * DASH_SPEED, y: velocity.y }, true);
+    // 5. Dodge initiation (Shift).
+    if (dodgePressed && record.canDodge()) {
+      const dodgeDir = horizontalDir !== 0 ? horizontalDir : record.facing;
+      record.facing = dodgeDir;
+      record.dodgeTicksRemaining = DODGE_DURATION_TICKS;
+      record.dodgeCooldownTicks = DODGE_COOLDOWN_TICKS;
+      body.setLinvel({ x: dodgeDir * DODGE_SPEED, y: velocity.y }, true);
       this.previousInputFlags.set(id, inputFlags);
       return;
     }
 
+    // Keep facing in sync with held direction outside of the state machine.
+    if (horizontalDir !== 0) {
+      record.facing = horizontalDir;
+    }
+
+    // 6. Movement state machine.
+    // Sync grounded state.
+    if (!grounded) {
+      if (record.moveState !== MoveState.Airborne) {
+        record.moveState = MoveState.Airborne;
+        record.moveStateTicks = 0;
+      }
+    } else if (record.moveState === MoveState.Airborne) {
+      record.moveState = MoveState.Idle;
+      record.moveStateTicks = 0;
+      record.moveDirection = 0;
+      record.doubleJumpAvailable = true;
+    }
+
+    let nextVx = velocity.x;
+    switch (record.moveState) {
+      case MoveState.Airborne: {
+        nextVx = horizontalDir * MOVE_SPEED;
+        break;
+      }
+      case MoveState.Idle: {
+        if (horizontalDir !== 0 && record.dashInputCooldownTicks === 0 && !ducking) {
+          record.moveState = MoveState.InitialDash;
+          record.moveStateTicks = 0;
+          record.moveDirection = horizontalDir;
+          record.facing = horizontalDir;
+          record.dashInputCooldownTicks = DASH_INPUT_COOLDOWN_TICKS;
+          nextVx = horizontalDir * INITIAL_DASH_SPEED;
+        } else {
+          nextVx = 0;
+        }
+        break;
+      }
+      case MoveState.InitialDash: {
+        if (horizontalDir !== 0 && horizontalDir !== record.moveDirection) {
+          record.moveDirection = horizontalDir;
+          record.facing = horizontalDir;
+          record.moveStateTicks = 0;
+        }
+        nextVx = record.moveDirection * INITIAL_DASH_SPEED;
+        record.moveStateTicks += 1;
+        if (record.moveStateTicks >= INITIAL_DASH_TICKS) {
+          record.moveState = MoveState.DashTurnLock;
+          record.moveStateTicks = 0;
+        }
+        break;
+      }
+      case MoveState.DashTurnLock: {
+        const t = record.moveStateTicks / DASH_TURN_LOCK_TICKS;
+        const speed = INITIAL_DASH_SPEED + (RUN_SPEED - INITIAL_DASH_SPEED) * t;
+        nextVx = record.moveDirection * speed;
+        record.moveStateTicks += 1;
+        if (record.moveStateTicks >= DASH_TURN_LOCK_TICKS) {
+          if (horizontalDir === record.moveDirection && horizontalDir !== 0) {
+            record.moveState = MoveState.Run;
+          } else {
+            record.moveState = MoveState.Skid;
+          }
+          record.moveStateTicks = 0;
+        }
+        break;
+      }
+      case MoveState.Run: {
+        if (horizontalDir === 0 || horizontalDir !== record.moveDirection) {
+          record.moveState = MoveState.Skid;
+          record.moveStateTicks = 0;
+        }
+        nextVx = record.moveDirection * RUN_SPEED;
+        break;
+      }
+      case MoveState.Skid: {
+        const t = Math.min(1, record.moveStateTicks / SKID_TICKS);
+        const speed = RUN_SPEED * (1 - t);
+        nextVx = record.moveDirection * speed;
+        record.moveStateTicks += 1;
+        if (record.moveStateTicks >= SKID_TICKS) {
+          nextVx = 0;
+          if (
+            horizontalDir !== 0 &&
+            horizontalDir !== record.moveDirection &&
+            record.dashInputCooldownTicks === 0 &&
+            !ducking
+          ) {
+            record.moveState = MoveState.InitialDash;
+            record.moveStateTicks = 0;
+            record.moveDirection = horizontalDir;
+            record.facing = horizontalDir;
+            record.dashInputCooldownTicks = DASH_INPUT_COOLDOWN_TICKS;
+            nextVx = horizontalDir * INITIAL_DASH_SPEED;
+          } else {
+            record.moveState = MoveState.Idle;
+            record.moveStateTicks = 0;
+            record.moveDirection = 0;
+          }
+        }
+        break;
+      }
+    }
+
     const prevHorizontalDir = this.previousHorizontalDir.get(id) ?? 0;
-    if (horizontalDir !== 0 && prevHorizontalDir === 0) {
+    if (horizontalDir !== 0 && prevHorizontalDir === 0 && grounded) {
       this.playFootstepsSound();
     }
     this.previousHorizontalDir.set(id, horizontalDir);
 
-    body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: nextYVelocity }, true);
+    body.setLinvel({ x: nextVx, y: nextYVelocity }, true);
     this.previousInputFlags.set(id, inputFlags);
   }
 
@@ -1120,13 +1353,29 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
   }
 
-  private tickDashCooldowns(): void {
+  private tickPlayerCooldowns(): void {
     for (const [, record] of this.players) {
-      if (record.dashCooldownTicks > 0) {
-        record.dashCooldownTicks -= 1;
+      if (record.dodgeCooldownTicks > 0) {
+        record.dodgeCooldownTicks -= 1;
       }
       if (record.knockbackTicksRemaining > 0) {
         record.knockbackTicksRemaining -= 1;
+      }
+      if (record.dashInputCooldownTicks > 0) {
+        record.dashInputCooldownTicks -= 1;
+      }
+      if (record.shieldBrokenLockoutTicks > 0) {
+        record.shieldBrokenLockoutTicks -= 1;
+      }
+      if (record.shieldReleaseCooldownTicks > 0) {
+        record.shieldReleaseCooldownTicks -= 1;
+      }
+      if (
+        !record.shieldActive &&
+        record.shieldBrokenLockoutTicks === 0 &&
+        record.shieldHp < SHIELD_MAX_HP
+      ) {
+        record.shieldHp = Math.min(SHIELD_MAX_HP, record.shieldHp + SHIELD_RECHARGE_PER_TICK);
       }
     }
   }
@@ -1211,7 +1460,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           if (this.matchState.canTakeDamage(hitPlayerId)) {
             const target = this.players.get(hitPlayerId);
             if (target) {
-              const nextHealth = target.takeDamage(bullet.damage);
+              const nextHealth = this.applyDamageWithShield(target, bullet.damage, null);
               const shooter = this.players.get(bullet.ownerId);
               if (bullet.reloadOnHit && shooter) {
                 shooter.reloadPending = false;
@@ -1244,8 +1493,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         if (hitPlayerId !== undefined && this.matchState.canTakeDamage(hitPlayerId)) {
           const target = this.players.get(hitPlayerId);
           if (target) {
-            const nextHealth = target.takeDamage(bullet.damage);
-            this.applyKnockback(target, Math.sign(bullet.vx) || 1);
+            const nextHealth = this.applyDamageWithShield(
+              target,
+              bullet.damage,
+              Math.sign(bullet.vx) || 1,
+            );
             const shooter = this.players.get(bullet.ownerId);
             if (bullet.reloadOnHit && shooter) {
               shooter.reloadPending = false;
@@ -1617,6 +1869,51 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     };
   }
 
+  /**
+   * Route damage through the target's shield / dodge i-frames.
+   *
+   * - If the target is mid-dodge: no-op (full invincibility).
+   * - If the target has an active shield with HP: drain shield HP by `damage`,
+   *   negate health damage and knockback. If shield drops to 0 it shatters,
+   *   begins lockout, and the original damage + knockback go through as a
+   *   shield-break punish.
+   * - Otherwise: apply damage and (if knockbackDirX != null) knockback as usual.
+   *
+   * Stage-out (blast zone) is intentionally NOT gated by this — it's checked
+   * by position in handleBlastZoneDeaths.
+   *
+   * Returns target.health after the call (matches PlayerCharacter.takeDamage).
+   */
+  private applyDamageWithShield(
+    target: PlayerCharacter,
+    damage: number,
+    knockbackDirX: number | null,
+  ): number {
+    if (target.dodgeTicksRemaining > 0) {
+      return target.health;
+    }
+    if (target.shieldActive && target.shieldHp > 0) {
+      target.shieldHp -= damage;
+      target.shieldBlockedSinceRaise = true;
+      if (target.shieldHp <= 0) {
+        target.shieldHp = 0;
+        target.shieldActive = false;
+        target.shieldBlockedSinceRaise = false;
+        target.shieldBrokenLockoutTicks = SHIELD_BROKEN_LOCKOUT_TICKS;
+        target.takeDamage(damage);
+        if (knockbackDirX !== null) {
+          this.applyKnockback(target, knockbackDirX);
+        }
+      }
+      return target.health;
+    }
+    target.takeDamage(damage);
+    if (knockbackDirX !== null) {
+      this.applyKnockback(target, knockbackDirX);
+    }
+    return target.health;
+  }
+
   private applyKnockback(target: PlayerCharacter, directionX: number): void {
     const healthFraction = target.health / target.maxHealth;
     const magnitude = KNOCKBACK_BASE + KNOCKBACK_SCALE * (1 - healthFraction);
@@ -1655,9 +1952,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.x - center.x) < overlapHalfWidth &&
         Math.abs(targetPos.y - center.y) < overlapHalfHeight
       ) {
-        target.takeDamage(definition.damage);
         const knockDir = Math.sign(targetPos.x - center.x) || attacker.facing;
-        this.applyKnockback(target, knockDir);
+        this.applyDamageWithShield(target, definition.damage, knockDir);
       }
     }
   }
@@ -1680,8 +1976,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.x - cx) < overlapHalfWidth &&
         Math.abs(targetPos.y - cy) < overlapHalfHeight
       ) {
-        target.takeDamage(def.damage);
-        this.applyKnockback(target, attacker.facing);
+        this.applyDamageWithShield(target, def.damage, attacker.facing);
       }
     }
   }
