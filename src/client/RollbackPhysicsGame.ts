@@ -1044,6 +1044,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (Math.abs(actualDelta) > Math.abs(intendedDelta) + 0.001) {
         continue;
       }
+      // If the physics solver moved us far less than intended, a wall blocked
+      // the player. Force-writing intendedX here would teleport them inside
+      // the wall, which lets the grounded raycast pick up the wall geometry
+      // and grants an infinite wall-jump. Skip the snap in that case.
+      if (Math.abs(actualDelta) < Math.abs(intendedDelta) * 0.5) {
+        continue;
+      }
 
       record.body.setTranslation({ x: intendedX, y: position.y }, true);
       record.body.setLinvel({ x: horizontalDir * MOVE_SPEED, y: record.body.linvel().y }, true);
@@ -2391,10 +2398,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     for (const origin of rayOrigins) {
       const ray = new RAPIER.Ray(origin, { x: 0, y: -1 });
+      // solid: false — if the ray origin is already inside a collider (e.g.
+      // brief penetration into a wall after a hard horizontal hit), don't
+      // report a distance-0 hit. Otherwise the side rays here would treat a
+      // wall as ground and grant an infinite wall-jump.
       const hit = this.world.castRay(
         ray,
         GROUND_RAY_LENGTH,
-        true,
+        false,
         undefined,
         undefined,
         undefined,
