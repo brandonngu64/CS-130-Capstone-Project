@@ -23,7 +23,7 @@ import {
   getEthernetWhipBottomInset,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
-import { type CharacterId, PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
+import { type CharacterId, PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS, SHIELD_MAX_HP } from './constants';
 import {
   K_createDroppedItemMesh,
   K_createProjectileMesh,
@@ -88,6 +88,9 @@ const WHIP_ITEM_Y_OFFSET = -0.28;
 const BULLET_W = 0.3;
 const BULLET_H = 0.16;
 const BULLET_D = 0.16;
+
+// Constant world-space ring thickness regardless of shield size.
+const SHIELD_RIM_WORLD_WIDTH = 0.07;
 
 // Whip art: handle near bottom-left of texture (facing-right unmirrored art).
 const WHIP_HANDLE_TEXTURE_X = -0.35;
@@ -244,6 +247,7 @@ export class GameRenderer {
   private readonly prevRespawning = new Map<string, boolean>();
   private readonly prevEliminated = new Map<string, boolean>();
   private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
+  private readonly shieldMeshes = new Map<string, { fill: THREE.Mesh; rim: THREE.Mesh }>();
 
   // Reused per-frame scratch sets to avoid allocating fresh Set objects on
   // every render() — runs at 60+ Hz so the GC pressure adds up.
@@ -358,6 +362,67 @@ export class GameRenderer {
       const isTransparent = material.opacity < 1;
       material.transparent = isTransparent;
       material.depthWrite = !isTransparent;
+    }
+
+    // --- Shield bubbles ---
+    for (const player of state.players) {
+      let sg = this.shieldMeshes.get(player.id);
+      if (!sg) {
+        const fillGeo = new THREE.CircleGeometry(1, 48);
+        const fillMat = new THREE.MeshBasicMaterial({
+          color: player.color,
+          transparent: true,
+          opacity: 0.50,
+          depthWrite: false,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+        });
+        const rimGeo = new THREE.RingGeometry(1.00, 1.08, 48);
+        const rimMat = new THREE.MeshBasicMaterial({
+          color: 0xFFFFFF, //new THREE.Color(player.color).lerp(_SHIELD_RIM_WHITE, SHIELD_RIM_LERP_T)
+          transparent: true,
+          opacity: 1,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+        });
+        sg = { fill: new THREE.Mesh(fillGeo, fillMat), rim: new THREE.Mesh(rimGeo, rimMat) };
+        this.scene.add(sg.fill);
+        this.scene.add(sg.rim);
+        this.shieldMeshes.set(player.id, sg);
+      }
+
+      const showShield = player.shieldActive && !player.eliminated && !player.respawning;
+      sg.fill.visible = showShield;
+      sg.rim.visible = showShield;
+      if (showShield) {
+        const hpFraction = Math.max(0, player.shieldHp / SHIELD_MAX_HP);
+        const radius = PLAYER_HALF_HEIGHT * (0.10 + 1.10 * hpFraction);
+        sg.fill.position.set(player.x, player.y, 0.4);
+        sg.fill.scale.set(radius, radius, 1);
+        // Rebuild rim with constant world-space thickness so it doesn't thin out as shield shrinks.
+        sg.rim.geometry.dispose();
+        sg.rim.geometry = new THREE.RingGeometry(
+          Math.max(0.01, radius - SHIELD_RIM_WORLD_WIDTH / 2),
+          radius + SHIELD_RIM_WORLD_WIDTH / 2,
+          48,
+        );
+        sg.rim.position.set(player.x, player.y, 0.42);
+        sg.rim.scale.set(1, 1, 1);
+        (sg.fill.material as THREE.MeshBasicMaterial).color.setHex(player.color);
+      }
+    }
+    for (const [id, sg] of this.shieldMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(sg.fill);
+        this.scene.remove(sg.rim);
+        sg.fill.geometry.dispose();
+        sg.rim.geometry.dispose();
+        (sg.fill.material as THREE.MeshBasicMaterial).dispose();
+        (sg.rim.material as THREE.MeshBasicMaterial).dispose();
+        this.shieldMeshes.delete(id);
+      }
     }
 
     // --- Ring-out VFX ---
@@ -1018,6 +1083,16 @@ export class GameRenderer {
       (laser.material as THREE.Material).dispose();
     }
     this.laserSightMeshes.clear();
+
+    for (const [, sg] of this.shieldMeshes) {
+      this.scene.remove(sg.fill);
+      this.scene.remove(sg.rim);
+      sg.fill.geometry.dispose();
+      sg.rim.geometry.dispose();
+      (sg.fill.material as THREE.MeshBasicMaterial).dispose();
+      (sg.rim.material as THREE.MeshBasicMaterial).dispose();
+    }
+    this.shieldMeshes.clear();
 
     for (const [, vfx] of this.playerVFX) {
       this.scene.remove(vfx.mesh);

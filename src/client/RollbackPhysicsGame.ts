@@ -92,6 +92,8 @@ export interface PlayerRenderState {
   vy: number;
   gunFireCooldownTicks: number;
   activeWeaponAttack: { defKind: ItemKind; ticksRemaining: number } | null;
+  shieldActive: boolean;
+  shieldHp: number;
 }
 
 export interface ItemRenderState {
@@ -781,6 +783,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           activeWeaponAttack: record.activeWeaponAttack
             ? { defKind: record.heldItem!, ticksRemaining: record.activeWeaponAttack.ticksRemaining }
             : null,
+          shieldActive: record.shieldActive,
+          shieldHp: record.shieldHp,
         };
       });
 
@@ -1098,24 +1102,32 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
 
     // While shield is active, drain HP and skip all other input.
+    let shieldDeactivatedThisFrame = false;
     if (record.shieldActive) {
-      record.shieldHp -= SHIELD_DRAIN_PER_TICK;
-      if (record.shieldHp <= 0) {
-        record.shieldHp = 0;
+      if (shieldReleased) {
+        // Button released: deactivate shield immediately and fall through to normal input.
         record.shieldActive = false;
-        record.shieldBlockedSinceRaise = false;
-        record.shieldBrokenLockoutTicks = SHIELD_BROKEN_LOCKOUT_TICKS;
+        shieldDeactivatedThisFrame = true;
       } else {
-        if (grounded) {
-          body.setLinvel({ x: 0, y: velocity.y }, true);
+        record.shieldHp -= SHIELD_DRAIN_PER_TICK;
+        if (record.shieldHp <= 0) {
+          record.shieldHp = 0;
+          record.shieldActive = false;
+          record.shieldBlockedSinceRaise = false;
+          record.shieldBrokenLockoutTicks = SHIELD_BROKEN_LOCKOUT_TICKS;
+        } else {
+          if (grounded) {
+            body.setLinvel({ x: 0, y: velocity.y }, true);
+          }
+          this.previousInputFlags.set(id, inputFlags);
+          return;
         }
-        this.previousInputFlags.set(id, inputFlags);
-        return;
       }
     }
 
     // Shield released this tick: apply 2s cooldown unless something was blocked.
-    if (shieldReleased) {
+    // Only fires when shield was actually active — pressing during cooldown doesn't reset the timer.
+    if (shieldDeactivatedThisFrame) {
       if (!record.shieldBlockedSinceRaise) {
         record.shieldReleaseCooldownTicks = SHIELD_RELEASE_COOLDOWN_TICKS;
       }
@@ -1366,6 +1378,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
       if (record.shieldBrokenLockoutTicks > 0) {
         record.shieldBrokenLockoutTicks -= 1;
+        if (record.shieldBrokenLockoutTicks === 0) {
+          record.shieldHp = SHIELD_MAX_HP;
+        }
       }
       if (record.shieldReleaseCooldownTicks > 0) {
         record.shieldReleaseCooldownTicks -= 1;
