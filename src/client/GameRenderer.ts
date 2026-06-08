@@ -249,6 +249,8 @@ export class GameRenderer {
   private readonly prevEliminated = new Map<string, boolean>();
   private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
   private readonly shieldMeshes = new Map<string, { fill: THREE.Mesh; rim: THREE.Mesh }>();
+  private readonly localIndicatorMeshes = new Map<string, THREE.Mesh>();
+  private localIndicatorGeometry: THREE.BufferGeometry | null = null;
 
   // Reused per-frame scratch sets to avoid allocating fresh Set objects on
   // every render() — runs at 60+ Hz so the GC pressure adds up.
@@ -257,6 +259,7 @@ export class GameRenderer {
   private readonly activeItemIdsScratch = new Set<number>();
   private readonly activeBulletIdsScratch = new Set<number>();
   private cameraLockTarget: THREE.Vector2 | null = null;
+  private countdownCameraTargetId: string | null = null;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement, map: TiledMapDefinition, vfxCache: VFXAssetCache) {
@@ -363,6 +366,40 @@ export class GameRenderer {
       const isTransparent = material.opacity < 1;
       material.transparent = isTransparent;
       material.depthWrite = !isTransparent;
+
+      // --- Local-player indicator triangle (only shown above the client's own character) ---
+      if (player.id === localPlayerId && !player.eliminated && !player.respawning) {
+        const existing = this.localIndicatorMeshes.get(player.id);
+        const indicator = existing ?? this.createLocalIndicatorMesh(player.color);
+        if (!existing) {
+          this.scene.add(indicator);
+          this.localIndicatorMeshes.set(player.id, indicator);
+        }
+        const indicatorMat = indicator.material as THREE.MeshBasicMaterial;
+        if (indicatorMat.color.getHex() !== player.color) {
+          indicatorMat.color.setHex(player.color);
+        }
+        const bob = Math.sin(state.animTick * 0.15) * 0.08;
+        indicator.position.set(
+          player.x,
+          player.y + PLAYER_HALF_HEIGHT + 0.3 + bob,
+          0.4,
+        );
+        indicator.visible = true;
+      } else {
+        const stale = this.localIndicatorMeshes.get(player.id);
+        if (stale) {
+          stale.visible = false;
+        }
+      }
+    }
+
+    for (const [id, indicator] of this.localIndicatorMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(indicator);
+        (indicator.material as THREE.MeshBasicMaterial).dispose();
+        this.localIndicatorMeshes.delete(id);
+      }
     }
 
     // --- Shield bubbles ---
@@ -962,6 +999,10 @@ export class GameRenderer {
     this.renderer.render(this.scene, this.camera);
   }
 
+  setCountdownCameraTarget(playerId: string | null): void {
+    this.countdownCameraTargetId = playerId;
+  }
+
   setCameraMode(mode: CameraMode): void {
     if (this.cameraMode === mode) {
       return;
@@ -1252,9 +1293,13 @@ export class GameRenderer {
       zoomLerp = 0.16;
     }
 
-    if (this.cameraMode === 'follow') {
+    if (this.cameraMode === 'follow' && !this.countdownCameraTargetId) {
       this.camera.position.x = target.x;
       this.camera.position.y = target.y;
+    } else if (this.countdownCameraTargetId) {
+      // Smooth pan while sequencing through countdown spawn targets.
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, target.x, 0.12);
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, target.y, 0.12);
     } else {
       const followLerp = this.cameraMode === 'action' ? 0.22 : 0.28;
       this.camera.position.x = THREE.MathUtils.lerp(
@@ -1287,6 +1332,15 @@ export class GameRenderer {
 
     if (state.players.length === 0) {
       return this.cameraTarget.set(0, 0);
+    }
+
+    if (this.countdownCameraTargetId) {
+      const target = state.players.find(
+        (player: RenderState['players'][number]) => player.id === this.countdownCameraTargetId,
+      );
+      if (target) {
+        return this.cameraTarget.set(target.x, target.y);
+      }
     }
 
     if (this.cameraMode === 'follow') {
@@ -1423,6 +1477,29 @@ export class GameRenderer {
       this.camera.position.y =
         Math.round(this.camera.position.y / worldUnitsPerPixelY) * worldUnitsPerPixelY;
     }
+  }
+
+  private createLocalIndicatorMesh(color: number): THREE.Mesh {
+    if (!this.localIndicatorGeometry) {
+      // Downward-pointing triangle: apex at bottom (0, -h/2), base across the top.
+      const halfW = 0.32;
+      const halfH = 0.12;
+      const geom = new THREE.BufferGeometry();
+      const verts = new Float32Array([
+        -halfW,  halfH, 0,
+         halfW,  halfH, 0,
+            0, -halfH, 0,
+      ]);
+      geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+      geom.setIndex([0, 1, 2]);
+      this.localIndicatorGeometry = geom;
+    }
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+    });
+    return new THREE.Mesh(this.localIndicatorGeometry, material);
   }
 
   private createPlayerSpriteMesh(): PlayerSpriteMesh {

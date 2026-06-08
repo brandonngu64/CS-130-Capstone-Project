@@ -140,6 +140,8 @@ export const SMASH_DEFAULT_LAUNCH_ANGLE_DEG = 45;
 export const PUNCH_BASE_KNOCKBACK = 20;
 // Launch angle for the default punch.
 export const PUNCH_LAUNCH_ANGLE_DEG = 45;
+// Ticks between consecutive punches. 60 ticks = 1s at TICK_RATE=60, so 90 ≈ 1.5s.
+export const PUNCH_COOLDOWN_TICKS = 90;
 // "+18" hitstun-bias constant from the SSB knockback formula.
 export const SMASH_KB_HITSTUN_BIAS = 18;
 // "*1.4" growth multiplier from the SSB knockback formula.
