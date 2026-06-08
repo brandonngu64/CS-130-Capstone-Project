@@ -42,6 +42,7 @@ export class PlayerCharacter {
   public activeAttack: ActiveAttack | null;
   public activeWeaponAttack: ActiveWeaponAttack | null;
   public weaponCooldownTicks: number;
+  public punchCooldownTicks: number;
   public dodgeTicksRemaining: number;
   public dodgeCooldownTicks: number;
   public heldItem: ItemKind | null;
@@ -102,6 +103,7 @@ export class PlayerCharacter {
     this.activeAttack = null;
     this.activeWeaponAttack = null;
     this.weaponCooldownTicks = 0;
+    this.punchCooldownTicks = 0;
     this.dodgeTicksRemaining = 0;
     this.dodgeCooldownTicks = 0;
     this.heldItem = null;
@@ -182,7 +184,7 @@ export class PlayerCharacter {
   }
 
   canPunch(): boolean {
-    return this.heldItem === null;
+    return this.heldItem === null && this.punchCooldownTicks === 0;
   }
 
   canUseWeapon(): boolean {
@@ -217,6 +219,7 @@ export class PlayerCharacter {
     this.activeAttack = null;
     this.activeWeaponAttack = null;
     this.weaponCooldownTicks = 0;
+    this.punchCooldownTicks = 0;
     this.dodgeTicksRemaining = 0;
     this.dodgeCooldownTicks = 0;
     this.heldItem = null;

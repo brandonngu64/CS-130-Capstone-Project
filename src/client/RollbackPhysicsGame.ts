@@ -54,6 +54,7 @@ import {
   SMASH_LAUNCH_AIR_CONTROL,
   SMASH_LETHAL_NOCLIP_DELAY_TICKS,
   SMASH_MAX_DAMAGE_PCT,
+  PUNCH_COOLDOWN_TICKS,
   TICK_RATE,
   TILE_SIZE,
   type CharacterId,
@@ -293,6 +294,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       reloadPendingOnKill: boolean;
       characterId: number;
       weaponCooldownTicks: number;
+      punchCooldownTicks: number;
       activeWeaponAttackTicksRemaining: number;
       knockbackTicksRemaining: number;
       launchRecoveryTicksRemaining: number;
@@ -422,6 +424,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.reloadPendingOnKill ? 1 : 0); offset += 1;
       view.setUint8(offset, characterIdToIndex(record.characterId)); offset += 1;
       view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
+      view.setUint8(offset, Math.min(0xff, record.punchCooldownTicks)); offset += 1;
       view.setUint8(offset, record.activeWeaponAttack?.ticksRemaining ?? 0); offset += 1;
       view.setUint8(offset, record.knockbackTicksRemaining); offset += 1;
       view.setUint8(offset, Math.min(0xff, record.launchRecoveryTicksRemaining)); offset += 1;
@@ -533,6 +536,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const reloadPendingOnKill = view.getUint8(offset) !== 0; offset += 1;
       const characterId = view.getUint8(offset); offset += 1;
       const weaponCooldownTicks = view.getUint8(offset); offset += 1;
+      const punchCooldownTicks = view.getUint8(offset); offset += 1;
       const activeWeaponAttackTicksRemaining = view.getUint8(offset); offset += 1;
       const knockbackTicksRemaining = view.getUint8(offset); offset += 1;
       const launchRecoveryTicksRemaining = view.getUint8(offset); offset += 1;
@@ -571,6 +575,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         reloadPendingOnKill,
         characterId,
         weaponCooldownTicks,
+        punchCooldownTicks,
         activeWeaponAttackTicksRemaining,
         knockbackTicksRemaining,
         launchRecoveryTicksRemaining,
@@ -627,6 +632,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.reloadPendingOnKill = state.reloadPendingOnKill;
       record.characterId = characterIdFromIndex(state.characterId);
       record.weaponCooldownTicks = state.weaponCooldownTicks;
+      record.punchCooldownTicks = state.punchCooldownTicks;
       record.knockbackTicksRemaining = state.knockbackTicksRemaining;
       record.launchRecoveryTicksRemaining = state.launchRecoveryTicksRemaining;
       record.moveState = state.moveState as MoveState;
@@ -749,6 +755,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (this.roundStartCountdownTicks > 0) {
       this.roundStartCountdownTicks -= 1;
+      this.updateCountdownSpawns();
       if (this.roundStartCountdownTicks === 0) {
         this.wakeActivePlayers();
       }
@@ -1305,6 +1312,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         kind: definition.kind,
         ticksRemaining: definition.durationTicks,
       };
+      record.punchCooldownTicks = PUNCH_COOLDOWN_TICKS;
       this.playPunchSound();
       this.resolvePunchHits(id, definition);
     }
@@ -1604,6 +1612,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   private tickAttacks(): void {
     for (const [, record] of this.players) {
+      if (record.punchCooldownTicks > 0) {
+        record.punchCooldownTicks -= 1;
+      }
+
       if (!record.activeAttack) {
         continue;
       }
@@ -2458,6 +2470,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       };
     }
 
+    const slot = this.playerColorMap.get(playerId);
+    if (slot !== undefined) {
+      return this.map.playerSpawnPoints[slot % this.map.playerSpawnPoints.length];
+    }
     return this.map.playerSpawnPoints[this.hashString(playerId) % this.map.playerSpawnPoints.length];
   }
 
@@ -2485,25 +2501,120 @@ private colorForPlayer(playerId: string): number {
     this.previousConnectedPlayerCount = connectedPlayerCount;
   }
 
+  /** Y position far below the map where players "wait" before their countdown stage. */
+  private getOffstageSentinelY(): number {
+    return this.map.bounds.minY - 1000;
+  }
+
+  /** Slot index for sequential countdown spawn. Smaller slot spawns first. */
+  private getPlayerSlot(playerId: string): number {
+    return this.playerColorMap.get(playerId) ?? 0;
+  }
+
+  /** During countdown, returns 0..(numPlayers-1) — the highest slot that should be on-stage now. */
+  private getCountdownStageIndex(): number {
+    if (this.roundStartCountdownTicks <= 0) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    return Math.floor(
+      (ROUND_START_COUNTDOWN_TOTAL_TICKS - this.roundStartCountdownTicks) / TICK_RATE,
+    );
+  }
+
+  /** Sorted list of non-eliminated player ids in slot order. */
+  private getCountdownSpawnOrder(): string[] {
+    const list: string[] = [];
+    for (const [id] of this.players) {
+      if (this.matchState.getRenderInfo(id).eliminated) {
+        continue;
+      }
+      list.push(id);
+    }
+    list.sort((a, b) => this.getPlayerSlot(a) - this.getPlayerSlot(b));
+    return list;
+  }
+
+  /** Render-side: which player the camera should follow during the countdown. */
+  getCountdownCameraTargetId(): string | null {
+    if (this.roundStartCountdownTicks <= 0) {
+      return null;
+    }
+    const order = this.getCountdownSpawnOrder();
+    if (order.length === 0) {
+      return null;
+    }
+    const stage = this.getCountdownStageIndex();
+    const idx = Math.min(stage, order.length - 1);
+    return order[idx];
+  }
+
+  /** Teleport `record` to its proper spawn point and wake it. */
+  private placePlayerAtSpawn(record: PlayerCharacter): void {
+    const spawnPoint = this.spawnPointForPlayer(record.id);
+    record.body.setTranslation(
+      { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
+      true,
+    );
+    record.body.setLinvel({ x: 0, y: 0 }, true);
+    record.body.sleep();
+  }
+
+  /** Park `record` far below the map until its countdown stage arrives. */
+  private parkPlayerOffstage(record: PlayerCharacter): void {
+    record.body.setTranslation(
+      { x: 0, y: this.getOffstageSentinelY() },
+      true,
+    );
+    record.body.setLinvel({ x: 0, y: 0 }, true);
+    record.body.sleep();
+  }
+
+  /**
+   * Each countdown tick, ensure every player whose slot is ≤ current stage is at
+   * their spawn point. Idempotent — re-teleporting an already-on-stage player is
+   * detected by checking their Y vs. the offstage sentinel.
+   */
+  private updateCountdownSpawns(): void {
+    const order = this.getCountdownSpawnOrder();
+    if (order.length === 0) {
+      return;
+    }
+    const stage = this.getCountdownStageIndex();
+    const sentinelY = this.getOffstageSentinelY();
+    for (let i = 0; i <= stage && i < order.length; i += 1) {
+      const record = this.players.get(order[i]);
+      if (!record) {
+        continue;
+      }
+      // Only teleport if the player is still parked offstage — avoids resetting
+      // a body we already placed on a previous tick.
+      if (record.body.translation().y <= sentinelY + 0.5) {
+        this.placePlayerAtSpawn(record);
+      }
+    }
+  }
+
   private startRoundStartCountdown(): void {
     this.roundStartCountdownTicks = ROUND_START_COUNTDOWN_TOTAL_TICKS;
     this.bullets.clear();
+
+    const order = this.getCountdownSpawnOrder();
+    const firstId = order[0];
 
     for (const [id, record] of this.players) {
       if (this.matchState.getRenderInfo(id).eliminated) {
         continue;
       }
       this.matchState.resetRespawnState(id);
-      const spawnPoint = this.spawnPointForPlayer(id);
       record.activeAttack = null;
       record.activeWeaponAttack = null;
+      record.punchCooldownTicks = 0;
       record.health = record.maxHealth;
-      record.body.setTranslation(
-        { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
-        true,
-      );
-      record.body.setLinvel({ x: 0, y: 0 }, true);
-      record.body.sleep();
+      if (id === firstId) {
+        this.placePlayerAtSpawn(record);
+      } else {
+        this.parkPlayerOffstage(record);
+      }
     }
   }
 

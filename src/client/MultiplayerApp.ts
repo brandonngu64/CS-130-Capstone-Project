@@ -985,6 +985,7 @@ export class MultiplayerApp {
       const renderDelaySeconds = this.accumulatedTimeMs / 1000;
       const renderState = this.game.getRenderState(renderDelaySeconds);
       const vfxDelta = this.vfxClock.tick(frameDelta);
+      this.applyCountdownCamera(this.game.getCountdownCameraTargetId());
       this.renderer.render(renderState, this.peerId, vfxDelta);
       if (this.isInRoom() || this.connecting) {
         this.smashHud.update(renderState.players, this.peerId);
@@ -2312,6 +2313,21 @@ export class MultiplayerApp {
         width: this.mapDefinition.width,
       }
     );
+  }
+
+  private countdownCameraActive = false;
+
+  private applyCountdownCamera(targetId: string | null): void {
+    if (targetId) {
+      this.renderer.setCountdownCameraTarget(targetId);
+      this.countdownCameraActive = true;
+    } else if (this.countdownCameraActive) {
+      // GO: countdown just ended. Drop the per-target override and default to
+      // action camera so the match opens with everyone framed.
+      this.renderer.setCountdownCameraTarget(null);
+      this.countdownCameraActive = false;
+      this.setCameraMode('action');
+    }
   }
 
   private toggleCameraMode(): void {
