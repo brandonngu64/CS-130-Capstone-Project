@@ -46,6 +46,12 @@ import {
   SMASH_KB_LETHAL_MULTIPLIER,
   SMASH_KB_LETHAL_RESTITUTION,
   SMASH_KB_OUTPUT_SCALE,
+  SMASH_KB_HORIZONTAL_MULT,
+  SMASH_KB_VERTICAL_MULT,
+  SMASH_LAUNCH_RECOVERY_TICKS,
+  SMASH_LAUNCH_HORIZONTAL_DRAG,
+  SMASH_LAUNCH_VERTICAL_DRAG,
+  SMASH_LAUNCH_AIR_CONTROL,
   SMASH_LETHAL_NOCLIP_DELAY_TICKS,
   SMASH_MAX_DAMAGE_PCT,
   TICK_RATE,
@@ -289,6 +295,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       weaponCooldownTicks: number;
       activeWeaponAttackTicksRemaining: number;
       knockbackTicksRemaining: number;
+      launchRecoveryTicksRemaining: number;
       moveState: number;
       moveStateTicks: number;
       moveDirection: number;
@@ -417,6 +424,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.weaponCooldownTicks); offset += 1;
       view.setUint8(offset, record.activeWeaponAttack?.ticksRemaining ?? 0); offset += 1;
       view.setUint8(offset, record.knockbackTicksRemaining); offset += 1;
+      view.setUint8(offset, Math.min(0xff, record.launchRecoveryTicksRemaining)); offset += 1;
       view.setUint8(offset, record.moveState & 0xff); offset += 1;
       view.setUint8(offset, record.moveStateTicks & 0xff); offset += 1;
       view.setInt8(offset, record.moveDirection < 0 ? -1 : record.moveDirection > 0 ? 1 : 0); offset += 1;
@@ -527,6 +535,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const weaponCooldownTicks = view.getUint8(offset); offset += 1;
       const activeWeaponAttackTicksRemaining = view.getUint8(offset); offset += 1;
       const knockbackTicksRemaining = view.getUint8(offset); offset += 1;
+      const launchRecoveryTicksRemaining = view.getUint8(offset); offset += 1;
       const moveState = view.getUint8(offset); offset += 1;
       const moveStateTicks = view.getUint8(offset); offset += 1;
       const moveDirection = view.getInt8(offset); offset += 1;
@@ -564,6 +573,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         weaponCooldownTicks,
         activeWeaponAttackTicksRemaining,
         knockbackTicksRemaining,
+        launchRecoveryTicksRemaining,
         moveState,
         moveStateTicks,
         moveDirection,
@@ -618,6 +628,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.characterId = characterIdFromIndex(state.characterId);
       record.weaponCooldownTicks = state.weaponCooldownTicks;
       record.knockbackTicksRemaining = state.knockbackTicksRemaining;
+      record.launchRecoveryTicksRemaining = state.launchRecoveryTicksRemaining;
       record.moveState = state.moveState as MoveState;
       record.moveStateTicks = state.moveStateTicks;
       record.moveDirection = state.moveDirection < 0 ? -1 : state.moveDirection > 0 ? 1 : 0;
@@ -995,7 +1006,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
       // Don't reel a Smash-mode victim back to MOVE_SPEED while they're being
       // launched — the SSB knockback owns their velocity during hitstun.
-      if (this.gameMode === 'smash' && record.knockbackTicksRemaining > 0) {
+      if (
+        this.gameMode === 'smash' &&
+        (record.knockbackTicksRemaining > 0 || record.launchRecoveryTicksRemaining > 0)
+      ) {
         continue;
       }
 
@@ -1351,12 +1365,20 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.moveDirection = 0;
       record.doubleJumpAvailable = true;
       record.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
+      record.launchRecoveryTicksRemaining = 0;
     }
 
     let nextVx = velocity.x;
     switch (record.moveState) {
       case MoveState.Airborne: {
-        nextVx = horizontalDir * MOVE_SPEED;
+        if (this.gameMode === 'smash' && record.launchRecoveryTicksRemaining > 0) {
+          const targetVx = horizontalDir * MOVE_SPEED;
+          const delta = targetVx - velocity.x;
+          const step = Math.sign(delta) * Math.min(Math.abs(delta), SMASH_LAUNCH_AIR_CONTROL);
+          nextVx = velocity.x + step;
+        } else {
+          nextVx = horizontalDir * MOVE_SPEED;
+        }
         break;
       }
       case MoveState.Idle: {
@@ -1500,6 +1522,19 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
       if (record.knockbackTicksRemaining > 0) {
         record.knockbackTicksRemaining -= 1;
+      }
+      if (record.launchRecoveryTicksRemaining > 0 && this.gameMode === 'smash') {
+        if (record.moveState === MoveState.Airborne) {
+          const v = record.body.linvel();
+          record.body.setLinvel(
+            {
+              x: v.x * SMASH_LAUNCH_HORIZONTAL_DRAG,
+              y: v.y * SMASH_LAUNCH_VERTICAL_DRAG,
+            },
+            true,
+          );
+        }
+        record.launchRecoveryTicksRemaining -= 1;
       }
       if (record.dashInputCooldownTicks > 0) {
         record.dashInputCooldownTicks -= 1;
@@ -1853,6 +1888,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       this.playStageOutSound();
       record.body.setLinvel({ x: 0, y: 0 }, true);
       record.body.sleep();
+      // Clear lethal-launch state now (not at respawn) so the collider's
+      // sensor flag has many ticks to settle in Rapier's broadphase before
+      // the body is teleported to the spawn point. Otherwise setSensor(false)
+      // issued on the same tick as the spawn teleport can fail to apply,
+      // leaving the player to fall through the platform for one frame.
+      const wasInLethal = record.inLethalLaunch;
+      record.inLethalLaunch = false;
+      record.lethalLaunchTicks = 0;
+      this.syncLethalLaunchColliderState(record, wasInLethal);
       this.matchState.startRespawn(id);
     }
   }
@@ -2189,10 +2233,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const ang = (angleDeg * Math.PI) / 180;
     const cur = target.body.linvel();
     target.knockbackTicksRemaining = 6;
+    target.launchRecoveryTicksRemaining = SMASH_LAUNCH_RECOVERY_TICKS;
     target.body.setLinvel(
       {
-        x: cur.x + directionX * kb * Math.cos(ang),
-        y: cur.y + kb * Math.sin(ang),
+        x: cur.x + directionX * kb * Math.cos(ang) * SMASH_KB_HORIZONTAL_MULT,
+        y: cur.y + kb * Math.sin(ang) * SMASH_KB_VERTICAL_MULT,
       },
       true,
     );
@@ -2279,7 +2324,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.x - center.x) < overlapHalfWidth &&
         Math.abs(targetPos.y - center.y) < overlapHalfHeight
       ) {
-        const knockDir = Math.sign(targetPos.x - center.x) || attacker.facing;
+        const knockDir = attacker.facing;
         this.applyDamageWithShield(target, definition.damage, knockDir, {
           baseKnockback: definition.baseKnockback,
           launchAngleDeg: definition.launchAngleDeg,

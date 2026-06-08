@@ -155,3 +155,20 @@ export const SMASH_KB_LETHAL_RESTITUTION = 1.0;
 // Ticks after entering the lethal-launch state before the victim noclips
 // through stage geometry until reaching a blast zone.
 export const SMASH_LETHAL_NOCLIP_DELAY_TICKS = TICK_RATE * 0.5;
+
+// ─── Smash-mode knockback shaping ───────────────────────────────────────────
+// Layered on top of the SSB cos/sin angle decomposition so vertical launches
+// can be tamed without nerfing horizontal.
+export const SMASH_KB_HORIZONTAL_MULT = 1.0;
+export const SMASH_KB_VERTICAL_MULT = 0.6;
+
+// After the strict hitstun window ends, the victim enters a "launch recovery"
+// glide phase. Inputs are accepted (DI), but the airborne move-state machine
+// doesn't clobber vx; we lerp toward input speed and bleed velocity per tick.
+export const SMASH_LAUNCH_RECOVERY_TICKS = 30;
+// Per-tick multiplicative decay on horizontal velocity during glide.
+export const SMASH_LAUNCH_HORIZONTAL_DRAG = 0.96;
+// Per-tick multiplicative decay on vertical velocity during glide (on top of gravity).
+export const SMASH_LAUNCH_VERTICAL_DRAG = 0.985;
+// Max per-tick change in vx the player can induce via DI during glide.
+export const SMASH_LAUNCH_AIR_CONTROL = 1.2;
