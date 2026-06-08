@@ -50,6 +50,7 @@ export class PlayerCharacter {
   public reloadPending: boolean;
   public reloadPendingOnKill: boolean;
   public knockbackTicksRemaining: number;
+  public launchRecoveryTicksRemaining: number;
 
   // Stage-out KO state: nonzero means the player is vulnerable to inner-blast ring out.
   public koableTicksRemaining: number;
@@ -109,6 +110,7 @@ export class PlayerCharacter {
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
     this.knockbackTicksRemaining = 0;
+    this.launchRecoveryTicksRemaining = 0;
     this.koableTicksRemaining = 0;
     this.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
 
@@ -223,6 +225,7 @@ export class PlayerCharacter {
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
     this.knockbackTicksRemaining = 0;
+    this.launchRecoveryTicksRemaining = 0;
     this.koableTicksRemaining = 0;
     this.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
 
