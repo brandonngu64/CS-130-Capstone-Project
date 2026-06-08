@@ -349,17 +349,19 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(12px, 3vw, 24px);
-  background: linear-gradient(
-    180deg,
-    rgba(5, 18, 32, 0.58),
-    rgba(5, 18, 32, 0.8)
-  );
-  backdrop-filter: blur(4px);
+  padding: clamp(8px, 2vw, 20px);
+  /* Intentionally no backdrop blur — the right column shows the live map
+     preview through transparent backgrounds, so a global blur would smear it. */
+  background: transparent;
+  pointer-events: none;
 }
 
 .lobby-overlay[data-visible='false'] {
   display: none;
+}
+
+.lobby-overlay > .lobby-card {
+  pointer-events: auto;
 }
 
 .lobby-card {
@@ -376,95 +378,280 @@ h2 {
   gap: 12px;
 }
 
-.lobby-players-list {
+.lobby-card--wide {
+  width: min(96%, 1280px);
+  max-height: calc(100% - 16px);
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: clamp(8px, 1.4vw, 16px);
+  overflow: visible;
+}
+
+.lobby-column {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  padding: clamp(12px, 1.6vw, 20px);
+  border-radius: 18px;
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
 }
 
-.lobby-player-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(50, 81, 98, 0.2);
-  background: rgba(255, 255, 255, 0.8);
+.lobby-column--left,
+.lobby-column--middle {
+  background: var(--panel);
+  backdrop-filter: blur(6px);
 }
 
-.lobby-player-card[data-ready='true'] {
-  border-color: rgba(11, 127, 120, 0.55);
-  box-shadow: inset 0 0 0 1px rgba(11, 127, 120, 0.2);
+.lobby-column--right {
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: none;
+  border-color: rgba(255, 255, 255, 0.35);
+  position: relative;
+  overflow: hidden;
 }
 
-.lobby-player-meta {
+.lobby-column--right .overlay-title--small {
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+  background: rgba(11, 18, 28, 0.45);
+  padding: 6px 10px;
+  border-radius: 8px;
+  align-self: flex-start;
+}
+
+.lobby-map-preview {
+  flex: 1 1 auto;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  /* Fully transparent so the GameRenderer canvas behind shows through cleanly. */
+  background: transparent;
+  min-height: 200px;
+}
+
+.lobby-field {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-}
-
-.lobby-player-meta strong {
-  font-size: 0.92rem;
-}
-
-.lobby-player-meta span {
-  font-size: 0.78rem;
+  gap: 4px;
+  font-size: clamp(0.62rem, 1.05vw, 0.82rem);
   color: var(--ink-soft);
 }
 
-.lobby-player-ready {
-  font-weight: 700;
-  font-size: 0.82rem;
-  color: #2f3f4f;
+.lobby-field span {
+  font-weight: 600;
 }
 
-.lobby-player-card[data-ready='true'] .lobby-player-ready {
-  color: var(--primary-strong);
+.lobby-field input[type='text'],
+.lobby-field output {
+  width: 100%;
+  padding: clamp(5px, 0.8vw, 8px) clamp(6px, 1vw, 10px);
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.9);
+  font-family: var(--mono);
+  font-size: clamp(0.68rem, 1.1vw, 0.88rem);
+  color: var(--ink);
+}
+
+.lobby-field.share-field > div {
+  display: flex;
+  gap: 6px;
+}
+
+.lobby-field.share-field input {
+  flex: 1 1 auto;
+}
+
+.lobby-players-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.lobby-player-tile {
+  --player-color: #888;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(2px, 0.6cqi, 4px);
+  padding: clamp(5px, 2cqi, 10px) clamp(3px, 1.2cqi, 6px) clamp(4px, 1.6cqi, 8px);
+  aspect-ratio: 1 / 1.15;
+  border-radius: 12px;
+  /* Light, translucent fill tinted by the player's palette color. */
+  background: color-mix(in srgb, var(--player-color) 28%, rgba(255, 255, 255, 0.85));
+  border: 2px solid color-mix(in srgb, var(--player-color) 55%, rgba(255, 255, 255, 0.4));
+  box-shadow: 0 2px 8px rgba(11, 28, 44, 0.12);
+  container-type: inline-size;
+  container-name: lobby-tile;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.lobby-player-tile--empty {
+  background: rgba(255, 255, 255, 0.4);
+  border: 2px dashed rgba(50, 81, 98, 0.25);
+}
+
+.lobby-player-tile--local {
+  outline: 2px solid rgba(11, 127, 120, 0.75);
+  outline-offset: 1px;
+}
+
+.lobby-player-tile__slot {
+  font-size: clamp(0.5rem, 8cqi, 0.7rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.lobby-player-tile__portrait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(28px, 58cqi, 72px);
+  height: clamp(28px, 58cqi, 72px);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+  overflow: hidden;
+}
+
+.lobby-player-tile__portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+
+.lobby-player-tile__portrait--empty {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.lobby-player-tile__random {
+  font-family: 'DFGGothic-UB', 'Impact', sans-serif;
+  font-size: clamp(20px, 42cqi, 52px);
+  line-height: 1;
+  color: var(--ink);
+  text-shadow:
+    1px 1px 0 rgba(255, 255, 255, 0.7),
+    -1px -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.lobby-player-tile__character {
+  font-size: clamp(0.55rem, 9cqi, 0.78rem);
+  font-weight: 700;
+  color: var(--ink);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lobby-player-tile__name {
+  font-size: clamp(0.5rem, 8cqi, 0.72rem);
+  color: var(--ink-soft);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lobby-player-tile__ready {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%) scaleX(0);
+  transform-origin: left center;
+  height: 28%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Smash-bros HUD style: same family as .smash-health-value, italic, heavy drop shadow */
+  font-family: 'DFGGothic-UB', sans-serif;
+  font-style: italic;
+  font-weight: 700;
+  /* Scale with the tile via container query units so it never overflows */
+  font-size: clamp(8px, 18cqi, 22px);
+  line-height: 1;
+  text-transform: uppercase;
+  color: #fffbe6;
+  text-shadow: 2px 3px 0px rgba(0, 0, 0, 0.85);
+  background: var(--player-color);
+  border-top: 2px solid rgba(255, 255, 255, 0.85);
+  border-bottom: 2px solid rgba(0, 0, 0, 0.35);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    transform 360ms cubic-bezier(0.18, 0.85, 0.3, 1.1),
+    opacity 120ms linear;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0 6cqi;
+  z-index: 2;
+}
+
+.lobby-player-tile__ready::before {
+  content: 'Ready';
+}
+
+.lobby-player-tile__ready[data-ready='true'] {
+  transform: translateY(-50%) scaleX(1);
+  opacity: 1;
 }
 
 .lobby-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: stretch;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: auto;
 }
 
 .lobby-actions button {
-  min-width: 120px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .lobby-section-label {
   display: block;
-  font-size: 0.82rem;
+  font-size: clamp(0.62rem, 1.05vw, 0.82rem);
   font-weight: 600;
   color: var(--ink-soft);
   margin-bottom: 8px;
 }
 
-.lobby-character-select {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .lobby-character-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(4px, 0.8vw, 10px);
 }
 
 .lobby-character-option {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 10px 8px;
+  gap: clamp(2px, 0.5vw, 6px);
+  padding: clamp(4px, 1vw, 10px) clamp(3px, 0.8vw, 8px);
   border-radius: 12px;
   border: 1px solid rgba(50, 81, 98, 0.25);
   background: rgba(255, 255, 255, 0.85);
   cursor: pointer;
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  min-width: 0;
 }
 
 .lobby-character-option:hover:not(:disabled) {
@@ -474,7 +661,7 @@ h2 {
 
 .lobby-character-option--selected {
   border-color: rgba(11, 127, 120, 0.75);
-  box-shadow: inset 0 0 0 1px rgba(11, 127, 120, 0.35);
+  box-shadow: inset 0 0 0 2px rgba(11, 127, 120, 0.35);
 }
 
 .lobby-character-option:disabled {
@@ -483,21 +670,41 @@ h2 {
 }
 
 .lobby-character-option img {
-  width: clamp(40px, 8vw, 72px);
-  height: clamp(40px, 8vw, 72px);
+  width: clamp(28px, 6vw, 84px);
+  height: clamp(28px, 6vw, 84px);
   image-rendering: pixelated;
-  object-fit: contain;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.lobby-character-option--random {
+  background: linear-gradient(140deg, #f7d774, #f8a541);
+  border-color: rgba(160, 90, 0, 0.35);
+}
+
+.lobby-character-random-glyph {
+  font-family: 'DFGGothic-UB', 'Impact', sans-serif;
+  font-size: clamp(24px, 5vw, 72px);
+  line-height: 1;
+  color: #1d2c3a;
+  text-shadow:
+    2px 2px 0 rgba(255, 255, 255, 0.8),
+    -1px -1px 0 rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(28px, 6vw, 84px);
+  height: clamp(28px, 6vw, 84px);
 }
 
 .lobby-character-name {
-  font-size: 0.82rem;
+  font-size: clamp(0.6rem, 1.05vw, 0.82rem);
   font-weight: 600;
-}
-
-.lobby-character-taken {
-  font-size: 0.72rem;
-  color: var(--ink-soft);
   text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .main-menu {
@@ -587,9 +794,10 @@ h2 {
 }
 
 .overlay-title--small {
-  font-size: clamp(0.95rem, 2vw, 1.2rem);
+  font-size: clamp(0.7rem, 1.6vw, 1.2rem);
   text-align: left;
-  padding-right: clamp(16px, 3vw, 32px);
+  padding-right: clamp(10px, 2.4vw, 32px);
+  line-height: 1.1;
 }
 
 .overlay-subtitle {
@@ -806,24 +1014,77 @@ h2 {
 }
 
 .lobby-stock-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   padding: 6px 0 2px;
 }
 
-.lobby-stock-field {
+.lobby-stock-field,
+.lobby-gamemode-field,
+.lobby-map-field,
+.select-field {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  margin: 0;
 }
 
-.lobby-stock-field span {
-  font-size: 0.85rem;
+.lobby-stock-field > span,
+.lobby-gamemode-field > span,
+.lobby-map-field > span,
+.select-field > span {
+  font-size: clamp(0.6rem, 1vw, 0.78rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--ink-soft);
-  flex-shrink: 0;
+  line-height: 1.1;
+  margin: 0;
 }
 
-.lobby-stock-field select {
-  width: auto;
-  min-width: 64px;
+.lobby-stock-field select,
+.lobby-gamemode-field select,
+.lobby-map-field select,
+.select-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding: clamp(5px, 0.8vw, 8px) clamp(20px, 2.5vw, 32px) clamp(5px, 0.8vw, 8px) clamp(7px, 1vw, 12px);
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background-color: rgba(255, 255, 255, 0.92);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%),
+    linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% - 2px),
+    calc(100% - 11px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  font-family: var(--sans);
+  font-size: clamp(0.68rem, 1.1vw, 0.88rem);
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+  min-width: 0;
+}
+
+.lobby-stock-field select:hover,
+.lobby-gamemode-field select:hover,
+.lobby-map-field select:hover,
+.select-field select:hover {
+  border-color: rgba(11, 127, 120, 0.55);
+}
+
+.lobby-stock-field select:focus,
+.lobby-gamemode-field select:focus,
+.lobby-map-field select:focus,
+.select-field select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(11, 127, 120, 0.18);
 }
 
 .debug-status-badge {

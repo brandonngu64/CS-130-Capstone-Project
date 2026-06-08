@@ -80,6 +80,15 @@ websocketServer.on('connection', (socket) => {
             case 'lobby_game_mode_select':
                 relayLobbyGameModeSelect(socket, message);
                 break;
+            case 'lobby_name_change':
+                relayLobbyNameChange(socket, message);
+                break;
+            case 'lobby_map_select':
+                relayLobbyMapSelect(socket, message);
+                break;
+            case 'lobby_random_resolved':
+                relayLobbyRandomResolved(socket, message);
+                break;
             default:
                 break;
         }
@@ -498,6 +507,86 @@ function relayLobbyGameModeSelect(socket, message) {
         roomId: message.roomId,
         peerId: message.peerId,
         gameMode: message.gameMode,
+    });
+}
+function relayLobbyNameChange(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot update name for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room || !room.members.has(message.peerId)) {
+        return;
+    }
+    broadcastToRoom(room, {
+        type: 'lobby_name_change',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        name: message.name,
+    });
+}
+function relayLobbyMapSelect(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot update map for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room || !room.members.has(message.peerId)) {
+        return;
+    }
+    if (message.peerId !== room.hostPeerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'NOT_HOST',
+            message: 'Only the host can change the map',
+        });
+        return;
+    }
+    broadcastToRoom(room, {
+        type: 'lobby_map_select',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        mapId: message.mapId,
+    });
+}
+function relayLobbyRandomResolved(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot resolve randoms for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room || !room.members.has(message.peerId)) {
+        return;
+    }
+    if (message.peerId !== room.hostPeerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'NOT_HOST',
+            message: 'Only the host can resolve random selections',
+        });
+        return;
+    }
+    broadcastToRoom(room, {
+        type: 'lobby_random_resolved',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        mapId: message.mapId,
+        characters: message.characters,
     });
 }
 function removePeerFromCurrentRoom(peerId) {

@@ -116,6 +116,10 @@ export function getCharacterPreviewUrl(characterId: CharacterId): string {
   return getCharacterSpriteUrl(characterId, 'idle_r');
 }
 
+export function getCharacterHeadshotUrl(characterId: CharacterId): string {
+  return getCharacterSpriteUrl(characterId, `${characterId}_headshot`);
+}
+
 /**
  * Resolves the character body frame — the whip is rendered as a separate
  * mesh so the body frame does not change during a whip attack.

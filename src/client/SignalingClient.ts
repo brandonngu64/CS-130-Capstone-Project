@@ -41,6 +41,25 @@ export type ClientToServerMessage =
       roomId: string;
       peerId: string;
       gameMode: string;
+    }
+  | {
+      type: 'lobby_name_change';
+      roomId: string;
+      peerId: string;
+      name: string;
+    }
+  | {
+      type: 'lobby_map_select';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+    }
+  | {
+      type: 'lobby_random_resolved';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+      characters: Record<string, string>;
     };
 
 export type ServerToClientMessage =
@@ -94,6 +113,25 @@ export type ServerToClientMessage =
       roomId: string;
       peerId: string;
       gameMode: string;
+    }
+  | {
+      type: 'lobby_name_change';
+      roomId: string;
+      peerId: string;
+      name: string;
+    }
+  | {
+      type: 'lobby_map_select';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+    }
+  | {
+      type: 'lobby_random_resolved';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+      characters: Record<string, string>;
     };
 
 export class SignalingClient {

@@ -36,6 +36,12 @@ import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
 
 const CAMERA_MARGIN = 3.0;
+// Fraction of viewport width the lobby stage preview should occupy.
+const LOBBY_PREVIEW_WIDTH_FRACTION = 1 / 3;
+// Distance (as fraction of viewport width) to shift the camera so the map
+// appears centered in the right third of the viewport. The middle of the right
+// third sits at 5/6 across, i.e. +1/3 from screen center.
+const LOBBY_PREVIEW_OFFSET_FRACTION = 1 / 3;
 
 function usesKyleGenericHeldMesh(kind: ItemKind): boolean {
   return kind === ItemKind.Gun;
@@ -260,6 +266,7 @@ export class GameRenderer {
   private readonly activeBulletIdsScratch = new Set<number>();
   private cameraLockTarget: THREE.Vector2 | null = null;
   private countdownCameraTargetId: string | null = null;
+  private lobbyPreviewMode = false;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement, map: TiledMapDefinition, vfxCache: VFXAssetCache) {
@@ -1003,6 +1010,20 @@ export class GameRenderer {
     this.countdownCameraTargetId = playerId;
   }
 
+  setLobbyPreviewMode(enabled: boolean): void {
+    this.lobbyPreviewMode = enabled;
+  }
+
+  private computeLobbyPreviewZoom(): number {
+    // Fit the stage (with a small margin) into the right-third area of the
+    // viewport so it appears smaller and shifted regardless of map size.
+    const fitW = Math.max(this.mapBounds.width + 2, 8);
+    const fitH = Math.max(this.mapBounds.height + 2, 6);
+    const previewWidth = this.baseViewWidth * LOBBY_PREVIEW_WIDTH_FRACTION;
+    const zoom = Math.min(previewWidth / fitW, this.baseViewHeight / fitH);
+    return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  }
+
   setCameraMode(mode: CameraMode): void {
     if (this.cameraMode === mode) {
       return;
@@ -1322,6 +1343,17 @@ export class GameRenderer {
   }
 
   private getCameraTarget(state: RenderState, localPlayerId: string): THREE.Vector2 {
+    if (this.lobbyPreviewMode) {
+      const cx = (this.mapBounds.minX + this.mapBounds.maxX) * 0.5;
+      const cy = (this.mapBounds.minY + this.mapBounds.maxY) * 0.5;
+      // Shift the camera left so the map renders centered in the right third of
+      // the viewport (lobby UI occupies the left/middle columns).
+      const zoom = this.computeLobbyPreviewZoom();
+      const screenWidthInWorld = this.baseViewWidth / zoom;
+      const offsetX = screenWidthInWorld * LOBBY_PREVIEW_OFFSET_FRACTION;
+      return this.cameraTarget.set(cx - offsetX, cy);
+    }
+
     if (this.cameraLockTarget) {
       return this.cameraTarget.set(this.cameraLockTarget.x, this.cameraLockTarget.y);
     }
@@ -1374,6 +1406,10 @@ export class GameRenderer {
   }
 
   private getTargetZoom(state: RenderState): number {
+    if (this.lobbyPreviewMode) {
+      return this.computeLobbyPreviewZoom();
+    }
+
     if (this.cameraMode === 'free') {
       return this.freeCameraZoom;
     }
