@@ -3,9 +3,23 @@ export const FIXED_STEP_SECONDS = 1 / TICK_RATE;
 
 export const MAX_PLAYERS = 4;
 
-export const BLAST_ZONE_UP_OFFSET = 6;
-export const BLAST_ZONE_DOWN_OFFSET = 6;
-export const BLAST_ZONE_SIDE_OFFSET = 6;
+// Tile size in world units. Maps in tiledMap.ts use 1-unit tiles.
+export const TILE_SIZE = 1;
+
+// Inner ("KO") blast zone: players in the KOable state who cross this are rung out.
+export const KO_BLAST_TILES_UP = 10;
+export const KO_BLAST_TILES_DOWN = 10;
+export const KO_BLAST_TILES_SIDE = 10;
+
+// Outer ("fallback") blast zone: always elims, regardless of KO state.
+export const FALLBACK_BLAST_TILES_UP = 17;
+export const FALLBACK_BLAST_TILES_DOWN = 17;
+export const FALLBACK_BLAST_TILES_SIDE = 17;
+
+// Back-compat aliases (in world units) for any callers not yet migrated.
+export const BLAST_ZONE_UP_OFFSET = KO_BLAST_TILES_UP * TILE_SIZE;
+export const BLAST_ZONE_DOWN_OFFSET = KO_BLAST_TILES_DOWN * TILE_SIZE;
+export const BLAST_ZONE_SIDE_OFFSET = KO_BLAST_TILES_SIDE * TILE_SIZE;
 export const FLOOR_Y = 0;
 
 export const PLAYER_HALF_WIDTH = 0.45;
@@ -34,6 +48,12 @@ export const DODGE_SPEED = 26;
 export const DODGE_DURATION_TICKS = 10;
 export const DODGE_COOLDOWN_TICKS = 50;
 
+// Air dodge — separate tuning values for mid-air recovery.
+export const AIR_DODGE_SPEED = 30;
+export const AIR_DODGE_DURATION_TICKS = 5;
+export const AIR_DODGE_COOLDOWN_TICKS = 30;
+export const AIR_DODGES_PER_AIRTIME = 1;
+
 // Shield
 export const SHIELD_MAX_HP = 100;
 export const SHIELD_DRAIN_PER_TICK = 35 / TICK_RATE;
@@ -60,8 +80,13 @@ export const PLAYER_COLOR_PALETTE = [
 ];
 
 export const DEFAULT_STOCKS = 3;
+export const MIN_STOCKS = 1;
+export const MAX_STOCKS = 9;
 export const RESPAWN_DELAY_TICKS = 120;
 export const RESPAWN_FLASH_TICKS = TICK_RATE * 3;
+
+// Time a player stays vulnerable to inner-blast ring out after taking damage.
+export const KOABLE_DURATION_TICKS = TICK_RATE * 3; 
 
 export const CHARACTER_IDS = ['eggert', 'nachenburg', 'sahai', 'smallberg'] as const;
 export type CharacterId = (typeof CHARACTER_IDS)[number];

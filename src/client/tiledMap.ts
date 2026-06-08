@@ -154,6 +154,23 @@ export interface MapBounds {
   width: number;
 }
 
+export interface BlastZoneOffsets {
+  up: number;
+  down: number;
+  side: number;
+}
+
+export function expandMapBounds(bounds: MapBounds, offsets: BlastZoneOffsets): MapBounds {
+  return {
+    minX: bounds.minX - offsets.side,
+    maxX: bounds.maxX + offsets.side,
+    minY: bounds.minY - offsets.down,
+    maxY: bounds.maxY + offsets.up,
+    width: bounds.width + offsets.side * 2,
+    height: bounds.height + offsets.up + offsets.down,
+  };
+}
+
 export interface TiledMapDefinition {
   bounds: MapBounds;
   colliders: {

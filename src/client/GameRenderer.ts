@@ -34,7 +34,8 @@ import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS, WEAPON_SPRITE_CONFIG } from '.
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
 
-const CAMERA_MARGIN = 1.5;
+
+const CAMERA_MARGIN = 3.0;
 
 function usesKyleGenericHeldMesh(kind: ItemKind): boolean {
   return kind === ItemKind.Gun;
@@ -294,7 +295,7 @@ export class GameRenderer {
     void this.vfxCache.registerPermanent(RING_OUT_PACK).then((asset) => {
       // 16 world units tall ≈ the dramatic scale the previous random formula
       // averaged to. Now deterministic.
-      const RING_OUT_WORLD_HEIGHT = PLAYER_HALF_HEIGHT * 2 * 12;
+      const RING_OUT_WORLD_HEIGHT = PLAYER_HALF_HEIGHT * 2 * (Math.random() * 4 + 16);
       this.vfxRingOutPool = new VFXMeshPool(asset, 3, RING_OUT_WORLD_HEIGHT);
     });
   }
@@ -1241,7 +1242,15 @@ export class GameRenderer {
     const target = this.getCameraTarget(state, localPlayerId);
     const targetZoom = this.getTargetZoom(state);
 
-    const zoomLerp = this.cameraMode === 'action' ? 0.12 : 0.16;
+    // Asymmetric zoom lerp: snap out fast to keep every player in frame,
+    // ease in slowly so the view doesn't whip after a knockout/respawn.
+    let zoomLerp: number;
+    if (this.cameraMode === 'action') {
+      const zoomingOut = targetZoom < this.camera.zoom;
+      zoomLerp = zoomingOut ? 0.35 : 0.05;
+    } else {
+      zoomLerp = 0.16;
+    }
 
     if (this.cameraMode === 'follow') {
       this.camera.position.x = target.x;
@@ -1294,7 +1303,20 @@ export class GameRenderer {
       return this.cameraTarget.set(0, 0);
     }
 
-    return this.cameraTarget.set(bounds.centerX, bounds.centerY);
+    // Clamp action-camera position to the map so the view never scrolls into
+    // empty space past the stage edges. Zoom is what handles "fit everyone".
+    const clampedX = THREE.MathUtils.clamp(
+      bounds.centerX,
+      this.mapBounds.minX,
+      this.mapBounds.maxX,
+    );
+    const clampedY = THREE.MathUtils.clamp(
+      bounds.centerY,
+      this.mapBounds.minY,
+      this.mapBounds.maxY,
+    );
+
+    return this.cameraTarget.set(clampedX, clampedY);
   }
 
   private getTargetZoom(state: RenderState): number {
@@ -1322,7 +1344,9 @@ export class GameRenderer {
       return 1;
     }
 
-    return THREE.MathUtils.clamp(zoom, 0.75, 2.5);
+    // No lower clamp on action zoom: as long as players are within map bounds,
+    // the frame may grow as wide as it needs to in order to keep them visible.
+    return Math.min(zoom, 2.5);
   }
 
   private getPlayerBounds(
@@ -1332,16 +1356,27 @@ export class GameRenderer {
       return null;
     }
 
+    // Only track players who are alive and currently in play. Drop respawning
+    // or eliminated players so the camera lerps smoothly to the survivors.
+    const tracked = players.filter((p) => !p.eliminated && !p.respawning);
+    const source = tracked.length > 0 ? tracked : players;
+
     let minX = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
 
-    for (const player of players) {
-      minX = Math.min(minX, player.x - player.width * 0.5);
-      maxX = Math.max(maxX, player.x + player.width * 0.5);
-      minY = Math.min(minY, player.y - player.height * 0.5);
-      maxY = Math.max(maxY, player.y + player.height * 0.5);
+    for (const player of source) {
+      // Project each player into the map bounds for framing. A player past the
+      // edge is treated as if they were standing on the nearest edge — this
+      // keeps the camera from chasing off-map positions while still letting
+      // zoom grow to fit on-map players.
+      const px = THREE.MathUtils.clamp(player.x, this.mapBounds.minX, this.mapBounds.maxX);
+      const py = THREE.MathUtils.clamp(player.y, this.mapBounds.minY, this.mapBounds.maxY);
+      minX = Math.min(minX, px - player.width * 0.5);
+      maxX = Math.max(maxX, px + player.width * 0.5);
+      minY = Math.min(minY, py - player.height * 0.5);
+      maxY = Math.max(maxY, py + player.height * 0.5);
     }
 
     return {

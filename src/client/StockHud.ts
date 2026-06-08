@@ -1,5 +1,6 @@
-import { DEFAULT_STOCKS } from './constants';
 import type { PlayerRenderState } from './RollbackPhysicsGame';
+
+const PIP_DISPLAY_THRESHOLD = 4;
 
 function formatPlayerLabel(playerId: string, localPlayerId: string): string {
   if (playerId === localPlayerId) {
@@ -61,10 +62,15 @@ export class StockHud {
   ): string {
     const isLocal = player.id === localPlayerId;
     const label = formatPlayerLabel(player.id, localPlayerId);
-    const pips = Array.from({ length: DEFAULT_STOCKS }, (_, index) => {
-      const filled = index < player.stocks;
-      return `<span class="stock-pip${filled ? ' stock-pip--filled' : ''}" aria-hidden="true"></span>`;
-    }).join('');
+    const stocks = Math.max(0, player.stocks);
+    let pips: string;
+    if (stocks <= PIP_DISPLAY_THRESHOLD) {
+      pips = Array.from({ length: stocks }, () =>
+        `<span class="stock-pip stock-pip--filled" aria-hidden="true"></span>`,
+      ).join('');
+    } else {
+      pips = `<span class="stock-count">${stocks}×</span>`;
+    }
 
     let status = '';
     if (player.eliminated) {

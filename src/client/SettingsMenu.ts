@@ -37,6 +37,7 @@ export interface SettingsMenuCallbacks {
   onInputDelayChange(frames: number): void;
   onForceRelayChange(enabled: boolean): void;
   onInputSchemeChange(id: InputSchemeId): void;
+  onKoBarEnabledChange(enabled: boolean): void;
 }
 
 export class SettingsMenu {
@@ -58,6 +59,7 @@ export class SettingsMenu {
   private readonly forceRelayToggle: HTMLInputElement;
   private readonly inputSchemeSelect: HTMLSelectElement;
   private readonly inputBindingsList: HTMLElement;
+  private readonly koBarToggle: HTMLInputElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -133,6 +135,10 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuInputBindings',
     );
+    this.koBarToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuKoBarToggle',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
@@ -162,6 +168,9 @@ export class SettingsMenu {
       if (isInputSchemeId(value)) {
         callbacks.onInputSchemeChange(value);
       }
+    });
+    this.koBarToggle.addEventListener('change', () => {
+      callbacks.onKoBarEnabledChange(this.koBarToggle.checked);
     });
 
     this.element.addEventListener('click', (event) => {
@@ -238,6 +247,10 @@ export class SettingsMenu {
     this.renderInputBindings(scheme);
   }
 
+  setKoBarEnabled(enabled: boolean): void {
+    this.koBarToggle.checked = enabled;
+  }
+
   private renderInputBindings(scheme: InputScheme): void {
     const rows = scheme.bindings
       .map(
@@ -287,6 +300,11 @@ export class SettingsMenu {
             <input id="settingsMenuShareUrl" type="text" readonly />
             <button id="settingsMenuCopyButton" type="button">Copy</button>
           </div>
+        </label>
+
+        <label class="toggle-field">
+          <input id="settingsMenuKoBarToggle" type="checkbox" />
+          <span>Show KO bar (displays KOable window and landing state per player)</span>
         </label>
 
         <label class="toggle-field">

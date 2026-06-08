@@ -1,9 +1,10 @@
 import * as RAPIER from '@dimforge/rapier2d-compat';
 import type { Game, PlayerId } from 'rollback-netcode';
 import {
-  BLAST_ZONE_DOWN_OFFSET,
-  BLAST_ZONE_SIDE_OFFSET,
-  BLAST_ZONE_UP_OFFSET,
+  AIR_DODGE_COOLDOWN_TICKS,
+  AIR_DODGE_DURATION_TICKS,
+  AIR_DODGE_SPEED,
+  AIR_DODGES_PER_AIRTIME,
   BULLET_HALF_WIDTH,
   BULLET_ID_MAX,
   BULLET_LIFETIME_TICKS,
@@ -14,12 +15,19 @@ import {
   DODGE_DURATION_TICKS,
   DODGE_SPEED,
   DOUBLE_JUMP_SPEED,
+  FALLBACK_BLAST_TILES_DOWN,
+  FALLBACK_BLAST_TILES_SIDE,
+  FALLBACK_BLAST_TILES_UP,
   FIXED_STEP_SECONDS,
   FLOOR_Y,
   GRAVITY_Y,
   INITIAL_DASH_SPEED,
   INITIAL_DASH_TICKS,
   JUMP_SPEED,
+  KO_BLAST_TILES_DOWN,
+  KO_BLAST_TILES_SIDE,
+  KO_BLAST_TILES_UP,
+  KOABLE_DURATION_TICKS,
   MOVE_SPEED,
   PLAYER_COLOR_PALETTE,
   PLAYER_HALF_HEIGHT,
@@ -32,6 +40,7 @@ import {
   SHIELD_RELEASE_COOLDOWN_TICKS,
   SKID_TICKS,
   TICK_RATE,
+  TILE_SIZE,
   type CharacterId,
   characterIdFromIndex,
   characterIdToIndex,
@@ -94,6 +103,8 @@ export interface PlayerRenderState {
   activeWeaponAttack: { defKind: ItemKind; ticksRemaining: number } | null;
   shieldActive: boolean;
   shieldHp: number;
+  koableTicksRemaining: number;
+  knockbackTicksRemaining: number;
 }
 
 export interface ItemRenderState {
@@ -272,17 +283,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       shieldBlockedSinceRaise: boolean;
       shieldBrokenLockoutTicks: number;
       shieldReleaseCooldownTicks: number;
+      koableTicksRemaining: number;
+      airDodgesRemaining: number;
     }
   >();
   private readonly deserializeIdsScratch: string[] = [];
   private readonly stepIdsScratch: string[] = [];
 
-  constructor(map: TiledMapDefinition) {
+  constructor(map: TiledMapDefinition, options?: { startingStocks?: number }) {
     this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
     this.createStaticLevel();
     this.initializeItemSlots();
+    if (options?.startingStocks !== undefined) {
+      this.matchState.setStartingStocks(options.startingStocks);
+    }
   }
 
   setVolume(volume: number): void {
@@ -303,6 +319,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.stageOutAudioPool.forEach((audio) => {
       audio.volume = 0.8 * this.masterVolume;
     });
+  }
+
+  setStartingStocks(stocks: number): void {
+    this.matchState.setStartingStocks(stocks);
   }
 
   private getOrCacheIdBytes(id: string): Uint8Array {
@@ -377,6 +397,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint8(offset, record.shieldBlockedSinceRaise ? 1 : 0); offset += 1;
       view.setUint16(offset, Math.min(0xffff, record.shieldBrokenLockoutTicks), true); offset += 2;
       view.setUint16(offset, Math.min(0xffff, record.shieldReleaseCooldownTicks), true); offset += 2;
+      view.setUint16(offset, Math.min(0xffff, record.koableTicksRemaining), true); offset += 2;
+      view.setUint8(offset, record.airDodgesRemaining & 0xff); offset += 1;
 
       offset = this.matchState.writePlayer(view, offset, id);
     }
@@ -482,6 +504,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const shieldBlockedSinceRaise = view.getUint8(offset) !== 0; offset += 1;
       const shieldBrokenLockoutTicks = view.getUint16(offset, true); offset += 2;
       const shieldReleaseCooldownTicks = view.getUint16(offset, true); offset += 2;
+      const koableTicksRemaining = view.getUint16(offset, true); offset += 2;
+      const airDodgesRemaining = view.getUint8(offset); offset += 1;
 
       incoming.set(id, {
         x,
@@ -514,6 +538,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         shieldBlockedSinceRaise,
         shieldBrokenLockoutTicks,
         shieldReleaseCooldownTicks,
+        koableTicksRemaining,
+        airDodgesRemaining,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -563,6 +589,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.shieldBlockedSinceRaise = state.shieldBlockedSinceRaise;
       record.shieldBrokenLockoutTicks = state.shieldBrokenLockoutTicks;
       record.shieldReleaseCooldownTicks = state.shieldReleaseCooldownTicks;
+      record.koableTicksRemaining = state.koableTicksRemaining;
+      record.airDodgesRemaining = state.airDodgesRemaining;
 
       // Reconstruct activeWeaponAttack from the serialized ticks + current heldItem
       if (state.activeWeaponAttackTicksRemaining > 0 && state.heldItem > 0) {
@@ -785,6 +813,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
             : null,
           shieldActive: record.shieldActive,
           shieldHp: record.shieldHp,
+          koableTicksRemaining: record.koableTicksRemaining,
+          knockbackTicksRemaining: record.knockbackTicksRemaining,
         };
       });
 
@@ -1075,7 +1105,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     // 1. Active dodge: maintain burst velocity, decrement, ignore other input.
     if (record.dodgeTicksRemaining > 0) {
-      body.setLinvel({ x: record.facing * DODGE_SPEED, y: velocity.y }, true);
+      // Pin horizontal slide on the ground; let physics carry the launched
+      // 2D velocity of an air dodge so it can travel diagonally / vertically.
+      if (grounded) {
+        body.setLinvel({ x: record.facing * DODGE_SPEED, y: velocity.y }, true);
+      }
       record.dodgeTicksRemaining -= 1;
       this.previousInputFlags.set(id, inputFlags);
       return;
@@ -1195,15 +1229,42 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       this.resolvePunchHits(id, definition);
     }
 
-    // 5. Dodge initiation (Shift).
+    // 5. Dodge initiation (Shift). 8-way: WASD/arrows pick the direction;
+    // airborne dodge uses separate speed/duration values and is limited per
+    // airtime so it doubles as a recovery tool.
     if (dodgePressed && record.canDodge()) {
-      const dodgeDir = horizontalDir !== 0 ? horizontalDir : record.facing;
-      record.facing = dodgeDir;
-      record.dodgeTicksRemaining = DODGE_DURATION_TICKS;
-      record.dodgeCooldownTicks = DODGE_COOLDOWN_TICKS;
-      body.setLinvel({ x: dodgeDir * DODGE_SPEED, y: velocity.y }, true);
-      this.previousInputFlags.set(id, inputFlags);
-      return;
+      const jumpHeldNow = (inputFlags & InputBits.Jump) !== 0;
+      let dx = horizontalDir;
+      let dy = (jumpHeldNow ? 1 : 0) + (ducking ? -1 : 0);
+      if (dx === 0 && dy === 0) {
+        dx = record.facing;
+      }
+      const len = Math.hypot(dx, dy) || 1;
+      const ndx = dx / len;
+      const ndy = dy / len;
+
+      if (grounded) {
+        record.facing = ndx >= 0 ? 1 : -1;
+        record.dodgeTicksRemaining = DODGE_DURATION_TICKS;
+        record.dodgeCooldownTicks = DODGE_COOLDOWN_TICKS;
+        body.setLinvel({ x: record.facing * DODGE_SPEED, y: velocity.y }, true);
+        this.previousInputFlags.set(id, inputFlags);
+        return;
+      }
+
+      if (record.airDodgesRemaining > 0) {
+        record.airDodgesRemaining -= 1;
+        record.facing = ndx >= 0 ? 1 : -1;
+        record.dodgeTicksRemaining = AIR_DODGE_DURATION_TICKS;
+        record.dodgeCooldownTicks = AIR_DODGE_COOLDOWN_TICKS;
+        body.setLinvel(
+          { x: ndx * AIR_DODGE_SPEED, y: ndy * AIR_DODGE_SPEED },
+          true,
+        );
+        this.previousInputFlags.set(id, inputFlags);
+        return;
+      }
+      // No air dodges left — fall through and let normal airborne control resume.
     }
 
     // Keep facing in sync with held direction outside of the state machine.
@@ -1223,6 +1284,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.moveStateTicks = 0;
       record.moveDirection = 0;
       record.doubleJumpAvailable = true;
+      record.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
     }
 
     let nextVx = velocity.x;
@@ -1376,6 +1438,18 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       if (record.dashInputCooldownTicks > 0) {
         record.dashInputCooldownTicks -= 1;
       }
+      if (record.koableTicksRemaining > 1) {
+        record.koableTicksRemaining -= 1;
+      }
+      // After 3s, touching the ground clears the KOable window. This is what
+      // lets a player who got hit recover and become safe from inner-blast
+      // ring out again.
+      
+      // If not koable and not grounded. Remove KOable
+      if (record.koableTicksRemaining <= 1 && this.isGrounded(record.body, false)){
+        record.koableTicksRemaining = 0;
+      }
+
       if (record.shieldBrokenLockoutTicks > 0) {
         record.shieldBrokenLockoutTicks -= 1;
         if (record.shieldBrokenLockoutTicks === 0) {
@@ -1685,7 +1759,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
 
       const position = record.body.translation();
-      if (!this.isOutsideBlastZone(position)) {
+      const pastOuter = this.outsideOuterBlast(position);
+      const pastInner = pastOuter || this.outsideInnerBlast(position);
+      if (!pastInner) {
+        continue;
+      }
+
+      // Inner blast only kills if the player is in the KOable window.
+      // Outer blast always kills.
+      if (!pastOuter && record.koableTicksRemaining === 0) {
         continue;
       }
 
@@ -1766,17 +1848,31 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return bestSpawn;
   }
 
-  private isOutsideBlastZone(position: { x: number; y: number }): boolean {
+  private outsideInnerBlast(position: { x: number; y: number }): boolean {
     const left = position.x - PLAYER_HALF_WIDTH;
     const right = position.x + PLAYER_HALF_WIDTH;
     const top = position.y + PLAYER_HALF_HEIGHT;
     const bottom = position.y - PLAYER_HALF_HEIGHT;
 
     return (
-      left < this.map.bounds.minX - BLAST_ZONE_SIDE_OFFSET ||
-      right > this.map.bounds.maxX + BLAST_ZONE_SIDE_OFFSET ||
-      top > this.map.bounds.maxY + BLAST_ZONE_UP_OFFSET ||
-      bottom < this.map.bounds.minY - BLAST_ZONE_DOWN_OFFSET
+      left < this.map.bounds.minX - KO_BLAST_TILES_SIDE * TILE_SIZE ||
+      right > this.map.bounds.maxX + KO_BLAST_TILES_SIDE * TILE_SIZE ||
+      top > this.map.bounds.maxY + KO_BLAST_TILES_UP * TILE_SIZE ||
+      bottom < this.map.bounds.minY - KO_BLAST_TILES_DOWN * TILE_SIZE
+    );
+  }
+
+  private outsideOuterBlast(position: { x: number; y: number }): boolean {
+    const left = position.x - PLAYER_HALF_WIDTH;
+    const right = position.x + PLAYER_HALF_WIDTH;
+    const top = position.y + PLAYER_HALF_HEIGHT;
+    const bottom = position.y - PLAYER_HALF_HEIGHT;
+
+    return (
+      left < this.map.bounds.minX - FALLBACK_BLAST_TILES_SIDE * TILE_SIZE ||
+      right > this.map.bounds.maxX + FALLBACK_BLAST_TILES_SIDE * TILE_SIZE ||
+      top > this.map.bounds.maxY + FALLBACK_BLAST_TILES_UP * TILE_SIZE ||
+      bottom < this.map.bounds.minY - FALLBACK_BLAST_TILES_DOWN * TILE_SIZE
     );
   }
 
@@ -1916,6 +2012,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         target.shieldBlockedSinceRaise = false;
         target.shieldBrokenLockoutTicks = SHIELD_BROKEN_LOCKOUT_TICKS;
         target.takeDamage(damage);
+        target.koableTicksRemaining = KOABLE_DURATION_TICKS;
         if (knockbackDirX !== null) {
           this.applyKnockback(target, knockbackDirX);
         }
@@ -1923,6 +2020,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       return target.health;
     }
     target.takeDamage(damage);
+    target.koableTicksRemaining = KOABLE_DURATION_TICKS;
     if (knockbackDirX !== null) {
       this.applyKnockback(target, knockbackDirX);
     }
