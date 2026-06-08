@@ -13,13 +13,18 @@ import {
 import {
   CHARACTER_DISPLAY_NAMES,
   CHARACTER_IDS,
+  DEFAULT_GAME_MODE,
   DEFAULT_STOCKS,
+  GAME_MODES,
+  GAME_MODE_DISPLAY_NAMES,
   MAX_PLAYERS,
   MAX_STOCKS,
   MIN_STOCKS,
   TICK_RATE,
   type CharacterId,
+  type GameMode,
   isCharacterId,
+  isGameMode,
 } from './constants';
 import { defaultCharacterForPlayer, getCharacterPreviewUrl } from './CharacterSprites';
 import { GameRenderer } from './GameRenderer';
@@ -385,6 +390,7 @@ export class MultiplayerApp {
   private readonly lobbyShareUrlValue: HTMLInputElement;
   private readonly lobbyStockSettings: HTMLElement;
   private readonly lobbyStockCountSelect: HTMLSelectElement;
+  private readonly lobbyGameModeSelect: HTMLSelectElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly winnerBanner: HTMLElement;
@@ -431,6 +437,7 @@ export class MultiplayerApp {
   private cameraMode: CameraMode = 'follow';
   private masterVolume = 1;
   private startingStocks: number = DEFAULT_STOCKS;
+  private gameMode: GameMode = DEFAULT_GAME_MODE;
   private koBarEnabled = false;
   private inputDelayFrames = readStoredInputDelayFrames();
   private readonly inputDelayBuffer: Uint8Array[] = [];
@@ -656,6 +663,7 @@ export class MultiplayerApp {
     this.lobbyShareUrlValue = requireElement<HTMLInputElement>(this.root, '#lobbyShareUrlValue');
     this.lobbyStockSettings = requireElement<HTMLElement>(this.root, '#lobbyStockSettings');
     this.lobbyStockCountSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyStockCountSelect');
+    this.lobbyGameModeSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyGameModeSelect');
     this.leaveButton = requireElement<HTMLButtonElement>(
       this.root,
       '#leaveButton',
@@ -805,6 +813,12 @@ export class MultiplayerApp {
         this.setStartingStocks(value);
       }
     });
+    this.lobbyGameModeSelect.addEventListener('change', () => {
+      const value = this.lobbyGameModeSelect.value;
+      if (isGameMode(value)) {
+        this.setGameMode(value, { broadcast: true });
+      }
+    });
     this.lobbyCharacterGrid.addEventListener('click', (event) => {
       const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
         '[data-character-id]',
@@ -860,6 +874,7 @@ export class MultiplayerApp {
     if (!this.game) {
       this.game = new RollbackPhysicsGame(this.mapDefinition, {
         startingStocks: this.startingStocks,
+        gameMode: this.gameMode,
       });
     }
 
@@ -1719,6 +1734,18 @@ export class MultiplayerApp {
         this.assignDefaultCharacterIfMissing(message.peerId);
         this.broadcastLocalCharacterSelection();
         this.broadcastLocalReadyState();
+        // Host owns the game mode — re-broadcast it so the joining peer adopts
+        // it. Without this, joiners stay at DEFAULT_GAME_MODE and their local
+        // sim diverges from the host's (e.g. classic knockback vs smash),
+        // which manifests as rubber-banding and out-of-sync damage percent.
+        if (this.session?.isHost && this.signaling && this.roomId) {
+          this.signaling.send({
+            type: 'lobby_game_mode_select',
+            roomId: this.roomId,
+            peerId: this.peerId,
+            gameMode: this.gameMode,
+          });
+        }
         this.updateUiState();
         break;
 
@@ -1777,6 +1804,16 @@ export class MultiplayerApp {
           this.game?.setCharacterSelection(message.peerId, message.characterId);
         }
         this.updateUiState();
+        break;
+
+      case 'lobby_game_mode_select':
+        if (isGameMode(message.gameMode)) {
+          // Host-authoritative: only adopt if it came from the room host (the
+          // server already enforces this, but check defensively).
+          if (!this.session?.isHost) {
+            this.setGameMode(message.gameMode, { broadcast: false });
+          }
+        }
         break;
 
       case 'room_error':
@@ -1956,6 +1993,27 @@ export class MultiplayerApp {
       ? ' Applies to the next match.'
       : ' Applies to the next match.';
     this.setStatus(`Stocks set to ${clamped}.${syncHint}`);
+  }
+
+  private setGameMode(mode: GameMode, options?: { broadcast?: boolean }): void {
+    this.gameMode = mode;
+    this.lobbyGameModeSelect.value = mode;
+    this.game?.setGameMode(mode);
+    this.smashHud.setGameMode(mode);
+    if (
+      options?.broadcast &&
+      this.session?.isHost &&
+      this.signaling &&
+      this.roomId
+    ) {
+      this.signaling.send({
+        type: 'lobby_game_mode_select',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        gameMode: mode,
+      });
+    }
+    this.setStatus(`Game mode: ${GAME_MODE_DISPLAY_NAMES[mode]}.`);
   }
 
   private setKoBarEnabled(enabled: boolean): void {
@@ -2145,6 +2203,7 @@ export class MultiplayerApp {
       this.game.reset();
       this.game = new RollbackPhysicsGame(this.mapDefinition, {
         startingStocks: this.startingStocks,
+        gameMode: this.gameMode,
       });
     }
   }
@@ -2162,6 +2221,11 @@ export class MultiplayerApp {
       const n = MIN_STOCKS + i;
       const selected = n === DEFAULT_STOCKS ? ' selected' : '';
       return `<option value="${n}"${selected}>${n}</option>`;
+    }).join('');
+
+    const gameModeOptions = GAME_MODES.map((mode) => {
+      const selected = mode === DEFAULT_GAME_MODE ? ' selected' : '';
+      return `<option value="${mode}"${selected}>${GAME_MODE_DISPLAY_NAMES[mode]}</option>`;
     }).join('');
 
     return `
@@ -2191,6 +2255,10 @@ export class MultiplayerApp {
                 <label class="select-field lobby-stock-field">
                   <span>Stocks per player</span>
                   <select id="lobbyStockCountSelect">${stockOptions}</select>
+                </label>
+                <label class="select-field lobby-gamemode-field">
+                  <span>Game mode</span>
+                  <select id="lobbyGameModeSelect">${gameModeOptions}</select>
                 </label>
               </div>
               <div class="lobby-actions">

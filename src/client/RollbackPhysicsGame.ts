@@ -39,9 +39,20 @@ import {
   SHIELD_RECHARGE_PER_TICK,
   SHIELD_RELEASE_COOLDOWN_TICKS,
   SKID_TICKS,
+  SMASH_DEFAULT_BASE_KNOCKBACK,
+  SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
+  SMASH_KB_GROWTH_MULT,
+  SMASH_KB_HITSTUN_BIAS,
+  SMASH_KB_LETHAL_MULTIPLIER,
+  SMASH_KB_LETHAL_RESTITUTION,
+  SMASH_KB_OUTPUT_SCALE,
+  SMASH_LETHAL_NOCLIP_DELAY_TICKS,
+  SMASH_MAX_DAMAGE_PCT,
   TICK_RATE,
   TILE_SIZE,
   type CharacterId,
+  type GameMode,
+  DEFAULT_GAME_MODE,
   characterIdFromIndex,
   characterIdToIndex,
 } from './constants';
@@ -105,6 +116,10 @@ export interface PlayerRenderState {
   shieldHp: number;
   koableTicksRemaining: number;
   knockbackTicksRemaining: number;
+  /** Smash-mode damage accumulator (0..SMASH_MAX_DAMAGE_PCT+). */
+  damagePct: number;
+  /** True while this player is in the lethal-launch rocket state. */
+  inLethalLaunch: boolean;
 }
 
 export interface ItemRenderState {
@@ -234,6 +249,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private roundStartCountdownTicks = 0;
   private previousConnectedPlayerCount = 0;
   private readonly pendingCharacterIds = new Map<string, CharacterId>();
+  private gameMode: GameMode = DEFAULT_GAME_MODE;
 
   // Hot-path scratch storage. Reused across every serialize/deserialize/step
   // call to eliminate per-tick allocations that GC-pause rollback resimulation.
@@ -285,12 +301,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       shieldReleaseCooldownTicks: number;
       koableTicksRemaining: number;
       airDodgesRemaining: number;
+      damagePct: number;
+      inLethalLaunch: boolean;
+      lethalLaunchTicks: number;
     }
   >();
   private readonly deserializeIdsScratch: string[] = [];
   private readonly stepIdsScratch: string[] = [];
 
-  constructor(map: TiledMapDefinition, options?: { startingStocks?: number }) {
+  constructor(map: TiledMapDefinition, options?: { startingStocks?: number; gameMode?: GameMode }) {
     this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
     this.world.timestep = FIXED_STEP_SECONDS;
@@ -298,6 +317,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.initializeItemSlots();
     if (options?.startingStocks !== undefined) {
       this.matchState.setStartingStocks(options.startingStocks);
+    }
+    if (options?.gameMode !== undefined) {
+      this.gameMode = options.gameMode;
     }
   }
 
@@ -323,6 +345,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   setStartingStocks(stocks: number): void {
     this.matchState.setStartingStocks(stocks);
+  }
+
+  setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
+  }
+
+  getGameMode(): GameMode {
+    return this.gameMode;
   }
 
   private getOrCacheIdBytes(id: string): Uint8Array {
@@ -399,6 +429,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       view.setUint16(offset, Math.min(0xffff, record.shieldReleaseCooldownTicks), true); offset += 2;
       view.setUint16(offset, Math.min(0xffff, record.koableTicksRemaining), true); offset += 2;
       view.setUint8(offset, record.airDodgesRemaining & 0xff); offset += 1;
+      view.setFloat32(offset, record.damagePct, true); offset += 4;
+      view.setUint8(offset, record.inLethalLaunch ? 1 : 0); offset += 1;
+      view.setUint16(offset, Math.min(0xffff, record.lethalLaunchTicks), true); offset += 2;
 
       offset = this.matchState.writePlayer(view, offset, id);
     }
@@ -506,6 +539,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const shieldReleaseCooldownTicks = view.getUint16(offset, true); offset += 2;
       const koableTicksRemaining = view.getUint16(offset, true); offset += 2;
       const airDodgesRemaining = view.getUint8(offset); offset += 1;
+      const damagePct = view.getFloat32(offset, true); offset += 4;
+      const inLethalLaunch = view.getUint8(offset) !== 0; offset += 1;
+      const lethalLaunchTicks = view.getUint16(offset, true); offset += 2;
 
       incoming.set(id, {
         x,
@@ -540,6 +576,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         shieldReleaseCooldownTicks,
         koableTicksRemaining,
         airDodgesRemaining,
+        damagePct,
+        inLethalLaunch,
+        lethalLaunchTicks,
       });
 
       offset = this.matchState.readPlayer(view, offset, id);
@@ -591,6 +630,12 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       record.shieldReleaseCooldownTicks = state.shieldReleaseCooldownTicks;
       record.koableTicksRemaining = state.koableTicksRemaining;
       record.airDodgesRemaining = state.airDodgesRemaining;
+      record.damagePct = state.damagePct;
+      const wasLethalLaunch = record.inLethalLaunch;
+      record.inLethalLaunch = state.inLethalLaunch;
+      record.lethalLaunchTicks = state.lethalLaunchTicks;
+      // Re-sync collider state to the deserialized lethal-launch flag.
+      this.syncLethalLaunchColliderState(record, wasLethalLaunch);
 
       // Reconstruct activeWeaponAttack from the serialized ticks + current heldItem
       if (state.activeWeaponAttackTicksRemaining > 0 && state.heldItem > 0) {
@@ -734,11 +779,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         y: position.y,
       });
 
+      // While in the lethal-launch state, inputs are ignored. This keeps
+      // the rollback sim cheap during the 10x knockback fly-out.
+      if (record.inLethalLaunch) {
+        continue;
+      }
       this.applyInput(id, inputFlags);
     }
 
     this.tickAttacks();
     this.tickBullets();
+    this.updateLethalLaunches();
     this.world.step();
     this.resolvePlatformContacts(previousStates);
     this.syncHorizontalMovement(ids, inputs, previousStates);
@@ -815,6 +866,8 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           shieldHp: record.shieldHp,
           koableTicksRemaining: record.koableTicksRemaining,
           knockbackTicksRemaining: record.knockbackTicksRemaining,
+          damagePct: record.damagePct,
+          inLethalLaunch: record.inLethalLaunch,
         };
       });
 
@@ -938,6 +991,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
       if (record.dodgeTicksRemaining > 0 || record.shieldActive) {
+        continue;
+      }
+      // Don't reel a Smash-mode victim back to MOVE_SPEED while they're being
+      // launched — the SSB knockback owns their velocity during hitstun.
+      if (this.gameMode === 'smash' && record.knockbackTicksRemaining > 0) {
         continue;
       }
 
@@ -1081,6 +1139,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private applyInput(id: string, inputFlags: number): void {
     const record = this.players.get(id);
     if (!record) {
+      return;
+    }
+
+    // Smash-mode hitstun: while a victim is mid-knockback, don't run the
+    // move-state machine at all. Otherwise its per-tick velocity write would
+    // clobber the launch impulse and the launch angle collapses to vertical.
+    if (this.gameMode === 'smash' && record.knockbackTicksRemaining > 0) {
+      this.previousInputFlags.set(id, inputFlags);
       return;
     }
 
@@ -1549,7 +1615,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           if (this.matchState.canTakeDamage(hitPlayerId)) {
             const target = this.players.get(hitPlayerId);
             if (target) {
-              const nextHealth = this.applyDamageWithShield(target, bullet.damage, null);
+              const nextHealth = this.applyDamageWithShield(target, bullet.damage, null, {
+                baseKnockback: weaponDef?.baseKnockback,
+                launchAngleDeg: weaponDef?.launchAngleDeg,
+              });
               const shooter = this.players.get(bullet.ownerId);
               if (bullet.reloadOnHit && shooter) {
                 shooter.reloadPending = false;
@@ -1586,6 +1655,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
               target,
               bullet.damage,
               Math.sign(bullet.vx) || 1,
+              {
+                baseKnockback: weaponDef?.baseKnockback,
+                launchAngleDeg: weaponDef?.launchAngleDeg,
+              },
             );
             const shooter = this.players.get(bullet.ownerId);
             if (bullet.reloadOnHit && shooter) {
@@ -1765,9 +1838,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
-      // Inner blast only kills if the player is in the KOable window.
+      // Inner blast only kills if the player is in the KOable window OR
+      // they're in the smash-mode lethal-launch state (already condemned).
       // Outer blast always kills.
-      if (!pastOuter && record.koableTicksRemaining === 0) {
+      if (!pastOuter && record.koableTicksRemaining === 0 && !record.inLethalLaunch) {
         continue;
       }
 
@@ -1793,7 +1867,11 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
 
       const spawnPoint = this.chooseRespawnPoint(playerId);
+      const wasInLethal = record.inLethalLaunch;
       record.reset();
+      // record.reset() clears inLethalLaunch; resync collider state to
+      // restore restitution + disable sensor-mode if we had transitioned.
+      this.syncLethalLaunchColliderState(record, wasInLethal);
       record.body.setTranslation(
         { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
         true,
@@ -1999,6 +2077,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     target: PlayerCharacter,
     damage: number,
     knockbackDirX: number | null,
+    attackMeta?: { baseKnockback?: number; launchAngleDeg?: number },
   ): number {
     if (target.dodgeTicksRemaining > 0) {
       return target.health;
@@ -2011,23 +2090,49 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         target.shieldActive = false;
         target.shieldBlockedSinceRaise = false;
         target.shieldBrokenLockoutTicks = SHIELD_BROKEN_LOCKOUT_TICKS;
-        target.takeDamage(damage);
+        this.absorbDamage(target, damage);
         target.koableTicksRemaining = KOABLE_DURATION_TICKS;
         if (knockbackDirX !== null) {
-          this.applyKnockback(target, knockbackDirX);
+          this.applyKnockback(target, knockbackDirX, damage, attackMeta);
         }
       }
       return target.health;
     }
-    target.takeDamage(damage);
+    this.absorbDamage(target, damage);
     target.koableTicksRemaining = KOABLE_DURATION_TICKS;
     if (knockbackDirX !== null) {
-      this.applyKnockback(target, knockbackDirX);
+      this.applyKnockback(target, knockbackDirX, damage, attackMeta);
     }
     return target.health;
   }
 
-  private applyKnockback(target: PlayerCharacter, directionX: number): void {
+  /**
+   * Classic: subtracts from `health`.
+   * Smash: accumulates `damagePct` (and leaves `health` at full so existing
+   * health-based code paths like `handleHealthDamage` stay no-ops).
+   */
+  private absorbDamage(target: PlayerCharacter, damage: number): void {
+    if (this.gameMode === 'smash') {
+      target.damagePct = Math.max(0, target.damagePct + Math.max(0, damage));
+    } else {
+      target.takeDamage(damage);
+    }
+  }
+
+  private applyKnockback(
+    target: PlayerCharacter,
+    directionX: number,
+    attackDamage: number,
+    attackMeta?: { baseKnockback?: number; launchAngleDeg?: number },
+  ): void {
+    if (this.gameMode === 'smash') {
+      this.applySmashKnockback(target, directionX, attackDamage, attackMeta);
+    } else {
+      this.applyClassicKnockback(target, directionX);
+    }
+  }
+
+  private applyClassicKnockback(target: PlayerCharacter, directionX: number): void {
     const healthFraction = target.health / target.maxHealth;
     const magnitude = KNOCKBACK_BASE + KNOCKBACK_SCALE * (1 - healthFraction);
     const currentVel = target.body.linvel();
@@ -2039,6 +2144,115 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       },
       true,
     );
+  }
+
+  /**
+   * SSB-style knockback. Formula:
+   *   KB = ((p/10 + p*d/20) * 200/(w+100) * 1.4) + 18 + b
+   * (knockback scaling `s` and other-scalers `r` fixed at 1)
+   *
+   * When the victim is already at or above SMASH_MAX_DAMAGE_PCT *before* this
+   * hit, multiply the result by SMASH_KB_LETHAL_MULTIPLIER and enter the
+   * lethal-launch state (input locked, restitution=1, collisions disabled
+   * after a brief delay so they noclip to the blast zone).
+   */
+  private applySmashKnockback(
+    target: PlayerCharacter,
+    directionX: number,
+    attackDamage: number,
+    attackMeta?: { baseKnockback?: number; launchAngleDeg?: number },
+  ): void {
+    // Was the victim already over the lethal threshold *before* this hit?
+    const damageBeforeHit = target.damagePct - Math.max(0, attackDamage);
+    const wasLethal = damageBeforeHit >= SMASH_MAX_DAMAGE_PCT;
+
+    const p = target.damagePct;
+    const d = attackDamage;
+    const w = target.weight > 0 ? target.weight : 1;
+    const b = attackMeta?.baseKnockback ?? SMASH_DEFAULT_BASE_KNOCKBACK;
+
+    let kb = ((p / 10 + (p * d) / 20) * (200 / (w + 100)) * SMASH_KB_GROWTH_MULT)
+      + SMASH_KB_HITSTUN_BIAS
+      + b;
+    // Global output scale ("r" term). Tune in constants.ts.
+    kb *= SMASH_KB_OUTPUT_SCALE;
+
+    if (wasLethal) {
+      kb *= SMASH_KB_LETHAL_MULTIPLIER;
+      const wasInLethal = target.inLethalLaunch;
+      target.inLethalLaunch = true;
+      target.lethalLaunchTicks = 0;
+      this.syncLethalLaunchColliderState(target, wasInLethal);
+    }
+
+    const angleDeg = attackMeta?.launchAngleDeg ?? SMASH_DEFAULT_LAUNCH_ANGLE_DEG;
+    const ang = (angleDeg * Math.PI) / 180;
+    const cur = target.body.linvel();
+    target.knockbackTicksRemaining = 6;
+    target.body.setLinvel(
+      {
+        x: cur.x + directionX * kb * Math.cos(ang),
+        y: cur.y + kb * Math.sin(ang),
+      },
+      true,
+    );
+  }
+
+  /**
+   * Reapply collider mutations (restitution, sensor) so they reflect the
+   * player's current `inLethalLaunch` + `lethalLaunchTicks`. Idempotent —
+   * safe to call after deserialize as well as on state transitions.
+   * `wasInLethal` is unused but retained for callsite clarity.
+   */
+  private syncLethalLaunchColliderState(target: PlayerCharacter, _wasInLethal: boolean): void {
+    void _wasInLethal;
+    const wantSensor =
+      target.inLethalLaunch && target.lethalLaunchTicks >= SMASH_LETHAL_NOCLIP_DELAY_TICKS;
+    const wantRestitution = target.inLethalLaunch ? SMASH_KB_LETHAL_RESTITUTION : 0;
+    for (let i = 0; i < target.body.numColliders(); i += 1) {
+      const collider = target.body.collider(i);
+      collider.setRestitution(wantRestitution);
+      collider.setSensor(wantSensor);
+    }
+  }
+
+  /**
+   * Per-tick: advance lethal-launch timers, flip colliders to sensors after
+   * the noclip delay so the rocket-launched victim passes through stage
+   * geometry until the blast zone kills them.
+   */
+  private updateLethalLaunches(): void {
+    if (this.gameMode !== 'smash') return;
+    for (const p of this.players.values()) {
+      if (!p.inLethalLaunch) continue;
+      p.lethalLaunchTicks += 1;
+      if (p.lethalLaunchTicks === SMASH_LETHAL_NOCLIP_DELAY_TICKS) {
+        this.syncLethalLaunchColliderState(p, true);
+      }
+    }
+  }
+
+  /**
+   * Public hook for future explosion implementations. Applies damage and
+   * knockback radially from `(centerX, centerY)`.
+   */
+  applyExplosionDamage(
+    centerX: number,
+    centerY: number,
+    radius: number,
+    damage: number,
+    options?: { baseKnockback?: number; launchAngleDeg?: number },
+  ): void {
+    const r2 = radius * radius;
+    for (const [id, p] of this.players) {
+      if (!this.matchState.canTakeDamage(id)) continue;
+      const pos = p.body.translation();
+      const dx = pos.x - centerX;
+      const dy = pos.y - centerY;
+      if (dx * dx + dy * dy > r2) continue;
+      const dirX = Math.sign(dx) || 1;
+      this.applyDamageWithShield(p, damage, dirX, options);
+    }
   }
 
   private resolvePunchHits(attackerId: string, definition: AttackDefinition): void {
@@ -2066,7 +2280,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.y - center.y) < overlapHalfHeight
       ) {
         const knockDir = Math.sign(targetPos.x - center.x) || attacker.facing;
-        this.applyDamageWithShield(target, definition.damage, knockDir);
+        this.applyDamageWithShield(target, definition.damage, knockDir, {
+          baseKnockback: definition.baseKnockback,
+          launchAngleDeg: definition.launchAngleDeg,
+        });
       }
     }
   }
@@ -2089,7 +2306,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         Math.abs(targetPos.x - cx) < overlapHalfWidth &&
         Math.abs(targetPos.y - cy) < overlapHalfHeight
       ) {
-        this.applyDamageWithShield(target, def.damage, attacker.facing);
+        this.applyDamageWithShield(target, def.damage, attacker.facing, {
+          baseKnockback: def.baseKnockback,
+          launchAngleDeg: def.launchAngleDeg,
+        });
       }
     }
   }
@@ -2272,6 +2492,10 @@ private colorForPlayer(playerId: string): number {
   private recoverSoloPlayer(record: PlayerCharacter): void {
     const spawnPoint = this.spawnPointForPlayer(record.id);
     record.health = record.maxHealth;
+    record.damagePct = 0;
+    const wasInLethal = record.inLethalLaunch;
+    record.inLethalLaunch = false;
+    this.syncLethalLaunchColliderState(record, wasInLethal);
     record.body.setTranslation(
       { x: spawnPoint.x, y: spawnPoint.feetY + PLAYER_HALF_HEIGHT },
       true,

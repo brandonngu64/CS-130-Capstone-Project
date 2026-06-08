@@ -48,6 +48,12 @@ type ClientMessage =
       roomId: string;
       peerId: string;
       characterId: string;
+    }
+  | {
+      type: 'lobby_game_mode_select';
+      roomId: string;
+      peerId: string;
+      gameMode: string;
     };
 
 type ServerMessage =
@@ -95,6 +101,12 @@ type ServerMessage =
       roomId: string;
       peerId: string;
       characterId: string;
+    }
+  | {
+      type: 'lobby_game_mode_select';
+      roomId: string;
+      peerId: string;
+      gameMode: string;
     };
 
 type Room = {
@@ -203,6 +215,9 @@ websocketServer.on('connection', (socket) => {
         break;
       case 'lobby_character_select':
         relayLobbyCharacterSelect(socket, message);
+        break;
+      case 'lobby_game_mode_select':
+        relayLobbyGameModeSelect(socket, message);
         break;
       default:
         break;
@@ -676,6 +691,57 @@ function relayLobbyCharacterSelect(
     roomId: message.roomId,
     peerId: message.peerId,
     characterId: message.characterId,
+  });
+}
+
+function relayLobbyGameModeSelect(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_game_mode_select' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update game mode for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room) {
+    send(socket, {
+      type: 'room_error',
+      code: 'ROOM_NOT_FOUND',
+      message: 'Cannot update game mode: room does not exist',
+    });
+    return;
+  }
+
+  if (!room.members.has(message.peerId)) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_IN_ROOM',
+      message: 'Cannot update game mode while outside this room',
+    });
+    return;
+  }
+
+  // Only the host is allowed to set the game mode for the room.
+  if (message.peerId !== room.hostPeerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_HOST',
+      message: 'Only the host can change the game mode',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_game_mode_select',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    gameMode: message.gameMode,
   });
 }
 

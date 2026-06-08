@@ -1,7 +1,12 @@
 import type { RigidBody } from '@dimforge/rapier2d-compat';
 import { AttackKind } from './attacks';
 import type { CharacterId } from './constants';
-import { AIR_DODGES_PER_AIRTIME, DEFAULT_CHARACTER_ID, SHIELD_MAX_HP } from './constants';
+import {
+  AIR_DODGES_PER_AIRTIME,
+  DEFAULT_CHARACTER_ID,
+  SHIELD_MAX_HP,
+  SMASH_DEFAULT_WEIGHT,
+} from './constants';
 import { ItemKind, whipHitboxActive } from './items';
 import type { WeaponDefinition } from './items';
 import { PLAYER_MAX_HEALTH } from './constants';
@@ -68,6 +73,16 @@ export class PlayerCharacter {
   public shieldBrokenLockoutTicks: number;
   public shieldReleaseCooldownTicks: number;
 
+  // Smash-mode damage accumulator (0..SMASH_MAX_DAMAGE_PCT+). Unused in Classic.
+  public damagePct: number;
+  // SSB-formula weight. Uniform across characters for now.
+  public weight: number;
+  // True while the player has been launched lethally and is rocketing offstage.
+  // While set, inputs are ignored and the collider eventually noclips through stage geometry.
+  public inLethalLaunch: boolean;
+  // Ticks elapsed since entering inLethalLaunch (used for the noclip delay).
+  public lethalLaunchTicks: number;
+
   constructor(
     id: string,
     body: RigidBody,
@@ -107,6 +122,10 @@ export class PlayerCharacter {
     this.shieldBlockedSinceRaise = false;
     this.shieldBrokenLockoutTicks = 0;
     this.shieldReleaseCooldownTicks = 0;
+    this.damagePct = 0;
+    this.weight = SMASH_DEFAULT_WEIGHT;
+    this.inLethalLaunch = false;
+    this.lethalLaunchTicks = 0;
   }
 
   takeDamage(amount: number): number {
@@ -217,5 +236,8 @@ export class PlayerCharacter {
     this.shieldBlockedSinceRaise = false;
     this.shieldBrokenLockoutTicks = 0;
     this.shieldReleaseCooldownTicks = 0;
+    this.damagePct = 0;
+    this.inLethalLaunch = false;
+    this.lethalLaunchTicks = 0;
   }
 }

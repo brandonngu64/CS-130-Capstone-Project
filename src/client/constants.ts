@@ -111,3 +111,47 @@ export function characterIdFromIndex(index: number): CharacterId {
   const normalized = ((index % CHARACTER_IDS.length) + CHARACTER_IDS.length) % CHARACTER_IDS.length;
   return CHARACTER_IDS[normalized];
 }
+
+// ─── Game modes ─────────────────────────────────────────────────────────────
+export const GAME_MODES = ['classic', 'smash'] as const;
+export type GameMode = (typeof GAME_MODES)[number];
+export const DEFAULT_GAME_MODE: GameMode = 'classic';
+export const GAME_MODE_DISPLAY_NAMES: Record<GameMode, string> = {
+  classic: 'Classic',
+  smash: 'Smash',
+};
+export function isGameMode(value: string): value is GameMode {
+  return (GAME_MODES as readonly string[]).includes(value);
+}
+
+// ─── Smash-mode tuning (tweak here) ─────────────────────────────────────────
+// Damage accumulator threshold above which the next hit is lethal.
+export const SMASH_MAX_DAMAGE_PCT = 300;
+// Uniform character weight used in the SSB knockback formula.
+export const SMASH_DEFAULT_WEIGHT = 100;
+// Per-weapon "b" term in the SSB knockback formula. Override on individual
+// AttackDefinition / WeaponDefinition entries to retune a specific weapon.
+export const SMASH_DEFAULT_BASE_KNOCKBACK = 10;
+// Launch angle in degrees if a weapon doesn't specify its own.
+export const SMASH_DEFAULT_LAUNCH_ANGLE_DEG = 45;
+// "b" term used by the default punch (no-weapon melee). Tweak independently
+// of SMASH_DEFAULT_BASE_KNOCKBACK so the bare-hands punch can be tuned to a
+// different feel than equipped weapons.
+export const PUNCH_BASE_KNOCKBACK = 20;
+// Launch angle for the default punch.
+export const PUNCH_LAUNCH_ANGLE_DEG = 45;
+// "+18" hitstun-bias constant from the SSB knockback formula.
+export const SMASH_KB_HITSTUN_BIAS = 18;
+// "*1.4" growth multiplier from the SSB knockback formula.
+export const SMASH_KB_GROWTH_MULT = 1.4;
+// Global output scale on every Smash-mode knockback. Reduce this (e.g. 0.1)
+// to dial back KB everywhere at once without touching the formula constants.
+// Plays the role of the "r" (other-scalers) term in the SSB formula.
+export const SMASH_KB_OUTPUT_SCALE = 0.25;
+// Multiplier applied to a victim's knockback once they cross SMASH_MAX_DAMAGE_PCT.
+export const SMASH_KB_LETHAL_MULTIPLIER = 100;
+// Collider restitution applied during the lethal-launch state.
+export const SMASH_KB_LETHAL_RESTITUTION = 1.0;
+// Ticks after entering the lethal-launch state before the victim noclips
+// through stage geometry until reaching a blast zone.
+export const SMASH_LETHAL_NOCLIP_DELAY_TICKS = TICK_RATE * 0.5;
