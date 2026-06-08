@@ -90,7 +90,6 @@ export interface TileMetadata {
   collision: TileCollision;
   renderVisible: boolean;
   specialRole: TileSpecialRole;
-  tintColor: number | null;
   uv: UvRect;
   visible: boolean;
   zLayerPos: number;
@@ -340,14 +339,12 @@ function buildTileMetadata(tileset: ResolvedTileset, localId: number): TileMetad
     typeof properties.special_role === 'string' ? properties.special_role : null;
   const zLayerPos = typeof properties.z_layer_pos === 'number' ? properties.z_layer_pos : 0;
   const collision = visible ? parseCollisionValue(properties.collision) : 0;
-  const tintColor = parseColorValue(properties.tintcolor);
 
   return {
     collision,
     renderVisible:
       visible && specialRole !== 'player_spawn' && specialRole !== 'item_spawn',
     specialRole,
-    tintColor,
     uv: createUvRect(tileset, localId),
     visible,
     zLayerPos,
@@ -640,7 +637,7 @@ function buildLayerInstances(
           tileX,
           tileY,
           tilesetId: tileRecord.tileset.id,
-          tintColor: resolvedTile.tintColor ?? tintColor,
+          tintColor,
           uv: resolvedTile.uv,
           x: worldX,
           y: worldY,

@@ -1,6 +1,11 @@
 import { getCharacterSpriteUrl } from './CharacterSprites';
 import type { PlayerRenderState } from './RollbackPhysicsGame';
-import { KOABLE_DURATION_TICKS } from './constants';
+import {
+  DEFAULT_GAME_MODE,
+  KOABLE_DURATION_TICKS,
+  SMASH_MAX_DAMAGE_PCT,
+  type GameMode,
+} from './constants';
 
 const PIP_DISPLAY_THRESHOLD = 4;
 
@@ -8,17 +13,22 @@ function colorToCss(hex: number): string {
   return `#${hex.toString(16).padStart(6, '0')}`;
 }
 
-function healthColor(health: number, maxHealth: number): string {
-  const ratio = maxHealth > 0 ? Math.max(0, Math.min(1, health / maxHealth)) : 0;
-  const r = Math.round(255 * ratio + 139 * (1 - ratio));
-  const g = Math.round(255 * ratio);
-  const b = Math.round(255 * ratio);
+/**
+ * Classic: ratio = health/maxHealth, so green at full HP and red at 0.
+ * Smash: ratio = 1 - damagePct/SMASH_MAX_DAMAGE_PCT, so green at 0% and red at 300%.
+ */
+function healthColor(ratio: number): string {
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const r = Math.round(255 * clamped + 139 * (1 - clamped));
+  const g = Math.round(255 * clamped);
+  const b = Math.round(255 * clamped);
   return `rgb(${r},${g},${b})`;
 }
 
 export class SmashHud {
   private readonly element: HTMLElement;
   private koBarEnabled = false;
+  private gameMode: GameMode = DEFAULT_GAME_MODE;
 
   constructor(parent: HTMLElement) {
     this.element = document.createElement('div');
@@ -33,6 +43,10 @@ export class SmashHud {
 
   setKoBarEnabled(enabled: boolean): void {
     this.koBarEnabled = enabled;
+  }
+
+  setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
   }
 
   update(players: readonly PlayerRenderState[], localPlayerId: string): void {
@@ -83,9 +97,19 @@ export class SmashHud {
   }
 
   private renderCard(player: PlayerRenderState): string {
-    const healthPct =
-      player.maxHealth > 0 ? Math.round((player.health / player.maxHealth) * 100) : 0;
-    const color = healthColor(player.health, player.maxHealth);
+    let healthPct: number;
+    let colorRatio: number;
+    if (this.gameMode === 'smash') {
+      healthPct = Math.round(Math.max(0, player.damagePct));
+      colorRatio = SMASH_MAX_DAMAGE_PCT > 0
+        ? 1 - Math.min(1, Math.max(0, player.damagePct) / SMASH_MAX_DAMAGE_PCT)
+        : 1;
+    } else {
+      healthPct =
+        player.maxHealth > 0 ? Math.round((player.health / player.maxHealth) * 100) : 0;
+      colorRatio = player.maxHealth > 0 ? player.health / player.maxHealth : 0;
+    }
+    const color = healthColor(colorRatio);
     const playerColor = colorToCss(player.color);
 
     let headshot = '';

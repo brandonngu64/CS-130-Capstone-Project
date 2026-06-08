@@ -1,4 +1,8 @@
-import { PLAYER_HALF_WIDTH } from './constants';
+import {
+  PLAYER_HALF_WIDTH,
+  PUNCH_BASE_KNOCKBACK,
+  PUNCH_LAUNCH_ANGLE_DEG,
+} from './constants';
 
 /** Placeholder sprite color for the default punch hitbox. */
 export const PUNCH_PLACEHOLDER_COLOR = 0xffffff;
@@ -17,6 +21,10 @@ export interface AttackDefinition {
   centerOffsetX: number;
   centerOffsetY: number;
   spriteColor: number;
+  /** Smash-mode "b" term in the SSB knockback formula. */
+  baseKnockback?: number;
+  /** Smash-mode launch angle, in degrees, measured from the +X axis. */
+  launchAngleDeg?: number;
 }
 
 const ATTACK_DEFINITIONS: Record<AttackKind, AttackDefinition> = {
@@ -29,6 +37,8 @@ const ATTACK_DEFINITIONS: Record<AttackKind, AttackDefinition> = {
     centerOffsetX: PLAYER_HALF_WIDTH + 0.8,
     centerOffsetY: 0.1,
     spriteColor: PUNCH_PLACEHOLDER_COLOR,
+    baseKnockback: PUNCH_BASE_KNOCKBACK,
+    launchAngleDeg: PUNCH_LAUNCH_ANGLE_DEG,
   },
 };
 

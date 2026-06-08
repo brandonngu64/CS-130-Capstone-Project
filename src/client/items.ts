@@ -1,3 +1,8 @@
+import {
+  SMASH_DEFAULT_BASE_KNOCKBACK,
+  SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
+} from './constants';
+
 export enum ItemKind {
   Gun = 1,
   PenCrossbow = 2134,
@@ -34,6 +39,10 @@ export interface WeaponDefinition {
   projectileSpawnOffsetX?: number;
   projectileSpawnOffsetY?: number;
   projectilePiercePlayers?: boolean;
+  /** Smash-mode "b" term in the SSB knockback formula. */
+  baseKnockback?: number;
+  /** Smash-mode launch angle, in degrees, measured from the +X axis. */
+  launchAngleDeg?: number;
 }
 
 /** Sprite layout for newer weapons (folder name lives in CharacterSprites). */
@@ -78,6 +87,8 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     get durationTicks() {
       return (this.windupTicks ?? 0) + (this.lashTicks ?? 0) + (this.recoilTicks ?? 0);
     },
+    baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK,
+    launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
   },
   [ItemKind.Finals]: {
     kind: 'projectile',
@@ -85,6 +96,8 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     cooldownTicks: 6,
     projectileSpeed: 32,
     projectileLifetimeTicks: 90,
+    baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK,
+    launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
   },
   [ItemKind.BinaryBeam]: {
     kind: 'projectile',
@@ -97,6 +110,8 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     projectileSpawnOffsetX: 2.0,
     projectileSpawnOffsetY: 0.15,
     projectilePiercePlayers: true,
+    baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK,
+    launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
   },
 };
 
