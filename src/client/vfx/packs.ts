@@ -36,3 +36,18 @@ export const COUNTDOWN_PACK: VFXPackDef = {
 // at that rate. Tune here if the art is ever re-cut.
 export const COUNTDOWN_VFX_FPS = 60;
 export const COUNTDOWN_VFX_FRAME_OFFSET = 0;
+
+export const GAME_SEQUENCE_PACK: VFXPackDef = {
+  id: 'gameSequence',
+  jsonPaths: Array.from(
+    { length: 6 },
+    (_, i) => `../../assets/vfx/gameSequence/gameSequence-${i}.json`,
+  ),
+  pngPaths: Array.from(
+    { length: 6 },
+    (_, i) => `../../assets/vfx/gameSequence/gameSequence-${i}.png`,
+  ),
+};
+
+export const GAME_SEQUENCE_VFX_FPS = 60;
+export const GAME_SEQUENCE_VFX_FRAME_OFFSET = 0;

@@ -47,6 +47,9 @@ import {
   COUNTDOWN_PACK,
   COUNTDOWN_VFX_FPS,
   COUNTDOWN_VFX_FRAME_OFFSET,
+  GAME_SEQUENCE_PACK,
+  GAME_SEQUENCE_VFX_FPS,
+  GAME_SEQUENCE_VFX_FRAME_OFFSET,
   RING_OUT_PACK,
 } from './vfx/packs';
 import type { VFXAsset } from './vfx/assetLoader';
@@ -112,6 +115,7 @@ const DEFAULT_INPUT_DELAY_FRAMES = 2;
 const MAX_INPUT_DELAY_FRAMES = 6;
 
 const FIGHT_START_SOUND_URL = new URL('../assets/sounds/fight_start.wav', import.meta.url).href;
+const ANNOUNCER_GAME_SOUND_URL = new URL('../assets/sounds/sfx/announcer_game.wav', import.meta.url).href;
 
 const LOBBY_NAME_STORAGE_KEY = 'cs130-lobby-name';
 
@@ -476,9 +480,13 @@ export class MultiplayerApp {
   private readonly lobbyNameInput: HTMLInputElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
-  private readonly winnerBanner: HTMLElement;
-  private readonly winnerBannerTitle: HTMLElement;
-  private readonly winnerBannerSubtitle: HTMLElement;
+  private readonly gameEndBanner: HTMLCanvasElement;
+  private gameEndAsset: VFXAsset | null = null;
+  private gameEndPlayer: VFXPlayer | null = null;
+  private gameEndOverlay: VFXCanvasOverlay | null = null;
+  private gameEndLoading = false;
+  private gameEndStartTimeMs = 0;
+  private gameEndAudio: HTMLAudioElement | null = null;
   private readonly roundStartBanner: HTMLCanvasElement;
   private readonly vfxCache = new VFXAssetCache();
   private readonly vfxClock = new VFXClock();
@@ -786,16 +794,10 @@ export class MultiplayerApp {
       '#cameraModeButton',
     );
 
-    this.winnerBanner = document.createElement('div');
-    this.winnerBanner.className = 'winner-banner';
-    this.winnerBanner.dataset.visible = 'false';
-    this.winnerBannerTitle = document.createElement('div');
-    this.winnerBannerTitle.className = 'winner-banner__title';
-    this.winnerBannerSubtitle = document.createElement('div');
-    this.winnerBannerSubtitle.className = 'winner-banner__subtitle';
-    this.winnerBanner.appendChild(this.winnerBannerTitle);
-    this.winnerBanner.appendChild(this.winnerBannerSubtitle);
-    this.viewport.appendChild(this.winnerBanner);
+    this.gameEndBanner = document.createElement('canvas');
+    this.gameEndBanner.className = 'game-end-banner';
+    this.gameEndBanner.dataset.visible = 'false';
+    this.viewport.appendChild(this.gameEndBanner);
 
     this.roundStartBanner = document.createElement('canvas');
     this.roundStartBanner.className = 'round-start-banner';
@@ -1117,7 +1119,7 @@ export class MultiplayerApp {
       this.updateWinnerBanner(renderState);
       this.updateRoundStartBanner(renderState.roundStartCountdownTicks);
     } else {
-      this.winnerBanner.dataset.visible = 'false';
+      this.hideGameEndBanner();
       this.roundStartBanner.dataset.visible = 'false';
     }
 
@@ -2799,33 +2801,91 @@ export class MultiplayerApp {
   private updateWinnerBanner(renderState: { winnerId: string | null; players: { id: string; color: number }[] }): void {
     const winnerId = renderState.winnerId;
     if (winnerId === null) {
-      this.winnerBanner.dataset.visible = 'false';
+      this.hideGameEndBanner();
       this.lastWinnerId = null;
       return;
     }
 
     const winner = renderState.players.find((player) => player.id === winnerId);
     if (!winner) {
-      this.winnerBanner.dataset.visible = 'false';
+      this.hideGameEndBanner();
       this.lastWinnerId = null;
       return;
     }
 
-    const isLocal = winnerId === this.peerId;
-    const colorHex = `#${winner.color.toString(16).padStart(6, '0')}`;
-    const flavor = isLocal ? 'Last one standing.' : `${this.truncatePeerId(winnerId)} wins the match.`;
-    this.winnerBannerTitle.textContent = isLocal ? 'You Win!' : 'Defeat';
-    this.winnerBannerSubtitle.textContent = `${flavor} Returning to lobby…`;
-    this.winnerBanner.style.setProperty('--winner-color', colorHex);
-    this.winnerBanner.dataset.visible = 'true';
-
-    // First frame after a fresh winner is declared: schedule the rematch.
-    // Only the host actually drives the transition; every client schedules
-    // a fallback timer that cancels itself when leaveRoom / cleanup fires.
+    // First frame after a fresh winner is declared: start the VFX + announcer
+    // and schedule the rematch. Only the host actually drives the transition;
+    // every client schedules a fallback timer that cancels itself when
+    // leaveRoom / cleanup fires.
     if (this.lastWinnerId !== winnerId) {
       this.lastWinnerId = winnerId;
+      this.gameEndStartTimeMs = performance.now();
+      this.ensureGameEndAsset();
+      this.playAnnouncerGameSound();
       this.schedulePostMatchReturnToLobby();
     }
+
+    if (this.gameEndOverlay && this.gameEndPlayer) {
+      const desiredW = this.gameEndBanner.offsetWidth;
+      const desiredH = this.gameEndBanner.offsetHeight;
+      if (this.gameEndBanner.width !== desiredW) this.gameEndBanner.width = desiredW;
+      if (this.gameEndBanner.height !== desiredH) this.gameEndBanner.height = desiredH;
+      this.gameEndBanner.dataset.visible = 'true';
+      const elapsedSeconds = (performance.now() - this.gameEndStartTimeMs) / 1000;
+      this.gameEndPlayer.setProgress(elapsedSeconds, GAME_SEQUENCE_VFX_FPS, GAME_SEQUENCE_VFX_FRAME_OFFSET);
+      this.gameEndOverlay.update();
+    }
+  }
+
+  private ensureGameEndAsset(): void {
+    if (this.gameEndAsset || this.gameEndLoading) return;
+    this.gameEndLoading = true;
+    void this.vfxCache
+      .acquire(GAME_SEQUENCE_PACK)
+      .then((asset) => {
+        if (!this.gameEndLoading) return;
+        this.gameEndAsset = asset;
+        this.gameEndPlayer = new VFXPlayer(asset, { fps: GAME_SEQUENCE_VFX_FPS });
+        this.gameEndOverlay = new VFXCanvasOverlay(this.gameEndPlayer, this.gameEndBanner);
+      })
+      .finally(() => {
+        this.gameEndLoading = false;
+      });
+  }
+
+  private disposeGameEndAsset(): void {
+    if (this.gameEndOverlay) {
+      this.gameEndOverlay.dispose();
+      this.gameEndOverlay = null;
+    }
+    this.gameEndPlayer = null;
+    if (this.gameEndAsset || this.gameEndLoading) {
+      this.vfxCache.release(GAME_SEQUENCE_PACK.id);
+      this.gameEndAsset = null;
+      this.gameEndLoading = false;
+    }
+  }
+
+  private playAnnouncerGameSound(): void {
+    if (this.gameEndAudio) {
+      this.gameEndAudio.pause();
+      this.gameEndAudio = null;
+    }
+    const audio = new Audio(ANNOUNCER_GAME_SOUND_URL);
+    audio.volume = this.effectiveSfxVolume;
+    this.gameEndAudio = audio;
+    void audio.play().catch((err) => {
+      console.warn('Announcer game sound could not play:', err);
+    });
+  }
+
+  private hideGameEndBanner(): void {
+    this.gameEndBanner.dataset.visible = 'false';
+    if (this.gameEndAudio) {
+      this.gameEndAudio.pause();
+      this.gameEndAudio = null;
+    }
+    this.disposeGameEndAsset();
   }
 
   private schedulePostMatchReturnToLobby(): void {
@@ -2884,8 +2944,7 @@ export class MultiplayerApp {
     const previousGameMode = this.gameMode;
     const previousStocks = this.startingStocks;
 
-    this.lastWinnerId = null;
-    this.winnerBanner.dataset.visible = 'false';
+    this.hideGameEndBanner();
     this.setStatus('Returning to lobby for a rematch...');
 
     // Give the lobby_rematch a beat to flush over the old signaling socket
@@ -2935,8 +2994,7 @@ export class MultiplayerApp {
     const localSelection = this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
     const localCharacter = this.lobbyCharacterByPeer.get(this.peerId) ?? null;
 
-    this.lastWinnerId = null;
-    this.winnerBanner.dataset.visible = 'false';
+    this.hideGameEndBanner();
     this.setStatus('Returning to lobby for a rematch...');
 
     // Seed mainMenu's room/host inputs so handleJoinRoom picks them up, then

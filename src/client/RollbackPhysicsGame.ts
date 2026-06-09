@@ -89,6 +89,7 @@ const FOOTSTEPS_SOUND_URL = new URL('../assets/sounds/Footsteps.wav', import.met
 const PEN_CROSSBOW_SOUND_URL = new URL('../assets/sounds/pen_crossbow.wav', import.meta.url).href;
 const BINARY_BEAM_SOUND_URL = new URL('../assets/sounds/binary_beam.wav', import.meta.url).href;
 const STAGE_OUT_SOUND_URL = new URL('../assets/sounds/sfx/se_common_stage_fall.wav', import.meta.url).href;
+const KO_HIT_SOUND_URL = new URL('../assets/sounds/sfx/koHit.mp3', import.meta.url).href;
 
 export interface AttackRenderState {
   id: string;
@@ -251,6 +252,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     return audio;
   });
   private stageOutAudioPoolIndex = 0;
+  private readonly koHitAudioPool: HTMLAudioElement[] = Array.from({ length: 3 }, () => {
+    const audio = new Audio(KO_HIT_SOUND_URL);
+    audio.preload = 'auto';
+    audio.volume = 1.0;
+    audio.load();
+    return audio;
+  });
+  private koHitAudioPoolIndex = 0;
   private readonly previousHorizontalDir = new Map<string, number>();
   private sfxVolume = 1;
   private nextBulletId = 1;
@@ -351,6 +360,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
     this.stageOutAudioPool.forEach((audio) => {
       audio.volume = 0.8 * this.sfxVolume;
+    });
+    this.koHitAudioPool.forEach((audio) => {
+      audio.volume = 1.0 * this.sfxVolume;
     });
   }
 
@@ -1514,6 +1526,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     });
   }
 
+  private playKoHitSound(): void {
+    const audio = this.koHitAudioPool[this.koHitAudioPoolIndex];
+    this.koHitAudioPoolIndex = (this.koHitAudioPoolIndex + 1) % this.koHitAudioPool.length;
+    audio.currentTime = 0;
+    void audio.play().catch((err) => {
+      console.warn('KO hit sound could not play:', err);
+    });
+  }
+
   private playPunchSound(): void {
     const audio = this.punchAudioPool[this.punchAudioPoolIndex];
     this.punchAudioPoolIndex = (this.punchAudioPoolIndex + 1) % this.punchAudioPool.length;
@@ -2274,6 +2295,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       target.inLethalLaunch = true;
       target.lethalLaunchTicks = 0;
       this.syncLethalLaunchColliderState(target, wasInLethal);
+      this.playKoHitSound();
     }
 
     const angleDeg = attackMeta?.launchAngleDeg ?? SMASH_DEFAULT_LAUNCH_ANGLE_DEG;
