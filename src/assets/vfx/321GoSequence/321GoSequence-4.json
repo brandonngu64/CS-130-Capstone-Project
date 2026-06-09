@@ -208,6 +208,6 @@
 	"size": {"w":4092,"h":4063},
 	"scale": "1",
 	"related_multi_packs": [ "321GoSequence-0.json", "321GoSequence-1.json", "321GoSequence-2.json", "321GoSequence-3.json", "321GoSequence-5.json", "321GoSequence-6.json", "321GoSequence-7.json", "321GoSequence-8.json", "321GoSequence-9.json" ],
-	"smartupdate": "$TexturePacker:SmartUpdate:1f68201185c578071d2096e60c82e605:fab641631a8102983dbdf2cae7efb11d:33191cfa5e8513cf183934ce9c06c1ed$"
+	"smartupdate": "$TexturePacker:SmartUpdate:990f4619bf234bf7ea2dd323f2710491:ba3a5707d99334afc01ec34ce90e153d:33191cfa5e8513cf183934ce9c06c1ed$"
 }
 }
