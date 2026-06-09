@@ -58,7 +58,11 @@ interface ParallaxBackground {
 }
 
 
-const CAMERA_MARGIN = 3.0;
+const ACTION_CAMERA_MARGIN = 4.5;
+const ACTION_CAMERA_FOLLOW_LERP = 0.12;
+const ACTION_CAMERA_ZOOM_OUT_LERP = 0.22;
+const ACTION_CAMERA_ZOOM_IN_LERP = 0.04;
+const ACTION_CAMERA_INNER_BAND_TILES = 5;
 // Fraction of viewport width the lobby stage preview should occupy.
 const LOBBY_PREVIEW_WIDTH_FRACTION = 1 / 3;
 // Distance (as fraction of viewport width) to shift the camera so the map
@@ -259,6 +263,11 @@ export class GameRenderer {
   private readonly backdropMesh: THREE.Mesh;
   private parallaxBackground: ParallaxBackground | null = null;
   private readonly mapBounds: TiledMapDefinition['bounds'];
+  private readonly actionCameraMargin: number;
+  private readonly actionCameraFollowLerp: number;
+  private readonly actionCameraZoomInLerp: number;
+  private readonly actionCameraZoomOutLerp: number;
+  private readonly actionCameraInnerBandTiles: number;
   private readonly baseViewHeight: number;
   private baseViewWidth = 0;
   private readonly freeCameraTarget = new THREE.Vector2();
@@ -299,6 +308,12 @@ export class GameRenderer {
   constructor(container: HTMLElement, map: TiledMapDefinition, vfxCache: VFXAssetCache) {
     this.container = container;
     this.mapBounds = map.bounds;
+    const ac = map.actionCamera;
+    this.actionCameraMargin = ac?.margin ?? ACTION_CAMERA_MARGIN;
+    this.actionCameraFollowLerp = ac?.followLerp ?? ACTION_CAMERA_FOLLOW_LERP;
+    this.actionCameraZoomInLerp = ac?.zoomInLerp ?? ACTION_CAMERA_ZOOM_IN_LERP;
+    this.actionCameraZoomOutLerp = ac?.zoomOutLerp ?? ACTION_CAMERA_ZOOM_OUT_LERP;
+    this.actionCameraInnerBandTiles = ac?.innerBandTiles ?? ACTION_CAMERA_INNER_BAND_TILES;
     this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
     this.vfxCache = vfxCache;
 
@@ -1577,7 +1592,7 @@ export class GameRenderer {
     let zoomLerp: number;
     if (this.cameraMode === 'action') {
       const zoomingOut = targetZoom < this.camera.zoom;
-      zoomLerp = zoomingOut ? 0.35 : 0.05;
+      zoomLerp = zoomingOut ? this.actionCameraZoomOutLerp : this.actionCameraZoomInLerp;
     } else {
       zoomLerp = 0.16;
     }
@@ -1590,7 +1605,7 @@ export class GameRenderer {
       this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, target.x, 0.12);
       this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, target.y, 0.12);
     } else {
-      const followLerp = this.cameraMode === 'action' ? 0.22 : 0.28;
+      const followLerp = this.cameraMode === 'action' ? this.actionCameraFollowLerp : 0.28;
       this.camera.position.x = THREE.MathUtils.lerp(
         this.camera.position.x,
         target.x,
@@ -1701,8 +1716,8 @@ export class GameRenderer {
       return 1;
     }
 
-    const fitWidth = Math.max(bounds.width + CAMERA_MARGIN * 2, 6);
-    const fitHeight = Math.max(bounds.height + CAMERA_MARGIN * 2, 4);
+    const fitWidth = Math.max(bounds.width + this.actionCameraMargin * 2, 6);
+    const fitHeight = Math.max(bounds.height + this.actionCameraMargin * 2, 4);
     const zoom = Math.min(
       this.baseViewWidth / fitWidth,
       this.baseViewHeight / fitHeight,
@@ -1724,16 +1739,23 @@ export class GameRenderer {
       return null;
     }
 
-    // Only track players who are alive and currently in play. Drop respawning
-    // or eliminated players so the camera lerps smoothly to the survivors.
-    const tracked = players.filter((p) => !p.eliminated && !p.respawning);
-    const source = tracked.length > 0 ? tracked : players;
+    // In action mode keep eliminated/respawning players in frame through the
+    // full respawn cycle so death VFX stays visible. In follow mode drop them
+    // so the framing snaps to the surviving local player.
+    const source =
+      this.cameraMode === 'action'
+        ? players
+        : (() => {
+            const alive = players.filter((p) => !p.eliminated && !p.respawning);
+            return alive.length > 0 ? alive : players;
+          })();
 
     let minX = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
 
+    const clampedPositions: { x: number; y: number }[] = [];
     for (const player of source) {
       // Project each player into the map bounds for framing. A player past the
       // edge is treated as if they were standing on the nearest edge — this
@@ -1741,10 +1763,39 @@ export class GameRenderer {
       // zoom grow to fit on-map players.
       const px = THREE.MathUtils.clamp(player.x, this.mapBounds.minX, this.mapBounds.maxX);
       const py = THREE.MathUtils.clamp(player.y, this.mapBounds.minY, this.mapBounds.maxY);
+      clampedPositions.push({ x: px, y: py });
       minX = Math.min(minX, px - player.width * 0.5);
       maxX = Math.max(maxX, px + player.width * 0.5);
       minY = Math.min(minY, py - player.height * 0.5);
       maxY = Math.max(maxY, py + player.height * 0.5);
+    }
+
+    // Phantom stage anchor: in action mode, if every player sits within the
+    // outer edge band (outside the inner stage box), add a point on the inner
+    // box perimeter so the camera keeps the stage on screen during mid-air
+    // edge fights.
+    if (this.cameraMode === 'action' && clampedPositions.length > 0) {
+      const band = this.actionCameraInnerBandTiles;
+      const innerMinX = this.mapBounds.minX + band;
+      const innerMaxX = this.mapBounds.maxX - band;
+      const innerMinY = this.mapBounds.minY + band;
+      const innerMaxY = this.mapBounds.maxY - band;
+      if (innerMaxX > innerMinX && innerMaxY > innerMinY) {
+        const allOutside = clampedPositions.every(
+          (p) =>
+            p.x < innerMinX || p.x > innerMaxX || p.y < innerMinY || p.y > innerMaxY,
+        );
+        if (allOutside) {
+          const cx = (minX + maxX) * 0.5;
+          const cy = (minY + maxY) * 0.5;
+          const nx = THREE.MathUtils.clamp(cx, innerMinX, innerMaxX);
+          const ny = THREE.MathUtils.clamp(cy, innerMinY, innerMaxY);
+          minX = Math.min(minX, nx);
+          maxX = Math.max(maxX, nx);
+          minY = Math.min(minY, ny);
+          maxY = Math.max(maxY, ny);
+        }
+      }
     }
 
     return {

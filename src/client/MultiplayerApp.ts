@@ -2979,7 +2979,8 @@ export class MultiplayerApp {
   }
 
   private syncRespawnCamera(localPlayer: { eliminated: boolean; respawning: boolean }): void {
-    const shouldLock = this.cameraMode !== 'free' && (localPlayer.eliminated || localPlayer.respawning);
+    const shouldLock =
+      this.cameraMode === 'follow' && (localPlayer.eliminated || localPlayer.respawning);
 
     if (shouldLock) {
       if (!this.respawnCameraLocked) {
