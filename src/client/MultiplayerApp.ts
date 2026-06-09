@@ -182,6 +182,17 @@ function isArrowKey(code: string): boolean {
   );
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
 function cameraModeLabel(mode: CameraMode): string {
   switch (mode) {
     case 'follow':
@@ -679,6 +690,9 @@ export class MultiplayerApp {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (isEditableTarget(event.target)) {
+      return;
+    }
     // System keys take precedence over any scheme binding.
     if (event.code === 'KeyC') {
       event.preventDefault();
@@ -734,6 +748,9 @@ export class MultiplayerApp {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
+    if (isEditableTarget(event.target)) {
+      return;
+    }
     if (this.cameraMode === 'free' && isArrowKey(event.code)) {
       if (event.code === 'ArrowLeft') {
         this.cameraPanInput.left = false;
