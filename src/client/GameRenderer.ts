@@ -33,6 +33,20 @@ import {
 import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS, WEAPON_SPRITE_CONFIG } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
+import {
+  classifyBackgroundAsset,
+  getMapBackground,
+  resolveBackgroundUrl,
+  type MapBackgroundConfig,
+} from './mapBackgrounds';
+
+interface ParallaxBackground {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  texture: THREE.Texture;
+  video?: HTMLVideoElement;
+  config: MapBackgroundConfig;
+}
 
 
 const CAMERA_MARGIN = 3.0;
@@ -234,6 +248,7 @@ export class GameRenderer {
   private readonly materialCache = new Map<string, CachedTileMaterial>();
   private readonly spriteTextureCache = new Map<string, CachedSpriteTexture>();
   private readonly backdropMesh: THREE.Mesh;
+  private parallaxBackground: ParallaxBackground | null = null;
   private readonly mapBounds: TiledMapDefinition['bounds'];
   private readonly baseViewHeight: number;
   private baseViewWidth = 0;
@@ -1087,6 +1102,19 @@ export class GameRenderer {
     this.backdropMesh.geometry.dispose();
     (this.backdropMesh.material as THREE.MeshBasicMaterial).dispose();
 
+    if (this.parallaxBackground) {
+      this.scene.remove(this.parallaxBackground.mesh);
+      this.parallaxBackground.mesh.geometry.dispose();
+      this.parallaxBackground.material.dispose();
+      this.parallaxBackground.texture.dispose();
+      if (this.parallaxBackground.video) {
+        this.parallaxBackground.video.pause();
+        this.parallaxBackground.video.removeAttribute('src');
+        this.parallaxBackground.video.load();
+      }
+      this.parallaxBackground = null;
+    }
+
     for (const mesh of this.mapMeshes) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -1203,7 +1231,131 @@ export class GameRenderer {
     const backdrop = new THREE.Mesh(geometry, material);
     backdrop.position.set(0, 0, -2);
     this.scene.add(backdrop);
+
+    const bgConfig = getMapBackground(map.id);
+    if (bgConfig) {
+      void this.loadParallaxBackground(map, bgConfig);
+    }
+
     return backdrop;
+  }
+
+  private async loadParallaxBackground(
+    map: TiledMapDefinition,
+    config: MapBackgroundConfig,
+  ): Promise<void> {
+    const url = resolveBackgroundUrl(config.asset);
+    if (!url) {
+      console.warn(`[mapBackgrounds] Asset not found in src/assets/map_bgs: ${config.asset}`);
+      return;
+    }
+
+    const kind = classifyBackgroundAsset(config.asset);
+    if (!kind) {
+      console.warn(`[mapBackgrounds] Unsupported asset extension: ${config.asset}`);
+      return;
+    }
+
+    let texture: THREE.Texture;
+    let video: HTMLVideoElement | undefined;
+    let sourceWidth = 0;
+    let sourceHeight = 0;
+
+    if (kind === 'video') {
+      video = document.createElement('video');
+      video.src = url;
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      video.crossOrigin = 'anonymous';
+      // Begin playback; some browsers require an explicit play() call.
+      try {
+        await video.play();
+      } catch (err) {
+        // Autoplay may be blocked until user interaction; texture still updates once playing.
+        console.warn('[mapBackgrounds] video.play() rejected, will retry on canplay', err);
+      }
+      await new Promise<void>((resolve) => {
+        if (video!.readyState >= 2) {
+          resolve();
+        } else {
+          video!.addEventListener('canplay', () => resolve(), { once: true });
+        }
+      });
+      texture = new THREE.VideoTexture(video);
+      // VideoTextures upload every frame; the GL-rebinding onUpdate hook used
+      // for static tiles causes flicker here, so configure minimally.
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      sourceWidth = video.videoWidth;
+      sourceHeight = video.videoHeight;
+    } else {
+      texture = await this.textureLoader.loadAsync(url);
+      this.configurePixelTexture(texture);
+      const img = texture.image as { width?: number; height?: number } | undefined;
+      sourceWidth = img?.width ?? 0;
+      sourceHeight = img?.height ?? 0;
+    }
+
+    const tint = config.tint ?? 0xffffff;
+    const opacity = config.opacity ?? 1;
+    const scale = config.scale ?? 1;
+
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      color: tint,
+      opacity: 0,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    // Cover the map bounds while preserving the asset's native aspect ratio.
+    let planeWidth = map.bounds.width * scale;
+    let planeHeight = map.bounds.height * scale;
+    if (sourceWidth > 0 && sourceHeight > 0) {
+      const assetAspect = sourceWidth / sourceHeight;
+      const mapAspect = map.bounds.width / map.bounds.height;
+      if (assetAspect > mapAspect) {
+        // Asset wider than map: match height, extend width.
+        planeHeight = map.bounds.height * scale;
+        planeWidth = planeHeight * assetAspect;
+      } else {
+        // Asset taller than map: match width, extend height.
+        planeWidth = map.bounds.width * scale;
+        planeHeight = planeWidth / assetAspect;
+      }
+    }
+    const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(0, 0, -config.depth);
+    mesh.renderOrder = -1000;
+    this.scene.add(mesh);
+
+    // Hide the solid color backdrop so it doesn't poke through at shallow depths.
+    this.backdropMesh.visible = false;
+
+    this.parallaxBackground = { mesh, material, texture, video, config };
+
+    // Fade in over ~250 ms to mask the pop-in.
+    const fadeStart = performance.now();
+    const targetOpacity = opacity;
+    const fade = () => {
+      if (!this.parallaxBackground || this.parallaxBackground.material !== material) {
+        return;
+      }
+      const t = Math.min(1, (performance.now() - fadeStart) / 250);
+      material.opacity = targetOpacity * t;
+      if (t < 1) {
+        requestAnimationFrame(fade);
+      }
+    };
+    requestAnimationFrame(fade);
   }
 
   private setupMapMeshes(map: TiledMapDefinition): void {
@@ -1340,6 +1492,16 @@ export class GameRenderer {
       this.snapCameraToPixelGrid();
     }
     this.camera.updateProjectionMatrix();
+
+    if (this.parallaxBackground) {
+      const bgZ = this.parallaxBackground.config.depth;
+      // Camera sits at z = 12 looking down -z. Orthographic parallax factor
+      // (1 - 12/(12+bgZ)) translates the bg in world space so it drifts more
+      // slowly than the foreground in screen space.
+      const offset = bgZ / (12 + bgZ);
+      this.parallaxBackground.mesh.position.x = this.camera.position.x * offset;
+      this.parallaxBackground.mesh.position.y = this.camera.position.y * offset;
+    }
   }
 
   private getCameraTarget(state: RenderState, localPlayerId: string): THREE.Vector2 {
