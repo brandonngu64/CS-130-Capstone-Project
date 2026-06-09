@@ -197,8 +197,8 @@ const SPAWN_ROTATION: readonly ItemKind[] = [
 ];
 
 export class RollbackPhysicsGame implements Game<Uint8Array> {
-  private readonly map: TiledMapDefinition;
-  private readonly world: RAPIER.World;
+  private map: TiledMapDefinition;
+  private world: RAPIER.World;
   private readonly players = new Map<string, PlayerCharacter>();
   private readonly previousInputFlags = new Map<string, number>();
   private readonly staticColliderHandles = new Set<number>();
@@ -358,6 +358,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   setGameMode(mode: GameMode): void {
     this.gameMode = mode;
+  }
+
+  // Swap the active map in place. The session created in prepareNetworking()
+  // captures this game reference, so we can't construct a new game — the
+  // session would keep ticking the old one. reset() drops players and the
+  // old world is discarded, so any selections in lobbyCharacterByPeer must
+  // be re-applied by the caller before session.start().
+  setMap(map: TiledMapDefinition): void {
+    this.reset();
+    this.map = map;
+    this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
+    this.world.timestep = FIXED_STEP_SECONDS;
+    this.staticColliderHandles.clear();
+    this.platformColliderHandles.clear();
+    this.playerColliderHandles.clear();
+    this.createStaticLevel();
+    this.initializeItemSlots();
   }
 
   getGameMode(): GameMode {
