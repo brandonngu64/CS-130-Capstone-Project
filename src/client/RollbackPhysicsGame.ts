@@ -2749,13 +2749,13 @@ private colorForPlayer(playerId: string): number {
   }
 
   private hasOpponentInMatch(): boolean {
-    let activePlayers = 0;
+    let inMatchPlayers = 0;
     for (const [id] of this.players) {
-      if (!this.matchState.canReceiveInput(id)) {
+      if (!this.matchState.isInMatch(id)) {
         continue;
       }
-      activePlayers += 1;
-      if (activePlayers >= 2) {
+      inMatchPlayers += 1;
+      if (inMatchPlayers >= 2) {
         return true;
       }
     }
