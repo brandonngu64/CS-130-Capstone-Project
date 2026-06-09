@@ -170,7 +170,16 @@ export function expandMapBounds(bounds: MapBounds, offsets: BlastZoneOffsets): M
   };
 }
 
+export interface ActionCameraOverrides {
+  margin?: number;
+  followLerp?: number;
+  zoomInLerp?: number;
+  zoomOutLerp?: number;
+  innerBandTiles?: number;
+}
+
 export interface TiledMapDefinition {
+  actionCamera?: ActionCameraOverrides;
   bounds: MapBounds;
   colliders: {
     platforms: MapColliderRect[];
