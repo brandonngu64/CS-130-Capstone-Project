@@ -40,6 +40,7 @@ export interface SettingsMenuCallbacks {
   onForceRelayChange(enabled: boolean): void;
   onInputSchemeChange(id: InputSchemeId): void;
   onKoBarEnabledChange(enabled: boolean): void;
+  onSplitScreenChange(enabled: boolean): void;
 }
 
 export class SettingsMenu {
@@ -66,6 +67,8 @@ export class SettingsMenu {
   private readonly inputSchemeSelect: HTMLSelectElement;
   private readonly inputBindingsList: HTMLElement;
   private readonly koBarToggle: HTMLInputElement;
+  private readonly splitScreenToggle: HTMLInputElement;
+  private readonly splitScreenHint: HTMLElement;
   private readonly statusText: HTMLElement;
 
   constructor(parent: HTMLElement, callbacks: SettingsMenuCallbacks) {
@@ -161,6 +164,14 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuKoBarToggle',
     );
+    this.splitScreenToggle = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuSplitScreenToggle',
+    );
+    this.splitScreenHint = getElement<HTMLElement>(
+      this.element,
+      '#settingsMenuSplitScreenHint',
+    );
 
     this.leaveButton.addEventListener('click', () => callbacks.onLeave());
     this.copyButton.addEventListener('click', () => callbacks.onCopyShareUrl());
@@ -203,6 +214,9 @@ export class SettingsMenu {
     });
     this.koBarToggle.addEventListener('change', () => {
       callbacks.onKoBarEnabledChange(this.koBarToggle.checked);
+    });
+    this.splitScreenToggle.addEventListener('change', () => {
+      callbacks.onSplitScreenChange(this.splitScreenToggle.checked);
     });
 
     this.element.addEventListener('click', (event) => {
@@ -287,6 +301,17 @@ export class SettingsMenu {
     this.koBarToggle.checked = enabled;
   }
 
+  setSplitScreenEnabled(enabled: boolean): void {
+    this.splitScreenToggle.checked = enabled;
+  }
+
+  setSplitScreenEditable(editable: boolean): void {
+    this.splitScreenToggle.disabled = !editable;
+    this.splitScreenHint.textContent = editable
+      ? 'Only editable from the main menu. Applies to the next room you host or join.'
+      : 'Leave the room to change this setting.';
+  }
+
   private renderInputBindings(scheme: InputScheme): void {
     const rows = scheme.bindings
       .map(
@@ -342,6 +367,12 @@ export class SettingsMenu {
           <input id="settingsMenuKoBarToggle" type="checkbox" />
           <span>Show KO bar (displays KOable window and landing state per player)</span>
         </label>
+
+        <label class="toggle-field">
+          <input id="settingsMenuSplitScreenToggle" type="checkbox" />
+          <span>Split-screen: 2 local players from this tab. P1: WASD, Q block, E shoot, L Shift dash. P2: Arrow keys, R Shift shoot, R Ctrl dash, / block.</span>
+        </label>
+        <p id="settingsMenuSplitScreenHint" class="overlay-status" data-tone="normal">Only editable from the main menu. Applies to the next room you host or join.</p>
 
         <label class="toggle-field">
           <input id="settingsMenuSideWallsToggle" type="checkbox" />

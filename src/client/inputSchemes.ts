@@ -104,3 +104,40 @@ export const DEFAULT_INPUT_SCHEME_ID: InputSchemeId = 'keyboard2hand';
 export function isInputSchemeId(value: string): value is InputSchemeId {
   return value === 'keyboard2hand' || value === 'mk' || value === 'onehand';
 }
+
+// Fixed key bindings used when split-screen (2 local players) is active. The
+// regular INPUT_SCHEMES setting is ignored for the duration of the match —
+// each local key is statically routed to either the primary or secondary
+// player's InputState.
+export type SplitScreenSlot = 'primary' | 'secondary';
+
+export interface SplitScreenBinding {
+  slot: SplitScreenSlot;
+  action: GameAction;
+}
+
+export const SPLIT_SCREEN_KEYMAP: Partial<Record<string, SplitScreenBinding>> = {
+  // Primary: WASD + Q (block) + E (shoot) + Left Shift (dash)
+  KeyA: { slot: 'primary', action: 'left' },
+  KeyD: { slot: 'primary', action: 'right' },
+  KeyW: { slot: 'primary', action: 'jump' },
+  KeyS: { slot: 'primary', action: 'duck' },
+  KeyE: { slot: 'primary', action: 'punch' },
+  KeyQ: { slot: 'primary', action: 'shield' },
+  ShiftLeft: { slot: 'primary', action: 'dodge' },
+  // Secondary: Arrow keys + Right Shift (shoot) + Right Ctrl (dash) + / (block)
+  ArrowLeft: { slot: 'secondary', action: 'left' },
+  ArrowRight: { slot: 'secondary', action: 'right' },
+  ArrowUp: { slot: 'secondary', action: 'jump' },
+  ArrowDown: { slot: 'secondary', action: 'duck' },
+  ShiftRight: { slot: 'secondary', action: 'punch' },
+  ControlRight: { slot: 'secondary', action: 'dodge' },
+  Slash: { slot: 'secondary', action: 'shield' },
+};
+
+export const SPLIT_SCREEN_BINDINGS: BindingRow[] = [
+  { action: 'P1 Move', key: 'WASD' },
+  { action: 'P1 Attack / Block / Dash', key: 'E / Q / Left Shift' },
+  { action: 'P2 Move', key: 'Arrow Keys' },
+  { action: 'P2 Attack / Block / Dash', key: 'Right Shift / / / Right Ctrl' },
+];
