@@ -1,0 +1,157 @@
+{"frames": {
+
+"gameSequence021.png":
+{
+	"frame": {"x":2417,"y":1,"w":1198,"h":295},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":354,"y":281,"w":1198,"h":295},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence023.png":
+{
+	"frame": {"x":1,"y":1493,"w":1196,"h":293},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":368,"y":284,"w":1196,"h":293},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence026.png":
+{
+	"frame": {"x":2417,"y":298,"w":1198,"h":295},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":367,"y":282,"w":1198,"h":295},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence028.png":
+{
+	"frame": {"x":2409,"y":1488,"w":1199,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":366,"y":281,"w":1199,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence029.png":
+{
+	"frame": {"x":2415,"y":595,"w":1200,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":366,"y":280,"w":1200,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence030.png":
+{
+	"frame": {"x":1206,"y":1193,"w":1200,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":366,"y":280,"w":1200,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence031.png":
+{
+	"frame": {"x":1206,"y":1491,"w":1201,"h":295},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":366,"y":280,"w":1201,"h":295},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence032.png":
+{
+	"frame": {"x":2414,"y":893,"w":1201,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":366,"y":279,"w":1201,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence033.png":
+{
+	"frame": {"x":2413,"y":1191,"w":1201,"h":295},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":366,"y":280,"w":1201,"h":295},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence034.png":
+{
+	"frame": {"x":1209,"y":896,"w":1202,"h":295},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":365,"y":280,"w":1202,"h":295},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence035.png":
+{
+	"frame": {"x":1,"y":898,"w":1203,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":364,"y":279,"w":1203,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence036.png":
+{
+	"frame": {"x":1,"y":1196,"w":1203,"h":295},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":364,"y":280,"w":1203,"h":295},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence037.png":
+{
+	"frame": {"x":1209,"y":598,"w":1203,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":364,"y":280,"w":1203,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence038.png":
+{
+	"frame": {"x":1209,"y":300,"w":1204,"h":296},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":363,"y":280,"w":1204,"h":296},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence039.png":
+{
+	"frame": {"x":1,"y":1,"w":1206,"h":297},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":362,"y":280,"w":1206,"h":297},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence040.png":
+{
+	"frame": {"x":1,"y":300,"w":1206,"h":297},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":362,"y":280,"w":1206,"h":297},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence041.png":
+{
+	"frame": {"x":1209,"y":1,"w":1206,"h":297},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":362,"y":280,"w":1206,"h":297},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"gameSequence042.png":
+{
+	"frame": {"x":1,"y":599,"w":1206,"h":297},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":362,"y":280,"w":1206,"h":297},
+	"sourceSize": {"w":1920,"h":1080}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "gameSequence-5.png",
+	"format": "RGBA8888",
+	"size": {"w":3616,"h":1787},
+	"scale": "1",
+	"related_multi_packs": [ "gameSequence-0.json", "gameSequence-1.json", "gameSequence-2.json", "gameSequence-3.json", "gameSequence-4.json" ],
+	"smartupdate": "$TexturePacker:SmartUpdate:d9e29405a575c82fdb5cf124361ae6e8:bf10f8b5b3682a5639f7c4235c49f102:c2359523d6ffa54ac76a01e009e3b39c$"
+}
+}

@@ -52,6 +52,7 @@ import {
 import type { VFXAsset } from './vfx/assetLoader';
 import { ROUND_START_COUNTDOWN_TOTAL_TICKS } from './RollbackPhysicsGame';
 import { MainMenu, type StatusTone } from './MainMenu';
+import { attachMenuSounds } from './MenuSounds';
 import { LeavingManager } from './LeavingManager';
 import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
@@ -832,6 +833,10 @@ export class MultiplayerApp {
     this.toggleDebugConsoleBtn = requireElement<HTMLButtonElement>(this.root, '#toggleDebugConsole');
 
     this.bindDebugToggleButtons();
+
+    attachMenuSounds(this.root, {
+      getSfxVolume: () => this.effectiveSfxVolume,
+    });
 
     this.mainMenu = new MainMenu(this.viewport, {
       onHost: () => {
