@@ -27,7 +27,7 @@ export interface MapBackgroundConfig {
 }
 
 export const MAP_BACKGROUND_CONFIG: Record<string, MapBackgroundConfig> = {
-  'finalDestV3_brawl': { asset: 'finalDestV3_brawl.mp4', depth: 80, scale: 0.5 },
+  'finalDestV3_brawl': { asset: 'finalDestV3_brawl.mp4', depth: 80, scale: 0.7 },
 };
 
 function normalizeAssetKey(value: string): string {

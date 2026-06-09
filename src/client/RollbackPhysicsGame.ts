@@ -2339,7 +2339,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const w = target.weight > 0 ? target.weight : 1;
     const b = attackMeta?.baseKnockback ?? SMASH_DEFAULT_BASE_KNOCKBACK;
 
-    let kb = ((p / 10 + (p * d) / 20) * (200 / (w + 100)) * SMASH_KB_GROWTH_MULT)
+    let kb = ((p / 10 + (p * d) / 40) * (200 / (w + 100)) * SMASH_KB_GROWTH_MULT)
       + SMASH_KB_HITSTUN_BIAS
       + b;
     // Global output scale ("r" term). Tune in constants.ts.

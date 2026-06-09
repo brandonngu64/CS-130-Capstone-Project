@@ -75,7 +75,7 @@ export const WEAPON_SPRITE_CONFIG: Partial<Record<ItemKind, WeaponSpriteConfig>>
 export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   [ItemKind.EthernetWhip]: {
     kind: 'melee',
-    damage: 22,
+    damage: 30,
     cooldownTicks: 18,
     hitboxHalfWidth: 1.8,
     hitboxHalfHeight: 0.2,
@@ -92,16 +92,16 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   },
   [ItemKind.Finals]: {
     kind: 'projectile',
-    damage: 4,
+    damage: 10,
     cooldownTicks: 6,
     projectileSpeed: 32,
     projectileLifetimeTicks: 90,
-    baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK,
+    baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK + 30,
     launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
   },
   [ItemKind.BinaryBeam]: {
     kind: 'projectile',
-    damage: 15,
+    damage: 20,
     cooldownTicks: 28,
     projectileSpeed: 24,
     projectileLifetimeTicks: 72,

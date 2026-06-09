@@ -334,7 +334,7 @@ export class GameRenderer {
     void this.vfxCache.registerPermanent(RING_OUT_PACK).then((asset) => {
       // 16 world units tall ≈ the dramatic scale the previous random formula
       // averaged to. Now deterministic.
-      const RING_OUT_WORLD_HEIGHT = PLAYER_HALF_HEIGHT * 2 * (Math.random() * 4 + 16);
+      const RING_OUT_WORLD_HEIGHT = PLAYER_HALF_HEIGHT * 2 * (Math.random() * 4 + 10);
       this.vfxRingOutPool = new VFXMeshPool(asset, 3, RING_OUT_WORLD_HEIGHT);
     });
   }
@@ -527,17 +527,69 @@ export class GameRenderer {
       if (justRingOut && this.vfxRingOutPool) {
         const vfx = this.vfxRingOutPool.spawn(this.scene);
         if (vfx) {
-          const prev = this.prevVelocity.get(player.id);
-          // Negate both components of the exit vector so the beam points back
-          // toward the stage (opposite the direction of travel). Default graphic
-          // orientation is rightward (0 rad), matching atan2's 0° = +x.
-          const dx = player.x - stageCenterX;
-          const dy = player.y - stageCenterY;
-          const baseAngle =
-            prev && (Math.abs(prev.vx) > 0.01 || Math.abs(prev.vy) > 0.01) ?
-              Math.atan2(-dy, -prev.vx - dx) : Math.atan2(0, 0);
-          vfx.mesh.position.set(player.x, player.y, 0.5);
-          vfx.mesh.rotation.z = baseAngle;
+          // 1. Calculate direction vector pointing BACK to the stage center
+          const dx = stageCenterX - player.x;
+          const dy = stageCenterY - player.y;
+          
+          // Calculate rotation angle facing the stage
+          const baseAngle = Math.atan2(dy, dx);
+
+          // 2. Raycast to find the map boundary intersection point
+          let intersectionT = 1.0; // t represents progress along the line (0 = player, 1 = stage center)
+
+          // Check Left Wall (x = minX)
+          if (dx !== 0) {
+            const t = (this.mapBounds.minX - player.x) / dx;
+            if (t >= 0 && t <= 1) {
+              const y = player.y + t * dy;
+              if (y >= this.mapBounds.minY && y <= this.mapBounds.maxY) {
+                intersectionT = t;
+              }
+            }
+          }
+          // Check Right Wall (x = maxX)
+          if (dx !== 0 && intersectionT === 1.0) {
+            const t = (this.mapBounds.maxX - player.x) / dx;
+            if (t >= 0 && t <= 1) {
+              const y = player.y + t * dy;
+              if (y >= this.mapBounds.minY && y <= this.mapBounds.maxY) {
+                intersectionT = t;
+              }
+            }
+          }
+          // Check Bottom Wall (y = minY)
+          if (dy !== 0 && intersectionT === 1.0) {
+            const t = (this.mapBounds.minY - player.y) / dy;
+            if (t >= 0 && t <= 1) {
+              const x = player.x + t * dx;
+              if (x >= this.mapBounds.minX && x <= this.mapBounds.maxX) {
+                intersectionT = t;
+              }
+            }
+          }
+          // Check Top Wall (y = maxY)
+          if (dy !== 0 && intersectionT === 1.0) {
+            const t = (this.mapBounds.maxY - player.y) / dy;
+            if (t >= 0 && t <= 1) {
+              const x = player.x + t * dx;
+              if (x >= this.mapBounds.minX && x <= this.mapBounds.maxX) {
+                intersectionT = t;
+              }
+            }
+          }
+
+          // Calculate the exact coordinate where the ray enters map bounds
+          const intersectX = player.x + intersectionT * dx;
+          const intersectY = player.y + intersectionT * dy;
+
+          // 3. Find the midway point between the player's ringout point and the boundary hit
+          //const midX = (player.x + intersectX) / 2;
+          //const midY = (player.y + intersectY) / 2;
+
+          // 4. Apply transformations to the VFX mesh
+          vfx.mesh.position.set(intersectX, intersectY, 0.5); 
+          vfx.mesh.rotation.z = baseAngle; // Orient the beam pointing back into the arena
+          
           this.playerVFX.set(player.id, vfx);
         }
       }
@@ -1704,7 +1756,7 @@ export class GameRenderer {
   }
 
   private computeBaseViewHeight(mapHeight: number): number {
-    return Math.min(Math.max(mapHeight * 0.65, 8), 10);
+    return Math.min(Math.max(mapHeight * 0.75, 8), 10);
   }
 
   private snapCameraToPixelGrid(): void {

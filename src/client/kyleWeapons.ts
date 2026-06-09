@@ -73,7 +73,7 @@ export const GunWeapon: K_Weapon = {
 
 export const PenCrossbow: K_Weapon = {
   kind: ItemKind.PenCrossbow,
-  damage: 100,
+  damage: 80,
   ammo: 1,
   fireRate: PEN_CROSSBOW_FIRE_COOLDOWN_TICKS,
 
