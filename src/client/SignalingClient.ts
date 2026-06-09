@@ -34,6 +34,7 @@ export type ClientToServerMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
     }
   | {
@@ -67,6 +68,12 @@ export type ClientToServerMessage =
       peerId: string;
       newRoomId: string;
       hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 export type ServerToClientMessage =
@@ -113,6 +120,7 @@ export type ServerToClientMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
     }
   | {
@@ -146,6 +154,12 @@ export type ServerToClientMessage =
       peerId: string;
       newRoomId: string;
       hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 export class SignalingClient {

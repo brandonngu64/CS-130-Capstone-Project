@@ -329,6 +329,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   private readonly deserializeIdsScratch: string[] = [];
   private readonly stepIdsScratch: string[] = [];
 
+  // Peers whose owner brought 2 local players (split-screen mode). Each such
+  // peer's per-tick Uint8Array is length 2 — byte 0 = primary, byte 1 = the
+  // virtual secondary player ${peerId}#2. Set before initializePlayers() and
+  // held constant for the match's lifetime to keep rollback deterministic.
+  private splitScreenPeers: ReadonlySet<string> = new Set();
+  private readonly expandedInputsScratch = new Map<string, Uint8Array>();
+
   constructor(map: TiledMapDefinition, options?: { startingStocks?: number; gameMode?: GameMode }) {
     this.map = map;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y });
@@ -372,6 +379,47 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
   setGameMode(mode: GameMode): void {
     this.gameMode = mode;
+  }
+
+  // Locks in which peers are sending split-screen (2-byte) inputs for this
+  // match. Must be called before initializePlayers() and not mutated again
+  // mid-match — every peer must agree on the mapping for rollback to stay
+  // deterministic.
+  setSplitScreenPeers(peerIds: Iterable<string>): void {
+    this.splitScreenPeers = new Set(peerIds);
+  }
+
+  // Each split-screen peer expands into [peerId, `${peerId}#2`]; otherwise
+  // [peerId]. Sort order is the caller's responsibility.
+  expandPlayerIds(peerIds: Iterable<string>): string[] {
+    const expanded: string[] = [];
+    for (const peerId of peerIds) {
+      expanded.push(peerId);
+      if (this.splitScreenPeers.has(peerId)) {
+        expanded.push(this.secondaryIdFor(peerId));
+      }
+    }
+    return expanded;
+  }
+
+  secondaryIdFor(peerId: string): string {
+    return `${peerId}#2`;
+  }
+
+  // Expand the rollback-session's per-peer inputs into a per-virtual-player
+  // map. Reuses scratch storage to avoid GC during rollback re-simulation.
+  private expandStepInputs(inputs: Map<PlayerId, Uint8Array>): Map<string, Uint8Array> {
+    const expanded = this.expandedInputsScratch;
+    expanded.clear();
+    for (const [peerId, bytes] of inputs) {
+      if (this.splitScreenPeers.has(peerId as string) && bytes.length >= 2) {
+        expanded.set(peerId as string, bytes.subarray(0, 1));
+        expanded.set(this.secondaryIdFor(peerId as string), bytes.subarray(1, 2));
+      } else {
+        expanded.set(peerId as string, bytes);
+      }
+    }
+    return expanded;
   }
 
   // Swap the active map in place. The session created in prepareNetworking()
@@ -773,12 +821,18 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   step(inputs: Map<PlayerId, Uint8Array>): void {
     this.tickCount += 1;
 
+    // Expand split-screen peers (1 peerId → 2 virtual players) before
+    // building the per-player loop. The remainder of step() is keyed by
+    // virtual PlayerId strings and is agnostic to which client owns which
+    // virtual player.
+    const expandedInputs = this.expandStepInputs(inputs);
+
     // Reuse sortedPlayerIds if the input membership matches it; otherwise
     // rebuild from inputs.keys() and let syncPlayers refresh the cache.
     const ids = this.stepIdsScratch;
     ids.length = 0;
-    for (const id of inputs.keys()) {
-      ids.push(id as string);
+    for (const id of expandedInputs.keys()) {
+      ids.push(id);
     }
     ids.sort();
     this.syncPlayers(ids);
@@ -807,7 +861,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
-      const raw = inputs.get(id as PlayerId);
+      const raw = expandedInputs.get(id);
       if (!raw) {
         continue;
       }
@@ -841,7 +895,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.updateLethalLaunches();
     this.world.step();
     this.resolvePlatformContacts(previousStates);
-    this.syncHorizontalMovement(ids, inputs, previousStates);
+    this.syncHorizontalMovement(ids, expandedInputs, previousStates);
     this.handleBlastZoneDeaths();
     this.handleHealthDamage();
     this.tickHeldItems();
@@ -1016,11 +1070,13 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     this.previousConnectedPlayerCount = 0;
     this.matchState.clear();
     this.initializeItemSlots();
+    this.splitScreenPeers = new Set();
+    this.expandedInputsScratch.clear();
   }
 
   private syncHorizontalMovement(
     ids: string[],
-    inputs: Map<PlayerId, Uint8Array>,
+    inputs: Map<string, Uint8Array>,
     previousStates: Map<string, StepPlayerState>,
   ): void {
     for (const id of ids) {
@@ -1052,7 +1108,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         continue;
       }
 
-      const raw = inputs.get(id as PlayerId);
+      const raw = inputs.get(id);
       if (!raw) {
         continue;
       }

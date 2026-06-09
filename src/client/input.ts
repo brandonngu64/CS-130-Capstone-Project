@@ -47,3 +47,16 @@ export function encodeInput(state: InputState): Uint8Array {
 export function decodeInputBits(input: Uint8Array | undefined): number {
   return input?.[0] ?? 0;
 }
+
+// Split-screen packing: byte 0 = primary local player, byte 1 = secondary.
+// The rollback session treats the array as opaque bytes, so a longer length
+// flows through to RollbackPhysicsGame.step() without library changes.
+export function encodeSplitInput(
+  primary: InputState,
+  secondary: InputState,
+): Uint8Array {
+  const bytes = new Uint8Array(2);
+  bytes[0] = encodeInput(primary)[0];
+  bytes[1] = encodeInput(secondary)[0];
+  return bytes;
+}

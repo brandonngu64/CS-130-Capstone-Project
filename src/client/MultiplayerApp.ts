@@ -64,10 +64,11 @@ import { StartupVolumeMenu } from './StartupVolumeMenu';
 import { MusicSystem, type MusicPhase } from './MusicSystem';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { SmashHud } from './SmashHud';
-import { encodeInput, type InputState } from './input';
+import { encodeInput, encodeSplitInput, type InputState } from './input';
 import {
   DEFAULT_INPUT_SCHEME_ID,
   INPUT_SCHEMES,
+  SPLIT_SCREEN_KEYMAP,
   isInputSchemeId,
   type GameAction,
   type InputScheme,
@@ -104,6 +105,7 @@ const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 const INPUT_DELAY_STORAGE_KEY = 'cs130-input-delay';
 const FORCE_RELAY_STORAGE_KEY = 'cs130-force-relay';
 const INPUT_SCHEME_STORAGE_KEY = 'cs130-input-scheme';
+const SPLIT_SCREEN_STORAGE_KEY = 'cs130-split-screen';
 const VOLUME_MASTER_STORAGE_KEY = 'cs130-volume-master';
 const VOLUME_SFX_STORAGE_KEY = 'cs130-volume-sfx';
 const VOLUME_MUSIC_STORAGE_KEY = 'cs130-volume-music';
@@ -316,6 +318,26 @@ function readStoredInputSchemeId(): InputSchemeId {
 function storeInputSchemeId(id: InputSchemeId): void {
   try {
     globalThis.localStorage?.setItem(INPUT_SCHEME_STORAGE_KEY, id);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredSplitScreen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SPLIT_SCREEN_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function storeSplitScreen(enabled: boolean): void {
+  try {
+    if (enabled) {
+      globalThis.localStorage?.setItem(SPLIT_SCREEN_STORAGE_KEY, '1');
+    } else {
+      globalThis.localStorage?.removeItem(SPLIT_SCREEN_STORAGE_KEY);
+    }
   } catch {
     // Ignore storage failures.
   }
@@ -573,7 +595,31 @@ export class MultiplayerApp {
     shield: false,
   };
 
+  private readonly inputStateP2: InputState = {
+    left: false,
+    right: false,
+    jump: false,
+    duck: false,
+    punch: false,
+    dodge: false,
+    shield: false,
+  };
+
   private currentScheme: InputScheme = INPUT_SCHEMES[readStoredInputSchemeId()];
+
+  // User-toggleable in settings (main menu only). When true, the next room we
+  // host/join brings 2 local players into the match (peerId + `${peerId}#2`).
+  private splitScreenEnabled = readStoredSplitScreen();
+  // Latched at room entry. Cleared on leaveRoom. Held constant during a match
+  // to keep rollback deterministic.
+  private localSecondaryPlayerId: string | null = null;
+  // Per-peer split-screen state, propagated via lobby_split_screen. Drives the
+  // game-layer expansion (peerId → 2 virtual PlayerIds) and the host's
+  // capacity check before starting the match.
+  private readonly localPlayerCountByPeer = new Map<string, number>();
+  // Which local slot the character picker currently edits when split-screen
+  // is active. 'primary' = peerId, 'secondary' = `${peerId}#2`.
+  private characterPickerSlot: 'primary' | 'secondary' = 'primary';
 
   private readonly debugCounters: DebugCounters = {
     rollbackCount: 0,
@@ -610,6 +656,26 @@ export class MultiplayerApp {
 
   private setInputAction(action: GameAction, pressed: boolean): void {
     this.inputState[action] = pressed;
+  }
+
+  private setSplitScreenInputAction(
+    slot: 'primary' | 'secondary',
+    action: GameAction,
+    pressed: boolean,
+  ): void {
+    if (slot === 'primary') {
+      this.inputState[action] = pressed;
+    } else {
+      this.inputStateP2[action] = pressed;
+    }
+  }
+
+  private isSplitScreenActive(): boolean {
+    return this.localSecondaryPlayerId !== null;
+  }
+
+  private isLocalPlayerId(playerId: string): boolean {
+    return playerId === this.peerId || playerId === this.localSecondaryPlayerId;
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
@@ -651,6 +717,15 @@ export class MultiplayerApp {
       return;
     }
 
+    if (this.isSplitScreenActive()) {
+      const binding = SPLIT_SCREEN_KEYMAP[event.code];
+      if (binding) {
+        event.preventDefault();
+        this.setSplitScreenInputAction(binding.slot, binding.action, true);
+      }
+      return;
+    }
+
     const action = this.currentScheme.keys[event.code];
     if (action) {
       event.preventDefault();
@@ -677,6 +752,14 @@ export class MultiplayerApp {
         this.cameraPanInput.zoomout = false;
       } else {
         this.cameraPanInput.zoomin = false;
+      }
+      return;
+    }
+
+    if (this.isSplitScreenActive()) {
+      const binding = SPLIT_SCREEN_KEYMAP[event.code];
+      if (binding) {
+        this.setSplitScreenInputAction(binding.slot, binding.action, false);
       }
       return;
     }
@@ -739,6 +822,36 @@ export class MultiplayerApp {
     this.inputState.punch = false;
     this.inputState.dodge = false;
     this.inputState.shield = false;
+
+    this.inputStateP2.left = false;
+    this.inputStateP2.right = false;
+    this.inputStateP2.jump = false;
+    this.inputStateP2.duck = false;
+    this.inputStateP2.punch = false;
+    this.inputStateP2.dodge = false;
+    this.inputStateP2.shield = false;
+  }
+
+  setSplitScreenEnabled(enabled: boolean): void {
+    if (this.isInRoom() || this.connecting) {
+      this.settingsMenu.setSplitScreenEnabled(this.splitScreenEnabled);
+      this.setStatus(
+        'Split-screen can only be toggled from the main menu. Leave the room first.',
+        'error',
+      );
+      return;
+    }
+    if (enabled === this.splitScreenEnabled) {
+      return;
+    }
+    this.splitScreenEnabled = enabled;
+    storeSplitScreen(enabled);
+    this.settingsMenu.setSplitScreenEnabled(enabled);
+    this.setStatus(
+      enabled
+        ? 'Split-screen enabled. 2 local players will join the next room.'
+        : 'Split-screen disabled.',
+    );
   }
 
   setInputScheme(id: InputSchemeId): void {
@@ -898,6 +1011,9 @@ export class MultiplayerApp {
       onKoBarEnabledChange: (enabled) => {
         this.setKoBarEnabled(enabled);
       },
+      onSplitScreenChange: (enabled) => {
+        this.setSplitScreenEnabled(enabled);
+      },
     });
 
     document.addEventListener('fullscreenchange', this.onFullscreenStateChange);
@@ -910,6 +1026,8 @@ export class MultiplayerApp {
     this.settingsMenu.setInputDelay(this.inputDelayFrames);
     this.settingsMenu.setForceRelay(this.forceRelay);
     this.settingsMenu.setInputScheme(this.currentScheme);
+    this.settingsMenu.setSplitScreenEnabled(this.splitScreenEnabled);
+    this.settingsMenu.setSplitScreenEditable(true);
 
     this.renderer.setCameraMode(this.cameraMode);
     this.updateCameraButton();
@@ -951,6 +1069,17 @@ export class MultiplayerApp {
       this.setLocalDisplayName(this.lobbyNameInput.value, { broadcast: true });
     });
     this.lobbyCharacterGrid.addEventListener('click', (event) => {
+      const slotToggle = (event.target as HTMLElement).closest<HTMLButtonElement>(
+        '[data-slot-toggle]',
+      );
+      if (slotToggle) {
+        const slot = slotToggle.dataset.slotToggle;
+        if (slot === 'primary' || slot === 'secondary') {
+          this.characterPickerSlot = slot;
+          this.updateUiState();
+        }
+        return;
+      }
       const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
         '[data-character-id]',
       );
@@ -1102,13 +1231,13 @@ export class MultiplayerApp {
       const renderState = this.game.getRenderState(renderDelaySeconds);
       const vfxDelta = this.vfxClock.tick(frameDelta);
       this.applyCountdownCamera(this.game.getCountdownCameraTargetId());
-      this.renderer.render(renderState, this.peerId, vfxDelta);
+      this.renderer.render(renderState, this.peerId, vfxDelta, this.localSecondaryPlayerId);
       if (this.isInRoom() || this.connecting) {
         this.smashHud.update(renderState.players, this.peerId);
       }
 
       const localPlayer = renderState.players.find(
-        (player: { id: string }) => player.id === this.peerId,
+        (player: { id: string }) => this.isLocalPlayerId(player.id),
       );
       if (localPlayer) {
         this.syncRespawnCamera(localPlayer);
@@ -1172,7 +1301,9 @@ export class MultiplayerApp {
       return;
     }
 
-    const rawInput = encodeInput(this.inputState);
+    const rawInput = this.isSplitScreenActive()
+      ? encodeSplitInput(this.inputState, this.inputStateP2)
+      : encodeInput(this.inputState);
     const input = this.getDelayedInput(rawInput);
 
     let tickResult: TickResult;
@@ -1322,6 +1453,18 @@ export class MultiplayerApp {
         throw new Error('Unexpected signaling response while joining room');
       }
 
+      // Fast pre-join capacity check for split-screen. Assumes other peers
+      // are non-split-screen; the host re-validates the precise total before
+      // starting the match.
+      if (this.splitScreenEnabled) {
+        const projectedTotal = response.members.length + 2;
+        if (projectedTotal > MAX_PLAYERS) {
+          throw new Error(
+            `Room is too full for 2 local players (${response.members.length}/${MAX_PLAYERS} taken). Disable split-screen and retry.`,
+          );
+        }
+      }
+
       const resolvedHostPeer = response.hostPeerId || hostPeerId;
       this.setRoomState(roomId, resolvedHostPeer, response.members);
       this.recoveryState = {
@@ -1384,6 +1527,9 @@ export class MultiplayerApp {
     this.lobbyMembers.clear();
     this.lobbyReadyByPeer.clear();
     this.lobbyCharacterByPeer.clear();
+    this.localPlayerCountByPeer.clear();
+    this.localSecondaryPlayerId = null;
+    this.resetInputState();
     this.mainMenu.setShareUrl('');
     this.mainMenu.setRoomId('');
     this.mainMenu.setHostPeerId('');
@@ -1679,6 +1825,8 @@ export class MultiplayerApp {
       this.lobbyCharacterByPeer.clear();
       this.lobbySelectionByPeer.clear();
       this.lobbyNameByPeer.clear();
+      this.localPlayerCountByPeer.clear();
+      this.localSecondaryPlayerId = null;
       this.stopAnnouncer();
     } finally {
       this.isCleaningUp = false;
@@ -1865,10 +2013,14 @@ export class MultiplayerApp {
         this.setStatus(`Peer joined room: ${message.peerId}`);
         this.lobbyMembers.add(message.peerId);
         this.lobbyReadyByPeer.set(message.peerId, false);
+        if (!this.localPlayerCountByPeer.has(message.peerId)) {
+          this.localPlayerCountByPeer.set(message.peerId, 1);
+        }
         this.assignDefaultCharacterIfMissing(message.peerId);
         this.broadcastLocalCharacterSelection();
         this.broadcastLocalReadyState();
         this.broadcastLocalDisplayName();
+        this.broadcastLocalSplitScreenState();
         // Host owns the game mode and map — re-broadcast them so the joining
         // peer adopts them. Without this, joiners stay at the defaults and
         // their local sim diverges from the host's (e.g. classic knockback vs
@@ -1897,6 +2049,10 @@ export class MultiplayerApp {
         this.lobbyCharacterByPeer.delete(message.peerId);
         this.lobbySelectionByPeer.delete(message.peerId);
         this.lobbyNameByPeer.delete(message.peerId);
+        this.localPlayerCountByPeer.delete(message.peerId);
+        // Drop any secondary virtual-id lobby state for this peer too.
+        this.lobbyCharacterByPeer.delete(`${message.peerId}#2`);
+        this.lobbySelectionByPeer.delete(`${message.peerId}#2`);
         this.updateUiState();
         break;
 
@@ -1909,9 +2065,16 @@ export class MultiplayerApp {
           if (!this.lobbyReadyByPeer.has(member)) {
             this.lobbyReadyByPeer.set(member, false);
           }
+          if (!this.localPlayerCountByPeer.has(member)) {
+            this.localPlayerCountByPeer.set(
+              member,
+              member === this.peerId && this.splitScreenEnabled ? 2 : 1,
+            );
+          }
           this.assignDefaultCharacterIfMissing(member);
         }
         this.ensureLocalCharacterSelection();
+        this.broadcastLocalSplitScreenState();
         this.updateUiState();
         break;
 
@@ -1921,9 +2084,16 @@ export class MultiplayerApp {
           if (!this.lobbyReadyByPeer.has(member)) {
             this.lobbyReadyByPeer.set(member, false);
           }
+          if (!this.localPlayerCountByPeer.has(member)) {
+            this.localPlayerCountByPeer.set(
+              member,
+              member === this.peerId && this.splitScreenEnabled ? 2 : 1,
+            );
+          }
           this.assignDefaultCharacterIfMissing(member);
         }
         this.ensureLocalCharacterSelection();
+        this.broadcastLocalSplitScreenState();
         this.updateUiState();
         break;
 
@@ -1941,16 +2111,18 @@ export class MultiplayerApp {
         this.updateUiState();
         break;
 
-      case 'lobby_character_select':
+      case 'lobby_character_select': {
+        const targetId = message.virtualPlayerId ?? message.peerId;
         if (isLobbyCharacterSelection(message.characterId)) {
-          this.lobbySelectionByPeer.set(message.peerId, message.characterId);
+          this.lobbySelectionByPeer.set(targetId, message.characterId);
           if (isCharacterId(message.characterId)) {
-            this.lobbyCharacterByPeer.set(message.peerId, message.characterId);
-            this.game?.setCharacterSelection(message.peerId, message.characterId);
+            this.lobbyCharacterByPeer.set(targetId, message.characterId);
+            this.game?.setCharacterSelection(targetId, message.characterId);
           }
         }
         this.updateUiState();
         break;
+      }
 
       case 'lobby_game_mode_select':
         if (isGameMode(message.gameMode)) {
@@ -1979,8 +2151,28 @@ export class MultiplayerApp {
         // clients agree on character/map before the rollback session starts.
         if (!this.session?.isHost) {
           this.applyResolvedSelections(message.mapId, message.characters);
+          // Mirror handleStartGame()'s pre-start sequence so split-screen
+          // peers expand into their secondary virtual players before the
+          // rollback session ticks — otherwise ${peerId}#2 is never created
+          // on the client and the secondary players never render.
+          this.applyLobbyCharactersToGame();
+          this.configureSplitScreenAndInitializePlayers();
         }
         break;
+
+      case 'lobby_split_screen': {
+        const count = Math.max(1, Math.min(2, Math.floor(message.localPlayerCount)));
+        this.localPlayerCountByPeer.set(message.peerId, count);
+        this.assignDefaultCharacterIfMissing(message.peerId);
+        if (count === 2) {
+          this.assignDefaultCharacterIfMissing(`${message.peerId}#2`);
+        } else {
+          this.lobbyCharacterByPeer.delete(`${message.peerId}#2`);
+          this.lobbySelectionByPeer.delete(`${message.peerId}#2`);
+        }
+        this.updateUiState();
+        break;
+      }
 
       case 'lobby_rematch':
         // Host has announced a fresh room for the rematch. Guests need to
@@ -2041,6 +2233,16 @@ export class MultiplayerApp {
   private setRoomState(roomId: string, hostPeerId: string, members: string[] = []): void {
     this.roomId = roomId;
     this.hostPeerId = hostPeerId;
+
+    // Latch our split-screen choice at room entry. Held constant for the
+    // match's lifetime to keep rollback determinism intact.
+    this.localSecondaryPlayerId = this.splitScreenEnabled
+      ? `${this.peerId}#2`
+      : null;
+    this.localPlayerCountByPeer.set(
+      this.peerId,
+      this.splitScreenEnabled ? 2 : 1,
+    );
 
     // Preload the 3-2-1 countdown VFX so it's resident before the round starts.
     this.ensureCountdownAsset();
@@ -2498,6 +2700,7 @@ export class MultiplayerApp {
     this.mainMenu.setMapSelectionEnabled(!inActiveSession);
     this.cameraToggleButton.disabled = !inActiveSession;
     this.updateCameraButton();
+    this.settingsMenu.setSplitScreenEditable(!inActiveSession);
 
     const inLobby = inRoom && this.session?.state === SessionState.Lobby;
     const inPlayingSession = inRoom && this.session?.state === SessionState.Playing;
@@ -3118,22 +3321,33 @@ export class MultiplayerApp {
     this.applyResolvedSelections(resolvedMapId, resolvedCharacters);
 
     this.applyLobbyCharactersToGame();
-    const sortedSessionIds = Array.from(this.session.players.keys()).sort();
-    this.game?.initializePlayers(sortedSessionIds);
+    this.configureSplitScreenAndInitializePlayers();
     this.session.start();
     this.setStatus(`Match started in room ${this.roomId}.`);
     this.updateUiState();
   }
 
+  private configureSplitScreenAndInitializePlayers(): void {
+    if (!this.session || !this.game) return;
+    const sessionPeerIds = Array.from(this.session.players.keys()) as string[];
+    const splitScreenPeers = sessionPeerIds.filter(
+      (peerId) => (this.localPlayerCountByPeer.get(peerId) ?? 1) === 2,
+    );
+    this.game.setSplitScreenPeers(splitScreenPeers);
+    const expandedIds = this.game.expandPlayerIds(sessionPeerIds);
+    expandedIds.sort();
+    this.game.initializePlayers(expandedIds);
+  }
+
   private resolveRandomCharacters(): Record<string, string> {
     const resolved: Record<string, string> = {};
-    for (const peerId of this.lobbyMembers) {
-      const selection = this.lobbySelectionByPeer.get(peerId) ?? RANDOM_CHARACTER_SELECTION;
+    for (const playerId of this.allVirtualPlayerIdsSorted()) {
+      const selection = this.lobbySelectionByPeer.get(playerId) ?? RANDOM_CHARACTER_SELECTION;
       if (selection === RANDOM_CHARACTER_SELECTION) {
         const pick = CHARACTER_IDS[Math.floor(Math.random() * CHARACTER_IDS.length)];
-        resolved[peerId] = pick;
+        resolved[playerId] = pick;
       } else {
-        resolved[peerId] = selection;
+        resolved[playerId] = selection;
       }
     }
     return resolved;
@@ -3163,12 +3377,25 @@ export class MultiplayerApp {
       return false;
     }
 
+    // Sum virtual players across all peers — split-screen peers count as 2.
+    if (this.totalVirtualPlayerCount() > MAX_PLAYERS) {
+      return false;
+    }
+
     // Allow host to start immediately when alone in lobby.
     if (this.lobbyMembers.size <= 1) {
       return true;
     }
 
     return this.areAllLobbyPlayersReady();
+  }
+
+  private totalVirtualPlayerCount(): number {
+    let total = 0;
+    for (const peerId of this.lobbyMembers) {
+      total += this.localPlayerCountByPeer.get(peerId) ?? 1;
+    }
+    return total;
   }
 
   private seedLobbyMembers(): void {
@@ -3225,9 +3452,12 @@ export class MultiplayerApp {
       return;
     }
 
-    const ids = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
+    // Expand split-screen peers into virtual players so each tile maps 1:1 to
+    // an in-game PlayerCharacter.
+    const virtualIds = this.allVirtualPlayerIdsSorted();
+
     const slots: Array<string | null> = Array.from({ length: MAX_PLAYERS }, (_, i) =>
-      ids[i] ?? null,
+      virtualIds[i] ?? null,
     );
 
     this.lobbyPlayersList.innerHTML = slots
@@ -3243,21 +3473,25 @@ export class MultiplayerApp {
             </article>
           `;
         }
-        const ready = this.lobbyReadyByPeer.get(playerId) === true;
-        const isLocal = playerId === this.peerId;
-        const colorHex = this.peerColorHex(playerId, ids);
+        const isSecondary = playerId.endsWith('#2');
+        const ownerPeerId = isSecondary ? playerId.slice(0, -2) : playerId;
+        const ready = this.lobbyReadyByPeer.get(ownerPeerId) === true;
+        const isLocal = this.isLocalPlayerId(playerId);
+        const colorHex = this.peerColorHex(playerId, virtualIds);
         const selection = this.lobbySelectionByPeer.get(playerId) ?? RANDOM_CHARACTER_SELECTION;
         const isRandom = selection === RANDOM_CHARACTER_SELECTION;
         const concreteCharacter =
           this.lobbyCharacterByPeer.get(playerId) ??
-          defaultCharacterForPlayer(playerId, ids);
+          defaultCharacterForPlayer(playerId, virtualIds);
         const characterLabel = isRandom
           ? 'Random'
           : CHARACTER_DISPLAY_NAMES[concreteCharacter];
         const portrait = isRandom
           ? `<span class="lobby-player-tile__random">?</span>`
           : `<img src="${getCharacterHeadshotUrl(concreteCharacter)}" alt="${CHARACTER_DISPLAY_NAMES[concreteCharacter]} headshot" />`;
-        const displayName = this.lobbyNameByPeer.get(playerId)?.trim() || this.truncatePeerId(playerId);
+        const baseName =
+          this.lobbyNameByPeer.get(ownerPeerId)?.trim() || this.truncatePeerId(ownerPeerId);
+        const displayName = isSecondary ? `${baseName} (P2)` : baseName;
         return `
           <article
             class="lobby-player-tile${isLocal ? ' lobby-player-tile--local' : ''}"
@@ -3289,7 +3523,37 @@ export class MultiplayerApp {
       return;
     }
 
+    // In split-screen, the picker can edit P1 or P2 — surface a small toggle
+    // so the user can switch which slot the next click applies to.
+    const splitScreenActive = this.isSplitScreenActive();
+    if (!splitScreenActive) {
+      this.characterPickerSlot = 'primary';
+    }
+
     const localSelection = this.getLocalCharacterSelection();
+
+    const slotHeader = splitScreenActive
+      ? `
+        <div class="lobby-character-slot-toggle">
+          <button
+            type="button"
+            class="lobby-character-slot-button${
+              this.characterPickerSlot === 'primary' ? ' lobby-character-slot-button--active' : ''
+            }"
+            data-slot-toggle="primary"
+            aria-pressed="${this.characterPickerSlot === 'primary' ? 'true' : 'false'}"
+          >Editing: P1</button>
+          <button
+            type="button"
+            class="lobby-character-slot-button${
+              this.characterPickerSlot === 'secondary' ? ' lobby-character-slot-button--active' : ''
+            }"
+            data-slot-toggle="secondary"
+            aria-pressed="${this.characterPickerSlot === 'secondary' ? 'true' : 'false'}"
+          >Editing: P2</button>
+        </div>
+      `
+      : '';
 
     const randomTile = `
       <button
@@ -3322,11 +3586,17 @@ export class MultiplayerApp {
       `;
     }).join('');
 
-    this.lobbyCharacterGrid.innerHTML = randomTile + characterTiles;
+    this.lobbyCharacterGrid.innerHTML = slotHeader + randomTile + characterTiles;
+  }
+
+  private activeLocalVirtualPlayerId(): string {
+    return this.characterPickerSlot === 'secondary' && this.localSecondaryPlayerId
+      ? this.localSecondaryPlayerId
+      : this.peerId;
   }
 
   private getLocalCharacterSelection(): LobbyCharacterSelection {
-    return this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
+    return this.lobbySelectionByPeer.get(this.activeLocalVirtualPlayerId()) ?? RANDOM_CHARACTER_SELECTION;
   }
 
   private assignDefaultCharacterIfMissing(playerId: string): void {
@@ -3343,10 +3613,21 @@ export class MultiplayerApp {
     // Even when the selection is `random`, we still need *some* concrete
     // CharacterId staged in the game so things like preview rendering can
     // proceed. The host overrides this with the resolved pick on start.
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    const defaultCharacter = defaultCharacterForPlayer(playerId, sortedMembers);
+    const sortedVirtuals = this.allVirtualPlayerIdsSorted();
+    const defaultCharacter = defaultCharacterForPlayer(playerId, sortedVirtuals);
     this.lobbyCharacterByPeer.set(playerId, defaultCharacter);
     this.game?.setCharacterSelection(playerId, defaultCharacter);
+  }
+
+  private allVirtualPlayerIdsSorted(): string[] {
+    const ids: string[] = [];
+    for (const peerId of this.lobbyMembers) {
+      ids.push(peerId);
+      if ((this.localPlayerCountByPeer.get(peerId) ?? 1) === 2) {
+        ids.push(`${peerId}#2`);
+      }
+    }
+    return ids.sort((a, b) => a.localeCompare(b));
   }
 
   private ensureLocalCharacterSelection(): void {
@@ -3364,21 +3645,22 @@ export class MultiplayerApp {
     if (!this.roomId || !this.signaling || !this.isInRoom() || this.session?.state !== SessionState.Lobby) {
       return;
     }
-    const previousSelection = this.lobbySelectionByPeer.get(this.peerId);
+    const targetId = this.activeLocalVirtualPlayerId();
+    const previousSelection = this.lobbySelectionByPeer.get(targetId);
     if (previousSelection === selection) {
       // Re-clicking the same tile must not retrigger the announcer SFX.
       return;
     }
 
-    this.lobbySelectionByPeer.set(this.peerId, selection);
+    this.lobbySelectionByPeer.set(targetId, selection);
     if (selection !== RANDOM_CHARACTER_SELECTION) {
-      this.lobbyCharacterByPeer.set(this.peerId, selection);
-      this.game?.setCharacterSelection(this.peerId, selection);
+      this.lobbyCharacterByPeer.set(targetId, selection);
+      this.game?.setCharacterSelection(targetId, selection);
       this.playAnnouncerForCharacter(selection);
     } else {
       this.stopAnnouncer();
     }
-    this.broadcastLocalCharacterSelection();
+    this.broadcastLocalCharacterSelection(targetId);
     this.updateUiState();
   }
 
@@ -3415,22 +3697,44 @@ export class MultiplayerApp {
     }
   }
 
-  private broadcastLocalCharacterSelection(): void {
+  private broadcastLocalCharacterSelection(virtualPlayerId?: string): void {
     if (!this.roomId || !this.signaling) {
       return;
     }
 
-    const selection = this.getLocalCharacterSelection();
-    if (selection !== RANDOM_CHARACTER_SELECTION) {
-      this.lobbyCharacterByPeer.set(this.peerId, selection);
-      this.game?.setCharacterSelection(this.peerId, selection);
-    }
+    // Without an explicit target, broadcast every local virtual id so a newly
+    // joined peer can fetch our state. Otherwise broadcast just the one slot.
+    const targets: string[] = virtualPlayerId
+      ? [virtualPlayerId]
+      : this.localSecondaryPlayerId
+        ? [this.peerId, this.localSecondaryPlayerId]
+        : [this.peerId];
 
+    for (const target of targets) {
+      const selection = this.lobbySelectionByPeer.get(target) ?? RANDOM_CHARACTER_SELECTION;
+      if (selection !== RANDOM_CHARACTER_SELECTION) {
+        this.lobbyCharacterByPeer.set(target, selection);
+        this.game?.setCharacterSelection(target, selection);
+      }
+      this.signaling.send({
+        type: 'lobby_character_select',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        virtualPlayerId: target === this.peerId ? undefined : target,
+        characterId: selection,
+      });
+    }
+  }
+
+  private broadcastLocalSplitScreenState(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
     this.signaling.send({
-      type: 'lobby_character_select',
+      type: 'lobby_split_screen',
       roomId: this.roomId,
       peerId: this.peerId,
-      characterId: selection,
+      localPlayerCount: this.splitScreenEnabled ? 2 : 1,
     });
   }
 
@@ -3451,8 +3755,8 @@ export class MultiplayerApp {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    for (const playerId of sortedMembers) {
+    const virtualIds = this.allVirtualPlayerIdsSorted();
+    for (const playerId of virtualIds) {
       if (!this.lobbyCharacterByPeer.has(playerId)) {
         this.assignDefaultCharacterIfMissing(playerId);
       }

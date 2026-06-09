@@ -89,6 +89,12 @@ websocketServer.on('connection', (socket) => {
             case 'lobby_random_resolved':
                 relayLobbyRandomResolved(socket, message);
                 break;
+            case 'lobby_rematch':
+                relayLobbyRematch(socket, message);
+                break;
+            case 'lobby_split_screen':
+                relayLobbySplitScreen(socket, message);
+                break;
             default:
                 break;
         }
@@ -463,6 +469,7 @@ function relayLobbyCharacterSelect(socket, message) {
         type: 'lobby_character_select',
         roomId: message.roomId,
         peerId: message.peerId,
+        virtualPlayerId: message.virtualPlayerId,
         characterId: message.characterId,
     });
 }
@@ -587,6 +594,58 @@ function relayLobbyRandomResolved(socket, message) {
         peerId: message.peerId,
         mapId: message.mapId,
         characters: message.characters,
+    });
+}
+function relayLobbyRematch(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot trigger rematch for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room || !room.members.has(message.peerId)) {
+        return;
+    }
+    if (message.peerId !== room.hostPeerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'NOT_HOST',
+            message: 'Only the host can trigger a rematch',
+        });
+        return;
+    }
+    broadcastToRoom(room, {
+        type: 'lobby_rematch',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        newRoomId: message.newRoomId,
+        hostPeerId: message.hostPeerId,
+    });
+}
+function relayLobbySplitScreen(socket, message) {
+    const socketPeerId = socketToPeer.get(socket);
+    if (!socketPeerId || socketPeerId !== message.peerId) {
+        send(socket, {
+            type: 'room_error',
+            code: 'PEER_MISMATCH',
+            message: 'Cannot update split-screen state for a different peer',
+        });
+        return;
+    }
+    const room = rooms.get(message.roomId);
+    if (!room || !room.members.has(message.peerId)) {
+        return;
+    }
+    const clamped = Math.max(1, Math.min(2, Math.floor(message.localPlayerCount)));
+    broadcastToRoom(room, {
+        type: 'lobby_split_screen',
+        roomId: message.roomId,
+        peerId: message.peerId,
+        localPlayerCount: clamped,
     });
 }
 function removePeerFromCurrentRoom(peerId) {

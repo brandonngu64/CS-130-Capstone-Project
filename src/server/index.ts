@@ -47,6 +47,7 @@ type ClientMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
     }
   | {
@@ -80,6 +81,12 @@ type ClientMessage =
       peerId: string;
       newRoomId: string;
       hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 type ServerMessage =
@@ -126,6 +133,7 @@ type ServerMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
     }
   | {
@@ -159,6 +167,12 @@ type ServerMessage =
       peerId: string;
       newRoomId: string;
       hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 type Room = {
@@ -282,6 +296,9 @@ websocketServer.on('connection', (socket) => {
         break;
       case 'lobby_rematch':
         relayLobbyRematch(socket, message);
+        break;
+      case 'lobby_split_screen':
+        relayLobbySplitScreen(socket, message);
         break;
       default:
         break;
@@ -754,6 +771,7 @@ function relayLobbyCharacterSelect(
     type: 'lobby_character_select',
     roomId: message.roomId,
     peerId: message.peerId,
+    virtualPlayerId: message.virtualPlayerId,
     characterId: message.characterId,
   });
 }
@@ -943,6 +961,34 @@ function relayLobbyRematch(
     peerId: message.peerId,
     newRoomId: message.newRoomId,
     hostPeerId: message.hostPeerId,
+  });
+}
+
+function relayLobbySplitScreen(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_split_screen' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update split-screen state for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  const clamped = Math.max(1, Math.min(2, Math.floor(message.localPlayerCount)));
+  broadcastToRoom(room, {
+    type: 'lobby_split_screen',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    localPlayerCount: clamped,
   });
 }
 

@@ -339,7 +339,12 @@ export class GameRenderer {
     });
   }
 
-  render(state: RenderState, localPlayerId: string, vfxDeltaSeconds = 0): void {
+  render(
+    state: RenderState,
+    localPlayerId: string,
+    vfxDeltaSeconds = 0,
+    secondaryLocalPlayerId: string | null = null,
+  ): void {
     // --- Players ---
     const activeIds = this.activePlayerIdsScratch;
     activeIds.clear();
@@ -404,7 +409,9 @@ export class GameRenderer {
       material.depthWrite = !isTransparent;
 
       // --- Local-player indicator triangle (only shown above the client's own character) ---
-      if (player.id === localPlayerId && !player.eliminated && !player.respawning) {
+      const isLocalPlayer =
+        player.id === localPlayerId || player.id === secondaryLocalPlayerId;
+      if (isLocalPlayer && !player.eliminated && !player.respawning) {
         const existing = this.localIndicatorMeshes.get(player.id);
         const indicator = existing ?? this.createLocalIndicatorMesh(player.color);
         if (!existing) {
