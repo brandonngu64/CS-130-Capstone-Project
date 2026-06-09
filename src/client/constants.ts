@@ -6,15 +6,16 @@ export const MAX_PLAYERS = 4;
 // Tile size in world units. Maps in tiledMap.ts use 1-unit tiles.
 export const TILE_SIZE = 1;
 
-// Inner ("KO") blast zone: players in the KOable state who cross this are rung out.
-export const KO_BLAST_TILES_UP = 10;
-export const KO_BLAST_TILES_DOWN = 10;
-export const KO_BLAST_TILES_SIDE = 10;
-
 // Outer ("fallback") blast zone: always elims, regardless of KO state.
-export const FALLBACK_BLAST_TILES_UP = 17;
-export const FALLBACK_BLAST_TILES_DOWN = 17;
-export const FALLBACK_BLAST_TILES_SIDE = 17;
+// Inner ("KO") blast zone: players in the KOable state who cross this are rung out.
+export const FALLBACK_BLAST_TILES_UP = 35;
+export const KO_BLAST_TILES_UP = 25;
+
+export const FALLBACK_BLAST_TILES_DOWN = 25;
+export const KO_BLAST_TILES_DOWN = 20;
+
+export const FALLBACK_BLAST_TILES_SIDE = 27;
+export const KO_BLAST_TILES_SIDE = 20;
 
 // Back-compat aliases (in world units) for any callers not yet migrated.
 export const BLAST_ZONE_UP_OFFSET = KO_BLAST_TILES_UP * TILE_SIZE;
@@ -162,7 +163,7 @@ export const PUNCH_BASE_KNOCKBACK = 20;
 // Launch angle for the default punch.
 export const PUNCH_LAUNCH_ANGLE_DEG = 45;
 // Ticks between consecutive punches. 60 ticks = 1s at TICK_RATE=60, so 90 ≈ 1.5s.
-export const PUNCH_COOLDOWN_TICKS = 45;
+export const PUNCH_COOLDOWN_TICKS = 30;
 // "+18" hitstun-bias constant from the SSB knockback formula.
 export const SMASH_KB_HITSTUN_BIAS = 18;
 // "*1.4" growth multiplier from the SSB knockback formula.
