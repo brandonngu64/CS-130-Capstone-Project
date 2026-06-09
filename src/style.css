@@ -712,7 +712,11 @@ h2 {
 }
 
 .settings-menu {
-  z-index: 4;
+  z-index: 500;
+}
+
+.startup-volume-menu {
+  z-index: 1000;
 }
 
 .overlay-card {
@@ -729,6 +733,22 @@ h2 {
   flex-direction: column;
   gap: 12px;
   text-align: center;
+}
+
+.startup-volume-card {
+  gap: 14px;
+  width: clamp(220px, 88%, 420px);
+}
+
+.startup-volume-subtitle {
+  margin: 0 0 4px;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.startup-volume-continue {
+  margin-top: 6px;
+  align-self: stretch;
 }
 
 .settings-menu-card {

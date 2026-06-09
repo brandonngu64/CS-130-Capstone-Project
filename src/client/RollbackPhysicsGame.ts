@@ -250,7 +250,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   });
   private stageOutAudioPoolIndex = 0;
   private readonly previousHorizontalDir = new Map<string, number>();
-  private masterVolume = 1;
+  private sfxVolume = 1;
   private nextBulletId = 1;
   private tickCount = 0;
   private roundStartCountdownTicks = 0;
@@ -333,22 +333,22 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   setVolume(volume: number): void {
-    this.masterVolume = Math.max(0, Math.min(1, volume));
+    this.sfxVolume = Math.max(0, Math.min(1, volume));
 
     this.punchAudioPool.forEach((audio) => {
-      audio.volume = 0.5 * this.masterVolume;
+      audio.volume = 0.5 * this.sfxVolume;
     });
     this.equipAudioPool.forEach((audio) => {
-      audio.volume = 0.5 * this.masterVolume;
+      audio.volume = 0.5 * this.sfxVolume;
     });
     this.jumpAudioPool.forEach((audio) => {
-      audio.volume = 0.5 * this.masterVolume;
+      audio.volume = 0.5 * this.sfxVolume;
     });
     this.footstepsAudioPool.forEach((audio) => {
-      audio.volume = 0.9 * this.masterVolume;
+      audio.volume = 0.9 * this.sfxVolume;
     });
     this.stageOutAudioPool.forEach((audio) => {
-      audio.volume = 0.8 * this.masterVolume;
+      audio.volume = 0.8 * this.sfxVolume;
     });
   }
 
@@ -1319,7 +1319,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         record.weaponCooldownTicks = def.cooldownTicks;
         if (heldKind === ItemKind.EthernetWhip) {
           const whipSound = new Audio(WHIP_SOUND_URL);
-          whipSound.volume = 0.5 * this.masterVolume;
+          whipSound.volume = 0.5 * this.sfxVolume;
           void whipSound.play().catch((err) => {
             console.warn('Whip sound could not play:', err);
           });
@@ -2103,7 +2103,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (kind === ItemKind.Finals) {
       const paperSound = new Audio(PAPER_SOUND_URL);
-      paperSound.volume = 0.9 * this.masterVolume;
+      paperSound.volume = 0.9 * this.sfxVolume;
       void paperSound.play().catch((err) => {
         console.warn('Paper sound could not play:', err);
       });
@@ -2111,7 +2111,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (kind === ItemKind.PenCrossbow) {
       const crossbowSound = new Audio(PEN_CROSSBOW_SOUND_URL);
-      crossbowSound.volume = 0.5 * this.masterVolume;
+      crossbowSound.volume = 0.5 * this.sfxVolume;
       void crossbowSound.play().catch((err) => {
         console.warn('Pen crossbow sound could not play:', err);
       });
@@ -2119,7 +2119,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
     if (kind === ItemKind.BinaryBeam) {
       const binaryBeamSound = new Audio(BINARY_BEAM_SOUND_URL);
-      binaryBeamSound.volume = 0.5 * this.masterVolume;
+      binaryBeamSound.volume = 0.5 * this.sfxVolume;
       void binaryBeamSound.play().catch((err) => {
         console.warn('Binary beam sound could not play:', err);
       });

@@ -33,7 +33,9 @@ export interface SettingsMenuCallbacks {
   onClose(): void;
   onArenaSideWallsChange(enabled: boolean): void;
   onFullscreenChange(enabled: boolean): void;
-  onVolumeChange(volume: number): void;
+  onMasterVolumeChange(volume: number): void;
+  onSfxVolumeChange(volume: number): void;
+  onMusicVolumeChange(volume: number): void;
   onInputDelayChange(frames: number): void;
   onForceRelayChange(enabled: boolean): void;
   onInputSchemeChange(id: InputSchemeId): void;
@@ -53,8 +55,12 @@ export class SettingsMenu {
   private readonly closeButton: HTMLButtonElement;
   private readonly sideWallsToggle: HTMLInputElement;
   private readonly fullscreenToggle: HTMLInputElement;
-  private readonly volumeSlider: HTMLInputElement;
-  private readonly volumeValue: HTMLElement;
+  private readonly masterVolumeSlider: HTMLInputElement;
+  private readonly masterVolumeValue: HTMLElement;
+  private readonly sfxVolumeSlider: HTMLInputElement;
+  private readonly sfxVolumeValue: HTMLElement;
+  private readonly musicVolumeSlider: HTMLInputElement;
+  private readonly musicVolumeValue: HTMLElement;
   private readonly inputDelaySelect: HTMLSelectElement;
   private readonly forceRelayToggle: HTMLInputElement;
   private readonly inputSchemeSelect: HTMLSelectElement;
@@ -99,13 +105,29 @@ export class SettingsMenu {
       this.element,
       '#settingsMenuCloseButton',
     );
-    this.volumeSlider = getElement<HTMLInputElement>(
+    this.masterVolumeSlider = getElement<HTMLInputElement>(
       this.element,
-      '#settingsMenuVolumeSlider',
+      '#settingsMenuMasterVolumeSlider',
     );
-    this.volumeValue = getElement<HTMLElement>(
+    this.masterVolumeValue = getElement<HTMLElement>(
       this.element,
-      '#settingsMenuVolumeValue',
+      '#settingsMenuMasterVolumeValue',
+    );
+    this.sfxVolumeSlider = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuSfxVolumeSlider',
+    );
+    this.sfxVolumeValue = getElement<HTMLElement>(
+      this.element,
+      '#settingsMenuSfxVolumeValue',
+    );
+    this.musicVolumeSlider = getElement<HTMLInputElement>(
+      this.element,
+      '#settingsMenuMusicVolumeSlider',
+    );
+    this.musicVolumeValue = getElement<HTMLElement>(
+      this.element,
+      '#settingsMenuMusicVolumeValue',
     );
     this.statusText = getElement<HTMLElement>(
       this.element,
@@ -149,10 +171,20 @@ export class SettingsMenu {
     this.fullscreenToggle.addEventListener('change', () => {
       callbacks.onFullscreenChange(this.fullscreenToggle.checked);
     });
-    this.volumeSlider.addEventListener('input', () => {
-      const volume = Number(this.volumeSlider.value) / 100;
-      this.volumeValue.textContent = `${this.volumeSlider.value}%`;
-      callbacks.onVolumeChange(volume);
+    this.masterVolumeSlider.addEventListener('input', () => {
+      const volume = Number(this.masterVolumeSlider.value) / 100;
+      this.masterVolumeValue.textContent = `${this.masterVolumeSlider.value}%`;
+      callbacks.onMasterVolumeChange(volume);
+    });
+    this.sfxVolumeSlider.addEventListener('input', () => {
+      const volume = Number(this.sfxVolumeSlider.value) / 100;
+      this.sfxVolumeValue.textContent = `${this.sfxVolumeSlider.value}%`;
+      callbacks.onSfxVolumeChange(volume);
+    });
+    this.musicVolumeSlider.addEventListener('input', () => {
+      const volume = Number(this.musicVolumeSlider.value) / 100;
+      this.musicVolumeValue.textContent = `${this.musicVolumeSlider.value}%`;
+      callbacks.onMusicVolumeChange(volume);
     });
     this.inputDelaySelect.addEventListener('change', () => {
       const frames = Number.parseInt(this.inputDelaySelect.value, 10);
@@ -227,11 +259,15 @@ export class SettingsMenu {
     this.fullscreenToggle.checked = enabled;
   }
 
-  setVolume(volume: number): void {
-    const normalizedVolume = Math.max(0, Math.min(1, volume));
-    const percent = Math.round(normalizedVolume * 100);
-    this.volumeSlider.value = String(percent);
-    this.volumeValue.textContent = `${percent}%`;
+  setVolumes(volumes: { master: number; sfx: number; music: number }): void {
+    const apply = (slider: HTMLInputElement, value: HTMLElement, v: number): void => {
+      const percent = Math.round(Math.max(0, Math.min(1, v)) * 100);
+      slider.value = String(percent);
+      value.textContent = `${percent}%`;
+    };
+    apply(this.masterVolumeSlider, this.masterVolumeValue, volumes.master);
+    apply(this.sfxVolumeSlider, this.sfxVolumeValue, volumes.sfx);
+    apply(this.musicVolumeSlider, this.musicVolumeValue, volumes.music);
   }
 
   setInputDelay(frames: number): void {
@@ -318,8 +354,18 @@ export class SettingsMenu {
         </label>
 
         <label class="range-field">
-          <span>Master Volume <output id="settingsMenuVolumeValue">100%</output></span>
-          <input id="settingsMenuVolumeSlider" type="range" min="0" max="100" step="1" value="100" />
+          <span>Master Volume <output id="settingsMenuMasterVolumeValue">100%</output></span>
+          <input id="settingsMenuMasterVolumeSlider" type="range" min="0" max="100" step="1" value="100" />
+        </label>
+
+        <label class="range-field">
+          <span>SFX Volume <output id="settingsMenuSfxVolumeValue">100%</output></span>
+          <input id="settingsMenuSfxVolumeSlider" type="range" min="0" max="100" step="1" value="100" />
+        </label>
+
+        <label class="range-field">
+          <span>Music Volume <output id="settingsMenuMusicVolumeValue">100%</output></span>
+          <input id="settingsMenuMusicVolumeSlider" type="range" min="0" max="100" step="1" value="100" />
         </label>
 
         <label class="select-field">

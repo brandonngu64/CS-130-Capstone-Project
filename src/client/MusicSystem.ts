@@ -83,7 +83,7 @@ export class MusicSystem {
   private source: AudioBufferSourceNode | null = null;
   private currentPhase: MusicPhase | null = null;
   private currentTrack: Track | null = null;
-  private masterVolume = 1;
+  private musicVolume = 1;
   private phaseVolume = 0.2;
   // Monotonic counter so a stale onended callback from a track we already
   // stopped can't trigger a follow-up play.
@@ -92,8 +92,8 @@ export class MusicSystem {
   private pendingPhase: MusicPhase | null = null;
   private resumeHandlerAttached = false;
 
-  setMasterVolume(volume: number): void {
-    this.masterVolume = Math.max(0, Math.min(1, volume));
+  setVolume(volume: number): void {
+    this.musicVolume = Math.max(0, Math.min(1, volume));
     this.applyVolume();
   }
 
@@ -139,7 +139,7 @@ export class MusicSystem {
 
   private applyVolume(): void {
     if (!this.gain || !this.ctx) return;
-    this.gain.gain.setValueAtTime(this.masterVolume * this.phaseVolume, this.ctx.currentTime);
+    this.gain.gain.setValueAtTime(this.musicVolume * this.phaseVolume, this.ctx.currentTime);
   }
 
   private startRandomFromCurrentPhase(): void {
