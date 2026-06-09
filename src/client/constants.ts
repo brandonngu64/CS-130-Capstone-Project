@@ -195,3 +195,39 @@ export const SMASH_LAUNCH_HORIZONTAL_DRAG = 0.96;
 export const SMASH_LAUNCH_VERTICAL_DRAG = 0.985;
 // Max per-tick change in vx the player can induce via DI during glide.
 export const SMASH_LAUNCH_AIR_CONTROL = 1.2;
+
+// ─── Dust VFX ───────────────────────────────────────────────────────────────
+// Shared
+export const DUST_POOL_SIZE = 256;
+export const DUST_Z = 0.34;
+export const DUST_GRAVITY = -6;
+export const DUST_DRAG = 0.92;
+export const DUST_END_SCALE = 1.6;
+export const DUST_BASE_ALPHA = 0.85;
+
+// Scuff (running on ground)
+export const DUST_SCUFF_MIN_SPEED = 4;
+export const DUST_SCUFF_EMIT_INTERVAL_TICKS = 4;
+export const DUST_SCUFF_PARTICLES_PER_BURST = 2;
+export const DUST_SCUFF_LIFETIME_SEC = 0.35;
+export const DUST_SCUFF_SIZE = 0.35;
+export const DUST_SCUFF_SIZE_JITTER = 0.12;
+export const DUST_SCUFF_DRIFT_X = 3.0;
+export const DUST_SCUFF_DRIFT_X_JITTER = 1.5;
+export const DUST_SCUFF_DRIFT_Y = 1.5;
+export const DUST_SCUFF_DRIFT_Y_JITTER = 0.8;
+export const DUST_SCUFF_SPAWN_OFFSET_X = 0.25;
+export const DUST_SCUFF_SPAWN_Y_JITTER = 0.05;
+
+// Landing ring (airborne → grounded)
+export const DUST_LANDING_PARTICLES = 14;
+export const DUST_LANDING_LIFETIME_SEC = 0.55;
+export const DUST_LANDING_SIZE = 0.45;
+export const DUST_LANDING_SIZE_JITTER = 0.15;
+export const DUST_LANDING_SPEED = 4.0;
+export const DUST_LANDING_SPEED_JITTER = 1.2;
+// Smaller range = flatter, more horizontal fan. ~40° = ±20° from horizontal.
+export const DUST_LANDING_RING_ANGLE_RANGE_DEG = 40;
+export const DUST_LANDING_REF_VY = 14;
+export const DUST_LANDING_MIN_VY = 2;
+export const DUST_LANDING_UPWARD_BIAS = 0.4;

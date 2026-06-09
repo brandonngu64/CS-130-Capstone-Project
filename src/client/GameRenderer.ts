@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { VFXAssetCache } from './vfx/assetCache';
 import { VFXMeshPool, VFXMeshInstance } from './vfx/vfxMesh';
 import { RING_OUT_PACK } from './vfx/packs';
+import { DustParticleSystem } from './vfx/DustParticleSystem';
 import {
   CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
@@ -23,7 +24,15 @@ import {
   getEthernetWhipBottomInset,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
-import { type CharacterId, PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS, SHIELD_MAX_HP } from './constants';
+import {
+  type CharacterId,
+  PLAYER_HALF_HEIGHT,
+  PLAYER_HALF_WIDTH,
+  RESPAWN_FLASH_TICKS,
+  SHIELD_MAX_HP,
+  DUST_SCUFF_MIN_SPEED,
+  DUST_SCUFF_EMIT_INTERVAL_TICKS,
+} from './constants';
 import {
   K_createDroppedItemMesh,
   K_createProjectileMesh,
@@ -269,6 +278,9 @@ export class GameRenderer {
   private readonly prevRespawning = new Map<string, boolean>();
   private readonly prevEliminated = new Map<string, boolean>();
   private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
+  private dust: DustParticleSystem | null = null;
+  private readonly prevGrounded = new Map<string, boolean>();
+  private readonly prevScuffEmitTick = new Map<string, number>();
   private readonly shieldMeshes = new Map<string, { fill: THREE.Mesh; rim: THREE.Mesh }>();
   private readonly localIndicatorMeshes = new Map<string, THREE.Mesh>();
   private localIndicatorGeometry: THREE.BufferGeometry | null = null;
@@ -317,6 +329,8 @@ export class GameRenderer {
 
     // Ring-out atlases are registered permanent at app boot in MultiplayerApp;
     // here we wait for the resolved asset, then stand up a pool of 3 meshes.
+    this.dust = new DustParticleSystem(this.scene);
+
     void this.vfxCache.registerPermanent(RING_OUT_PACK).then((asset) => {
       // 16 world units tall ≈ the dramatic scale the previous random formula
       // averaged to. Now deterministic.
@@ -534,7 +548,33 @@ export class GameRenderer {
       this.prevRespawning.set(player.id, player.respawning);
       this.prevEliminated.set(player.id, player.eliminated);
       this.prevVelocity.set(player.id, { vx: player.vx, vy: player.vy });
+
+      // --- Dust VFX ---
+      if (this.dust && !player.eliminated && !player.respawning) {
+        const wasGrounded = this.prevGrounded.get(player.id) ?? true;
+        const wasAirborne = !wasGrounded;
+
+        // Landing ring: fired once on airborne → grounded.
+        if (wasAirborne && player.grounded) {
+          const prev = this.prevVelocity.get(player.id);
+          const impactVy = prev?.vy ?? player.vy;
+          this.dust.spawnLandingRing(player.x, player.y - PLAYER_HALF_HEIGHT, impactVy);
+        }
+
+        // Scuff: while grounded and moving fast enough, emit at intervals.
+        if (player.grounded && Math.abs(player.vx) > DUST_SCUFF_MIN_SPEED) {
+          const last = this.prevScuffEmitTick.get(player.id) ?? -9999;
+          if (state.animTick - last >= DUST_SCUFF_EMIT_INTERVAL_TICKS) {
+            this.dust.spawnScuff(player.x, player.y - PLAYER_HALF_HEIGHT, player.facing);
+            this.prevScuffEmitTick.set(player.id, state.animTick);
+          }
+        }
+
+        this.prevGrounded.set(player.id, player.grounded);
+      }
     }
+
+    this.dust?.update(vfxDeltaSeconds);
 
     // Cleanup VFX for players who left the match
     for (const [id, vfx] of this.playerVFX) {
@@ -544,6 +584,8 @@ export class GameRenderer {
         this.prevRespawning.delete(id);
         this.prevEliminated.delete(id);
         this.prevVelocity.delete(id);
+        this.prevGrounded.delete(id);
+        this.prevScuffEmitTick.delete(id);
       }
     }
 
@@ -1191,6 +1233,11 @@ export class GameRenderer {
     this.playerVFX.clear();
     this.vfxRingOutPool?.disposeAll();
     this.vfxRingOutPool = null;
+
+    this.dust?.dispose();
+    this.dust = null;
+    this.prevGrounded.clear();
+    this.prevScuffEmitTick.clear();
 
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
