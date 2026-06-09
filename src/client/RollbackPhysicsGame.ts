@@ -1373,7 +1373,9 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const weapon = K_getWeaponDefinition(record.heldItem!);
       this.fireBullet(record, weapon);
       record.gunFireCooldownTicks = Math.max(1, Math.round(weapon.fireRate));
-      if (weapon.reloadOnHit || weapon.reloadOnKill) {
+      if (weapon.ammo <= 1) {
+        record.dropItem();
+      } else if (weapon.reloadOnHit || weapon.reloadOnKill) {
         record.reloadPending = true;
         record.reloadPendingOnKill = weapon.reloadOnKill;
       }
