@@ -924,10 +924,20 @@ export class GameRenderer {
 
     for (const item of state.items) {
       let mesh = this.itemMeshes.get(item.id);
+      if (mesh && mesh.userData.itemKind !== item.kind) {
+        // Slot cycled to a new weapon kind; old mesh has the wrong
+        // geometry/material type for the new sprite. Rebuild from scratch.
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+        this.itemMeshes.delete(item.id);
+        mesh = undefined;
+      }
       if (!mesh) {
         mesh = usesKyleGenericProjectileMesh(item.kind)
           ? K_createDroppedItemMesh(item.kind, this.textureLoader)
           : this.createItemMesh(item.kind);
+        mesh.userData.itemKind = item.kind;
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
