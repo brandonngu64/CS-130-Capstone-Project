@@ -127,6 +127,8 @@ export interface PlayerRenderState {
   damagePct: number;
   /** True while this player is in the lethal-launch rocket state. */
   inLethalLaunch: boolean;
+  /** True when on the ground (not in airborne move state). Used for VFX. */
+  grounded: boolean;
 }
 
 export interface ItemRenderState {
@@ -903,6 +905,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           knockbackTicksRemaining: record.knockbackTicksRemaining,
           damagePct: record.damagePct,
           inLethalLaunch: record.inLethalLaunch,
+          grounded: record.moveState !== MoveState.Airborne,
         };
       });
 
