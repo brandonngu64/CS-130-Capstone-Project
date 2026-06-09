@@ -1686,7 +1686,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           if (this.matchState.canTakeDamage(hitPlayerId)) {
             const target = this.players.get(hitPlayerId);
             if (target) {
-              const nextHealth = this.applyDamageWithShield(target, bullet.damage, null, {
+              const nextHealth = this.applyDamageWithShield(target, bullet.damage, Math.sign(bullet.vx) || 1, {
                 baseKnockback: weaponDef?.baseKnockback,
                 launchAngleDeg: weaponDef?.launchAngleDeg,
               });
@@ -1770,22 +1770,15 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     for (let slotIndex = 0; slotIndex < this.itemSlots.length; slotIndex += 1) {
       const slot = this.itemSlots[slotIndex];
 
-      if (slot.item !== null) {
-        if (this.tickCount >= slot.item.expiryTick) {
-          this.queueItemRespawn(slotIndex);
-          continue;
-        }
+      if (slot.respawnTick > 0 && this.tickCount >= slot.respawnTick) {
+        this.spawnItem(slotIndex);
+      }
 
+      if (slot.item !== null) {
         const pickedUpBy = this.findItemPickupCandidate(slot.item);
         if (pickedUpBy) {
           this.collectItem(slotIndex, pickedUpBy);
         }
-
-        continue;
-      }
-
-      if (slot.respawnTick > 0 && this.tickCount >= slot.respawnTick) {
-        this.spawnItem(slotIndex);
       }
     }
   }
@@ -1868,7 +1861,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         y: spawnPoint.y,
         expiryTick: this.tickCount + ITEM_LIFETIME_TICKS,
       },
-      respawnTick: 0,
+      respawnTick: this.tickCount + ITEM_SPAWN_INTERVAL_TICKS,
     };
   }
 
@@ -1887,13 +1880,20 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           y: spawnPoint.y,
           expiryTick: this.tickCount + ITEM_LIFETIME_TICKS,
         },
-        respawnTick: 0,
+        respawnTick: this.tickCount + ITEM_SPAWN_INTERVAL_TICKS,
       });
     }
   }
 
   private chooseSpawnedItemKind(slotIndex: number): ItemKind {
-    return SPAWN_ROTATION[slotIndex % SPAWN_ROTATION.length] ?? ItemKind.Gun;
+    // Deterministic pseudo-random pick keyed on tickCount + slotIndex so that
+    // every rollback peer agrees on the spawned kind without desync.
+    let seed = (this.tickCount * 2654435761 + slotIndex * 40503 + 0x9e3779b9) >>> 0;
+    seed ^= seed << 13; seed >>>= 0;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;  seed >>>= 0;
+    const index = seed % SPAWN_ROTATION.length;
+    return SPAWN_ROTATION[index] ?? ItemKind.Gun;
   }
 
   private handleBlastZoneDeaths(): void {
@@ -2065,6 +2065,14 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       reloadOnKill: weapon.reloadOnKill,
       projectileGravity: weapon.projectileGravity,
     });
+
+    if (weapon.kind === ItemKind.PenCrossbow) {
+      const crossbowSound = new Audio(PEN_CROSSBOW_SOUND_URL);
+      crossbowSound.volume = 0.5 * this.sfxVolume;
+      void crossbowSound.play().catch((err) => {
+        console.warn('Pen crossbow sound could not play:', err);
+      });
+    }
   }
 
   private fireProjectileWeapon(owner: PlayerCharacter, def: WeaponDefinition, kind: ItemKind): void {
