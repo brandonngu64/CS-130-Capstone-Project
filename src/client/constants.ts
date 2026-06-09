@@ -86,7 +86,11 @@ export const RESPAWN_DELAY_TICKS = 120;
 export const RESPAWN_FLASH_TICKS = TICK_RATE * 3;
 
 // Time a player stays vulnerable to inner-blast ring out after taking damage.
-export const KOABLE_DURATION_TICKS = TICK_RATE * 3; 
+export const KOABLE_DURATION_TICKS = TICK_RATE * 3;
+
+// Delay after a winner is declared before all players are returned to the
+// in-room character-select lobby for a rematch.
+export const POST_MATCH_DELAY_MS = 5000;
 
 export const CHARACTER_IDS = ['eggert', 'nachenburg', 'sahai', 'smallberg'] as const;
 export type CharacterId = (typeof CHARACTER_IDS)[number];

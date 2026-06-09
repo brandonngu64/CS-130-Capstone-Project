@@ -22,6 +22,7 @@ import {
   MAX_STOCKS,
   MIN_STOCKS,
   PLAYER_COLOR_PALETTE,
+  POST_MATCH_DELAY_MS,
   RANDOM_CHARACTER_SELECTION,
   RANDOM_MAP_SELECTION,
   TICK_RATE,
@@ -55,6 +56,7 @@ import { LeavingManager } from './LeavingManager';
 import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
+import { MusicSystem, type MusicPhase } from './MusicSystem';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { SmashHud } from './SmashHud';
 import { encodeInput, type InputState } from './input';
@@ -100,8 +102,6 @@ const INPUT_SCHEME_STORAGE_KEY = 'cs130-input-scheme';
 const DEFAULT_INPUT_DELAY_FRAMES = 2;
 const MAX_INPUT_DELAY_FRAMES = 6;
 
-const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
-const MENU_THEME_URL = new URL('../assets/sounds/menu.mp3', import.meta.url).href;
 const FIGHT_START_SOUND_URL = new URL('../assets/sounds/fight_start.wav', import.meta.url).href;
 
 const LOBBY_NAME_STORAGE_KEY = 'cs130-lobby-name';
@@ -458,8 +458,8 @@ export class MultiplayerApp {
   private countdownOverlay: VFXCanvasOverlay | null = null;
   private countdownLoading = false;
   private countdownWasActive = false;
-  private readonly gameThemeAudio: HTMLAudioElement;
-  private readonly menuThemeAudio: HTMLAudioElement;
+  private readonly music = new MusicSystem();
+  private currentMusicPhase: MusicPhase | null = null;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -546,6 +546,15 @@ export class MultiplayerApp {
   private leavingManager: LeavingManager | null = null;
   private isCleaningUp = false;
   private respawnCameraLocked = false;
+  // Tracks the post-match return-to-lobby flow. `lastWinnerId` lets us detect
+  // the null → winner edge to schedule the rematch exactly once. The timer is
+  // tracked so leaveRoom / cleanupNetworking can cancel a pending rematch.
+  private lastWinnerId: string | null = null;
+  private postMatchTimerId: number | null = null;
+  // When a guest receives a `lobby_rematch` while still in the old room, it
+  // stashes the announced new room here so the rejoin can fire after the host
+  // has had a moment to re-host.
+  private pendingRematchJoin: { newRoomId: string; hostPeerId: string } | null = null;
 
   private unsubscribeSignalMessages: (() => void) | null = null;
   private unsubscribeSignalClose: (() => void) | null = null;
@@ -555,8 +564,6 @@ export class MultiplayerApp {
   private lastFrameTimeMs = 0;
   private accumulatedTimeMs = 0;
   private connecting = false;
-  private gameThemeStarted = false;
-  private menuThemeStarted = false;
 
   private setInputAction(action: GameAction, pressed: boolean): void {
     this.inputState[action] = pressed;
@@ -919,14 +926,7 @@ export class MultiplayerApp {
     this.refreshDebugValues();
     this.setStatus('Initializing Rapier runtime...');
 
-    // Initialize looping audio tracks
-    this.gameThemeAudio = new Audio(GAME_THEME_URL);
-    this.gameThemeAudio.loop = true;
-    this.gameThemeAudio.volume = this.masterVolume * 0.15;
-
-    this.menuThemeAudio = new Audio(MENU_THEME_URL);
-    this.menuThemeAudio.loop = true;
-    this.menuThemeAudio.volume = this.masterVolume * 0.2;
+    this.music.setMasterVolume(this.masterVolume);
   }
 
   async start(): Promise<void> {
@@ -1009,6 +1009,7 @@ export class MultiplayerApp {
     this.viewport.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('fullscreenchange', this.onFullscreenStateChange);
 
+    this.music.dispose();
     this.cleanupNetworking();
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
@@ -1032,26 +1033,14 @@ export class MultiplayerApp {
     }
 
     const isPlaying = this.session?.state === SessionState.Playing;
-    if (isPlaying) {
-      if (!this.gameThemeStarted) {
-        this.gameThemeStarted = true;
-        this.menuThemeStarted = false;
-        this.menuThemeAudio.pause();
-        this.gameThemeAudio.currentTime = 0;
-        void this.gameThemeAudio.play().catch((err) => {
-          console.warn('Game theme could not play:', err);
-        });
-      }
-    } else {
-      if (!this.menuThemeStarted) {
-        this.menuThemeStarted = true;
-        this.gameThemeStarted = false;
-        this.gameThemeAudio.pause();
-        this.gameThemeAudio.currentTime = 0;
-        void this.menuThemeAudio.play().catch((err) => {
-          console.warn('Menu theme could not play:', err);
-        });
-      }
+    const nextPhase: MusicPhase = isPlaying
+      ? 'game'
+      : (this.isInRoom() || this.connecting)
+        ? 'lobby'
+        : 'start';
+    if (nextPhase !== this.currentMusicPhase) {
+      this.currentMusicPhase = nextPhase;
+      this.music.setPhase(nextPhase);
     }
 
     if (this.cameraMode === 'free') {
@@ -1327,6 +1316,9 @@ export class MultiplayerApp {
   private leaveRoom(): void {
     this.debugLog('DC', `Local player left room ${this.roomId ?? '?'}`);
     this.settingsOpen = false;
+    this.clearPostMatchTimer();
+    this.pendingRematchJoin = null;
+    this.lastWinnerId = null;
     this.cleanupNetworking({ sendLeave: true });
     this.clearCameraInput();
     this.setCameraMode('follow');
@@ -1578,6 +1570,13 @@ export class MultiplayerApp {
 
     this.leavingManager?.dispose();
     this.leavingManager = null;
+
+    // Any pending rematch timer is no longer meaningful once the netcode
+    // stack is being torn down. Leave `pendingRematchJoin` alone — guests
+    // need it to survive across the teardown so handlePendingRematchJoin
+    // can complete its rejoin after prepareNetworking() re-runs.
+    this.clearPostMatchTimer();
+    this.lastWinnerId = null;
 
     this.isCleaningUp = true;
 
@@ -1933,6 +1932,25 @@ export class MultiplayerApp {
         }
         break;
 
+      case 'lobby_rematch':
+        // Host has announced a fresh room for the rematch. Guests need to
+        // tear down their current session and rejoin the new room. Host
+        // ignores its own broadcast — it's already handling the rebuild.
+        if (
+          !this.session?.isHost &&
+          this.roomId === message.roomId &&
+          message.newRoomId &&
+          message.hostPeerId
+        ) {
+          this.clearPostMatchTimer();
+          this.pendingRematchJoin = {
+            newRoomId: message.newRoomId,
+            hostPeerId: message.hostPeerId,
+          };
+          void this.handlePendingRematchJoin();
+        }
+        break;
+
       case 'room_error':
         this.setStatus(message.message, 'error');
         if (message.code === 'HOST_LEFT' || message.code === 'ROOM_NOT_FOUND') {
@@ -2182,11 +2200,11 @@ export class MultiplayerApp {
     this.renderer.setLobbyPreviewMode(true);
 
     if (this.game) {
-      this.game.reset();
-      this.game = new RollbackPhysicsGame(this.mapDefinition, {
-        startingStocks: this.startingStocks,
-        gameMode: this.gameMode,
-      });
+      // Swap the map on the existing game instance instead of constructing a
+      // new one — the active session holds the original game reference, and
+      // replacing it would leave the session ticking a stale instance while
+      // the renderer shows the new map (no countdown, no GO sequence).
+      this.game.setMap(this.mapDefinition);
     }
   }
 
@@ -2296,8 +2314,7 @@ export class MultiplayerApp {
 
   private setMasterVolume(volume: number): void {
     this.masterVolume = Math.max(0, Math.min(1, volume));
-    this.gameThemeAudio.volume = this.masterVolume * 0.15;
-    this.menuThemeAudio.volume = this.masterVolume * 0.2;
+    this.music.setMasterVolume(this.masterVolume);
     if (this.game) {
       this.game.setVolume(this.masterVolume);
     }
@@ -2688,23 +2705,174 @@ export class MultiplayerApp {
     const winnerId = renderState.winnerId;
     if (winnerId === null) {
       this.winnerBanner.dataset.visible = 'false';
+      this.lastWinnerId = null;
       return;
     }
 
     const winner = renderState.players.find((player) => player.id === winnerId);
     if (!winner) {
       this.winnerBanner.dataset.visible = 'false';
+      this.lastWinnerId = null;
       return;
     }
 
     const isLocal = winnerId === this.peerId;
     const colorHex = `#${winner.color.toString(16).padStart(6, '0')}`;
+    const flavor = isLocal ? 'Last one standing.' : `${this.truncatePeerId(winnerId)} wins the match.`;
     this.winnerBannerTitle.textContent = isLocal ? 'You Win!' : 'Defeat';
-    this.winnerBannerSubtitle.textContent = isLocal
-      ? 'Last one standing.'
-      : `${this.truncatePeerId(winnerId)} wins the match.`;
+    this.winnerBannerSubtitle.textContent = `${flavor} Returning to lobby…`;
     this.winnerBanner.style.setProperty('--winner-color', colorHex);
     this.winnerBanner.dataset.visible = 'true';
+
+    // First frame after a fresh winner is declared: schedule the rematch.
+    // Only the host actually drives the transition; every client schedules
+    // a fallback timer that cancels itself when leaveRoom / cleanup fires.
+    if (this.lastWinnerId !== winnerId) {
+      this.lastWinnerId = winnerId;
+      this.schedulePostMatchReturnToLobby();
+    }
+  }
+
+  private schedulePostMatchReturnToLobby(): void {
+    if (this.postMatchTimerId !== null) {
+      return;
+    }
+    this.postMatchTimerId = window.setTimeout(() => {
+      this.postMatchTimerId = null;
+      void this.handlePostMatchReturnToLobby();
+    }, POST_MATCH_DELAY_MS);
+  }
+
+  private clearPostMatchTimer(): void {
+    if (this.postMatchTimerId !== null) {
+      window.clearTimeout(this.postMatchTimerId);
+      this.postMatchTimerId = null;
+    }
+  }
+
+  private async handlePostMatchReturnToLobby(): Promise<void> {
+    // Only the host drives the rematch; guests wait for the `lobby_rematch`
+    // signaling message. If the host disconnected during the delay, guests
+    // will fall through to the existing HOST_LEFT handling instead.
+    if (!this.session?.isHost || !this.signaling || !this.roomId) {
+      return;
+    }
+    if (this.session.state !== SessionState.Playing) {
+      return;
+    }
+    if (this.lastWinnerId === null) {
+      return;
+    }
+
+    // Generate a fresh room id client-side (matches rollback-netcode's own
+    // generateRoomId idiom) and announce it to peers BEFORE we tear down the
+    // current room — the old signaling membership is what routes the message.
+    const newRoomId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().slice(0, 8)
+        : Math.random().toString(36).slice(2, 10);
+
+    this.signaling.send({
+      type: 'lobby_rematch',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      newRoomId,
+      hostPeerId: this.peerId,
+    });
+
+    // Snapshot the local player's character pick so it survives the
+    // cleanupNetworking() pass that handleHostRoom triggers. Other peers
+    // re-broadcast their own selections as they rejoin.
+    const localSelection = this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
+    const localCharacter = this.lobbyCharacterByPeer.get(this.peerId) ?? null;
+    const previousMapSelection = this.lobbyMapSelectionId;
+    const previousGameMode = this.gameMode;
+    const previousStocks = this.startingStocks;
+
+    this.lastWinnerId = null;
+    this.winnerBanner.dataset.visible = 'false';
+    this.setStatus('Returning to lobby for a rematch...');
+
+    // Give the lobby_rematch a beat to flush over the old signaling socket
+    // before we tear the socket down inside handleHostRoom.
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+    await this.handleHostRoom(newRoomId);
+
+    // Re-apply the locally remembered selections / settings. Other peers will
+    // broadcast their own choices as they rejoin via the standard peer_joined
+    // path. setLocalDisplayName / setGameMode / setLobbyMap each guard against
+    // no-op changes so calling them with the same value is cheap.
+    this.lobbyMapSelectionId = previousMapSelection;
+    this.lobbyMapSelect.value = previousMapSelection;
+    this.startingStocks = previousStocks;
+    this.lobbyStockCountSelect.value = String(previousStocks);
+    this.game?.setStartingStocks(previousStocks);
+    this.setGameMode(previousGameMode, { broadcast: true });
+    if (this.session?.isHost) {
+      this.signaling?.send({
+        type: 'lobby_map_select',
+        roomId: this.roomId ?? '',
+        peerId: this.peerId,
+        mapId: previousMapSelection,
+      });
+    }
+    if (isLobbyCharacterSelection(localSelection)) {
+      this.lobbySelectionByPeer.set(this.peerId, localSelection);
+      if (localCharacter && isCharacterId(localCharacter)) {
+        this.lobbyCharacterByPeer.set(this.peerId, localCharacter);
+        this.game?.setCharacterSelection(this.peerId, localCharacter);
+      }
+      this.broadcastLocalCharacterSelection();
+    }
+    this.updateUiState();
+  }
+
+  private async handlePendingRematchJoin(): Promise<void> {
+    const pending = this.pendingRematchJoin;
+    if (!pending) {
+      return;
+    }
+    this.pendingRematchJoin = null;
+
+    // Snapshot local selection / preferences so they survive the teardown
+    // inside handleJoinRoom → prepareNetworking → cleanupNetworking.
+    const localSelection = this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
+    const localCharacter = this.lobbyCharacterByPeer.get(this.peerId) ?? null;
+
+    this.lastWinnerId = null;
+    this.winnerBanner.dataset.visible = 'false';
+    this.setStatus('Returning to lobby for a rematch...');
+
+    // Seed mainMenu's room/host inputs so handleJoinRoom picks them up, then
+    // give the host a moment to re-host before we attempt the join. We retry
+    // a few times in case the host's new room isn't registered yet.
+    this.mainMenu.setRoomId(pending.newRoomId);
+    this.mainMenu.setHostPeerId(pending.hostPeerId);
+
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 750 : 500));
+      await this.handleJoinRoom();
+      if (this.isInRoom() && this.roomId === pending.newRoomId) {
+        break;
+      }
+    }
+
+    if (!this.isInRoom() || this.roomId !== pending.newRoomId) {
+      this.setStatus('Could not rejoin the rematch lobby.', 'error');
+      return;
+    }
+
+    if (isLobbyCharacterSelection(localSelection)) {
+      this.lobbySelectionByPeer.set(this.peerId, localSelection);
+      if (localCharacter && isCharacterId(localCharacter)) {
+        this.lobbyCharacterByPeer.set(this.peerId, localCharacter);
+        this.game?.setCharacterSelection(this.peerId, localCharacter);
+      }
+      this.broadcastLocalCharacterSelection();
+    }
+    this.updateUiState();
   }
 
   private updateRoundStartBanner(ticksRemaining: number | null): void {

@@ -73,6 +73,13 @@ type ClientMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
     };
 
 type ServerMessage =
@@ -145,6 +152,13 @@ type ServerMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
     };
 
 type Room = {
@@ -265,6 +279,9 @@ websocketServer.on('connection', (socket) => {
         break;
       case 'lobby_random_resolved':
         relayLobbyRandomResolved(socket, message);
+        break;
+      case 'lobby_rematch':
+        relayLobbyRematch(socket, message);
         break;
       default:
         break;
@@ -889,6 +906,43 @@ function relayLobbyRandomResolved(
     peerId: message.peerId,
     mapId: message.mapId,
     characters: message.characters,
+  });
+}
+
+function relayLobbyRematch(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_rematch' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot trigger rematch for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  if (message.peerId !== room.hostPeerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_HOST',
+      message: 'Only the host can trigger a rematch',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_rematch',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    newRoomId: message.newRoomId,
+    hostPeerId: message.hostPeerId,
   });
 }
 

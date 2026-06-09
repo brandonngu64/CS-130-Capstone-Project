@@ -60,6 +60,13 @@ export type ClientToServerMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
     };
 
 export type ServerToClientMessage =
@@ -132,6 +139,13 @@ export type ServerToClientMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
     };
 
 export class SignalingClient {
