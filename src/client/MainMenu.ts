@@ -169,9 +169,9 @@ export class MainMenu {
   private static template(): string {
     return `
       <div class="overlay-card main-menu-card">
-        <p class="overlay-eyebrow">CS130 Multiplayer Baseline</p>
-        <h1 class="overlay-title">Rollback Jump Arena</h1>
-        <p class="overlay-subtitle">A tiny rollback-netcode platforming sandbox.</p>
+        <p class="overlay-eyebrow">CS130 - Project Group 9</p>
+        <h1 class="overlay-title">Academic Arena</h1>
+        <p class="overlay-subtitle">Multiplayer Platform Fighting Game</p>
 
         <ul class="controls-cheatsheet">
           <li><strong>A</strong> / <strong>&larr;</strong> &mdash; Move left</li>
