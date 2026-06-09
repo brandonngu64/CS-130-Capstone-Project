@@ -69,6 +69,12 @@ export class GameStateManager {
     return state.stocks > 0 && state.respawnTicksRemaining === 0;
   }
 
+  /** True while the player still has stocks remaining, even if currently respawning. */
+  isInMatch(playerId: string): boolean {
+    const state = this.byPlayer.get(playerId);
+    return !!state && state.stocks > 0;
+  }
+
   /** False while respawn invulnerability flash is active. */
   canTakeDamage(playerId: string): boolean {
     const state = this.byPlayer.get(playerId);
