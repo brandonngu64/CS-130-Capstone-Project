@@ -56,6 +56,7 @@ import { LeavingManager } from './LeavingManager';
 import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
+import { StartupVolumeMenu } from './StartupVolumeMenu';
 import { MusicSystem, type MusicPhase } from './MusicSystem';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
 import { SmashHud } from './SmashHud';
@@ -99,6 +100,13 @@ const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
 const INPUT_DELAY_STORAGE_KEY = 'cs130-input-delay';
 const FORCE_RELAY_STORAGE_KEY = 'cs130-force-relay';
 const INPUT_SCHEME_STORAGE_KEY = 'cs130-input-scheme';
+const VOLUME_MASTER_STORAGE_KEY = 'cs130-volume-master';
+const VOLUME_SFX_STORAGE_KEY = 'cs130-volume-sfx';
+const VOLUME_MUSIC_STORAGE_KEY = 'cs130-volume-music';
+const FIRST_RUN_STORAGE_KEY = 'cs130-first-run-seen';
+const DEFAULT_MASTER_VOLUME = 0.7;
+const DEFAULT_SFX_VOLUME = 0.6;
+const DEFAULT_MUSIC_VOLUME = 0.4;
 const DEFAULT_INPUT_DELAY_FRAMES = 2;
 const MAX_INPUT_DELAY_FRAMES = 6;
 
@@ -308,6 +316,26 @@ function storeInputSchemeId(id: InputSchemeId): void {
   }
 }
 
+function readStoredVolume(key: string, fallback: number): number {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    if (raw === null || raw === undefined) return fallback;
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.min(1, parsed));
+  } catch {
+    return fallback;
+  }
+}
+
+function storeVolume(key: string, value: number): void {
+  try {
+    globalThis.localStorage?.setItem(key, String(Math.max(0, Math.min(1, value))));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function sessionStateLabel(state: SessionState): string {
   switch (state) {
     case SessionState.Disconnected:
@@ -499,7 +527,13 @@ export class MultiplayerApp {
   private currentShareUrl = '';
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
-  private masterVolume = 1;
+  private startupVolumeMenu: StartupVolumeMenu | null = null;
+  private readonly volumes = {
+    master: readStoredVolume(VOLUME_MASTER_STORAGE_KEY, DEFAULT_MASTER_VOLUME),
+    sfx: readStoredVolume(VOLUME_SFX_STORAGE_KEY, DEFAULT_SFX_VOLUME),
+    music: readStoredVolume(VOLUME_MUSIC_STORAGE_KEY, DEFAULT_MUSIC_VOLUME),
+  };
+  private effectiveSfxVolume = 1;
   private startingStocks: number = DEFAULT_STOCKS;
   private gameMode: GameMode = DEFAULT_GAME_MODE;
   // What the host has selected in the lobby map dropdown. May be a real map id
@@ -836,8 +870,14 @@ export class MultiplayerApp {
       onFullscreenChange: (enabled) => {
         this.toggleFullscreen(enabled);
       },
-      onVolumeChange: (volume) => {
+      onMasterVolumeChange: (volume) => {
         this.setMasterVolume(volume);
+      },
+      onSfxVolumeChange: (volume) => {
+        this.setSfxVolume(volume);
+      },
+      onMusicVolumeChange: (volume) => {
+        this.setMusicVolume(volume);
       },
       onInputDelayChange: (frames) => {
         this.setInputDelayFrames(frames);
@@ -859,7 +899,7 @@ export class MultiplayerApp {
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
     this.settingsMenu.setPeerId(this.peerId);
     this.settingsMenu.setMap(this.getSelectedMapManifest());
-    this.settingsMenu.setVolume(this.masterVolume);
+    this.settingsMenu.setVolumes(this.volumes);
     this.settingsMenu.setInputDelay(this.inputDelayFrames);
     this.settingsMenu.setForceRelay(this.forceRelay);
     this.settingsMenu.setInputScheme(this.currentScheme);
@@ -926,7 +966,8 @@ export class MultiplayerApp {
     this.refreshDebugValues();
     this.setStatus('Initializing Rapier runtime...');
 
-    this.music.setMasterVolume(this.masterVolume);
+    this.applyVolumes();
+    this.maybeShowStartupVolumeMenu();
   }
 
   async start(): Promise<void> {
@@ -1011,6 +1052,8 @@ export class MultiplayerApp {
 
     this.music.dispose();
     this.cleanupNetworking();
+    this.startupVolumeMenu?.destroy();
+    this.startupVolumeMenu = null;
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
     this.smashHud.destroy();
@@ -1504,7 +1547,7 @@ export class MultiplayerApp {
       this.applyLobbyCharactersToGame();
       this.setStatus('Game started. Rollback simulation is active.');
       const fightStartAudio = new Audio(FIGHT_START_SOUND_URL);
-      fightStartAudio.volume = 0.5 * this.masterVolume;
+      fightStartAudio.volume = 0.5 * this.effectiveSfxVolume;
       void fightStartAudio.play().catch((err) => {
         console.warn('Fight start sound could not play:', err);
       });
@@ -2313,11 +2356,58 @@ export class MultiplayerApp {
   };
 
   private setMasterVolume(volume: number): void {
-    this.masterVolume = Math.max(0, Math.min(1, volume));
-    this.music.setMasterVolume(this.masterVolume);
+    this.volumes.master = Math.max(0, Math.min(1, volume));
+    storeVolume(VOLUME_MASTER_STORAGE_KEY, this.volumes.master);
+    this.applyVolumes();
+  }
+
+  private setSfxVolume(volume: number): void {
+    this.volumes.sfx = Math.max(0, Math.min(1, volume));
+    storeVolume(VOLUME_SFX_STORAGE_KEY, this.volumes.sfx);
+    this.applyVolumes();
+  }
+
+  private setMusicVolume(volume: number): void {
+    this.volumes.music = Math.max(0, Math.min(1, volume));
+    storeVolume(VOLUME_MUSIC_STORAGE_KEY, this.volumes.music);
+    this.applyVolumes();
+  }
+
+  private applyVolumes(): void {
+    this.effectiveSfxVolume = this.volumes.master * this.volumes.sfx;
+    const effectiveMusic = this.volumes.master * this.volumes.music;
+    this.music.setVolume(effectiveMusic);
     if (this.game) {
-      this.game.setVolume(this.masterVolume);
+      this.game.setVolume(this.effectiveSfxVolume);
     }
+  }
+
+  private maybeShowStartupVolumeMenu(): void {
+    let alreadySeen = false;
+    try {
+      alreadySeen = globalThis.localStorage?.getItem(FIRST_RUN_STORAGE_KEY) === '1';
+    } catch {
+      // If storage is unavailable, show the menu but won't be able to persist
+      // dismissal — better than blasting audio.
+    }
+    if (alreadySeen) {
+      return;
+    }
+    this.startupVolumeMenu = new StartupVolumeMenu(this.viewport, this.volumes, {
+      onMasterVolumeChange: (v) => this.setMasterVolume(v),
+      onSfxVolumeChange: (v) => this.setSfxVolume(v),
+      onMusicVolumeChange: (v) => this.setMusicVolume(v),
+      onDismiss: () => {
+        try {
+          globalThis.localStorage?.setItem(FIRST_RUN_STORAGE_KEY, '1');
+        } catch {
+          // Ignore storage failures.
+        }
+        this.startupVolumeMenu?.destroy();
+        this.startupVolumeMenu = null;
+        this.settingsMenu.setVolumes(this.volumes);
+      },
+    });
   }
 
   setForceRelay(enabled: boolean): void {
@@ -3239,7 +3329,7 @@ export class MultiplayerApp {
     // — by the time we get here we know the selection actually changed.
     this.stopAnnouncer();
     const audio = new Audio(url);
-    audio.volume = Math.max(0, Math.min(1, this.masterVolume));
+    audio.volume = Math.max(0, Math.min(1, this.effectiveSfxVolume));
     this.currentAnnouncerAudio = audio;
     audio.addEventListener('ended', () => {
       if (this.currentAnnouncerAudio === audio) {
