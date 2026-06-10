@@ -1295,6 +1295,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const jumpPressed = (inputFlags & InputBits.Jump) !== 0 && (previousFlags & InputBits.Jump) === 0;
     const ducking = (inputFlags & InputBits.Duck) !== 0;
     const attackPressed = (inputFlags & InputBits.Punch) !== 0 && (previousFlags & InputBits.Punch) === 0;
+    const attackHeld = (inputFlags & InputBits.Punch) !== 0;
     const dodgePressed = (inputFlags & InputBits.Dodge) !== 0 && (previousFlags & InputBits.Dodge) === 0;
     const shieldHeld = (inputFlags & InputBits.Shield) !== 0;
     const shieldWasHeld = (previousFlags & InputBits.Shield) !== 0;
@@ -1399,25 +1400,30 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       }
     }
 
-    if (attackPressed && record.canUseWeapon()) {
-      const heldKind = record.heldItem!;
-      const def = WEAPON_DEFINITIONS[heldKind];
-      if (def?.kind === 'melee') {
-        record.activeWeaponAttack = {
-          def,
-          ticksRemaining: def.durationTicks ?? 0,
-        };
-        record.weaponCooldownTicks = def.cooldownTicks;
-        if (heldKind === ItemKind.EthernetWhip) {
-          const whipSound = new Audio(WHIP_SOUND_URL);
-          whipSound.volume = 0.5 * this.sfxVolume;
-          void whipSound.play().catch((err) => {
-            console.warn('Whip sound could not play:', err);
-          });
+    {
+      const heldKind = record.heldItem;
+      const def = heldKind != null ? WEAPON_DEFINITIONS[heldKind] : undefined;
+      const projectileAutoFire =
+        def?.kind === 'projectile' && def.autoFire === true && attackHeld;
+      const weaponTrigger = attackPressed || projectileAutoFire;
+      if (weaponTrigger && record.canUseWeapon()) {
+        if (def?.kind === 'melee' && attackPressed) {
+          record.activeWeaponAttack = {
+            def,
+            ticksRemaining: def.durationTicks ?? 0,
+          };
+          record.weaponCooldownTicks = def.cooldownTicks;
+          if (heldKind === ItemKind.EthernetWhip) {
+            const whipSound = new Audio(WHIP_SOUND_URL);
+            whipSound.volume = 0.5 * this.sfxVolume;
+            void whipSound.play().catch((err) => {
+              console.warn('Whip sound could not play:', err);
+            });
+          }
+        } else if (def?.kind === 'projectile') {
+          this.fireProjectileWeapon(record, def, heldKind!);
+          record.weaponCooldownTicks = def.cooldownTicks;
         }
-      } else if (def?.kind === 'projectile') {
-        this.fireProjectileWeapon(record, def, heldKind);
-        record.weaponCooldownTicks = def.cooldownTicks;
       }
     }
 
@@ -1752,8 +1758,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   }
 
   private tickBullets(): void {
-    const minX = this.map.bounds.minX - 1;
-    const maxX = this.map.bounds.maxX + 1;
+    const minX = this.map.bounds.minX - FALLBACK_BLAST_TILES_SIDE * TILE_SIZE;
+    const maxX = this.map.bounds.maxX + FALLBACK_BLAST_TILES_SIDE * TILE_SIZE;
+    const minY = this.map.bounds.minY - FALLBACK_BLAST_TILES_DOWN * TILE_SIZE;
+    const maxY = this.map.bounds.maxY + FALLBACK_BLAST_TILES_UP * TILE_SIZE;
 
     for (const [bulletId, bullet] of this.bullets) {
       bullet.ticksRemaining -= 1;
@@ -1813,7 +1821,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           }
 
           bullet.y += bullet.vy * FIXED_STEP_SECONDS;
-          if (bullet.x < minX || bullet.x > maxX) {
+          if (bullet.x < minX || bullet.x > maxX || bullet.y < minY || bullet.y > maxY) {
             this.bullets.delete(bulletId);
           }
           continue;
@@ -1848,7 +1856,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
 
       bullet.x += dx;
       bullet.y += bullet.vy * FIXED_STEP_SECONDS;
-      if (bullet.x < minX || bullet.x > maxX) {
+      if (bullet.x < minX || bullet.x > maxX || bullet.y < minY || bullet.y > maxY) {
         this.bullets.delete(bulletId);
       }
     }
