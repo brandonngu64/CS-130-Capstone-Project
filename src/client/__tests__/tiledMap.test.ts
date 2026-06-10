@@ -25,9 +25,10 @@ describe('map manifest loading', () => {
 
   it('returns a defensive copy of the map manifest list', () => {
     const maps = getAvailableMaps();
+    const mapCount = maps.length;
     maps.pop();
 
-    expect(getAvailableMaps()).toHaveLength(9);
+    expect(getAvailableMaps()).toHaveLength(mapCount);
   });
 
   it('selects final destination as the default map when present', () => {

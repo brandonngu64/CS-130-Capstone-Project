@@ -81,7 +81,7 @@ const originalWebSocket = globalThis.WebSocket;
 const originalWindow = globalThis.window;
 
 function latestSocket(): FakeWebSocket {
-  const socket = FakeWebSocket.instances.at(-1);
+  const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
   if (!socket) {
     throw new Error('Expected a FakeWebSocket instance to be created.');
   }
