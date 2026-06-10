@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "start": "node dist-server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
-    "test": "npm run typecheck",
+    "test:unit": "vitest run",
+    "test": "npm run test:unit && npm run typecheck",
     "start:server": "node dist-server/index.js"
   },
   "devDependencies": {
@@ -22,7 +23,8 @@
     "concurrently": "^9.2.1",
     "tsx": "^4.21.0",
     "typescript": "~6.0.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "vitest": "^4.1.8"
   },
   "dependencies": {
     "@dimforge/rapier2d-compat": "^0.19.3",
