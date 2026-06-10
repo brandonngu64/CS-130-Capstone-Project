@@ -102,10 +102,41 @@ Here is what we used to get our server running:
   - `git branch -a` show all branches
   - `git switch <BRANCH NAME>`
 
-### Launching
+### Launching (quick / dev)
 - `npm install`
 - `npm run dev:all`
   - starts up server and client: `server`
+
+### Persistent server (survives SSH logout)
+For a deployment that keeps running after you disconnect, auto-restarts on crash,
+and starts on reboot, install it as a systemd service:
+- `bash setupScripts/run_game.sh`
+  - Builds the production bundle and registers the `cs130-game` service.
+  - The single Node server serves both the static frontend and the `/ws`
+    WebSocket signaling on port `3000`.
+  - Logs: `sudo journalctl -u cs130-game -f`
+  - After pulling new code, just re-run `bash setupScripts/run_game.sh`.
+
+### HTTPS / WSS with a No-IP domain
+Serve the game over HTTPS so the client automatically upgrades signaling to
+`wss://` (the protocol is derived from the page — no flags or code changes).
+1. Create a free hostname at [no-ip.com](https://www.noip.com/) (e.g. `yourgame.ddns.net`)
+   and a **DDNS Key** (Dynamic DNS > No-IP DDNS Keys).
+2. Open ports **80** and **443** in the EC2 security group (80 is needed for the
+   Let's Encrypt challenge and the HTTP→HTTPS redirect).
+3. Configure secrets (kept out of git):
+   - `cp setupScripts/.env.example setupScripts/.env`
+   - `chmod 600 setupScripts/.env`
+   - Edit `setupScripts/.env` with your `DOMAIN`, `EMAIL`, and No-IP credentials.
+4. Make sure the server is running: `bash setupScripts/run_game.sh`
+5. Enable HTTPS: `bash setupScripts/setup_https.sh`
+   - Installs the No-IP DUC (keeps the domain pointed at the instance IP),
+     waits for DNS to resolve, then provisions an nginx + Let's Encrypt reverse
+     proxy in front of the game server.
+6. Play at `https://<your-domain>`.
+
+> **No-IP free tier:** hostnames must be confirmed (via email) about every 30
+> days. The DUC keeps your IP current but does not bypass that confirmation.
 
 
 

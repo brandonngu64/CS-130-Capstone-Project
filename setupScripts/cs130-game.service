@@ -1,0 +1,28 @@
+# systemd unit template for the CS-130 game/signaling server.
+# Do NOT install this file directly — placeholders (__NODE_BIN__ etc.) are
+# rendered by setupScripts/run_game.sh, which installs the result to
+# /etc/systemd/system/cs130-game.service.
+#
+# The server serves both the static frontend (from ./dist) and the /ws
+# WebSocket signaling on SIGNALING_PORT, so a single process is all nginx needs.
+
+[Unit]
+Description=CS-130 Rollback Game Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+Environment=NODE_ENV=production
+Environment=SIGNALING_PORT=__GAME_PORT__
+# Run the built server directly with the resolved Node binary (systemd has no
+# nvm in its environment). WorkingDirectory must be the project root so the
+# server resolves ./dist for static files.
+ExecStart=__NODE_BIN__ __WORKDIR__/dist-server/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
