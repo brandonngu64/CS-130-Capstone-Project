@@ -511,6 +511,9 @@ export class MultiplayerApp {
   private readonly lobbyGameModeSelect: HTMLSelectElement;
   private readonly lobbyMapSelect: HTMLSelectElement;
   private readonly lobbyNameInput: HTMLInputElement;
+  private readonly lobbyLoading: HTMLElement;
+  private readonly lobbyLoadingBar: HTMLElement;
+  private readonly lobbyLoadingLabel: HTMLElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
   private readonly gameEndBanner: HTMLCanvasElement;
@@ -523,6 +526,14 @@ export class MultiplayerApp {
   private readonly roundStartBanner: HTMLCanvasElement;
   private readonly vfxCache = new VFXAssetCache();
   private readonly vfxClock = new VFXClock();
+  // Gameplay-asset preload state. `assetsReady` gates the lobby Ready button so
+  // a player cannot start a match before their heavy VFX/sprite assets have
+  // finished downloading and decoding. Acquired VFX pack ids are held for the
+  // whole session so round-start acquire() resolves from cache instantly.
+  private assetsReady = false;
+  private assetPreloadStarted = false;
+  private assetLoadProgress = 0;
+  private preloadedVfxPackIds: string[] = [];
   private countdownAsset: VFXAsset | null = null;
   private countdownPlayer: VFXPlayer | null = null;
   private countdownOverlay: VFXCanvasOverlay | null = null;
@@ -914,6 +925,9 @@ export class MultiplayerApp {
     this.lobbyMapSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyMapSelect');
     this.lobbyNameInput = requireElement<HTMLInputElement>(this.root, '#lobbyNameInput');
     this.lobbyNameInput.maxLength = LOBBY_NAME_MAX_LENGTH;
+    this.lobbyLoading = requireElement<HTMLElement>(this.root, '#lobbyLoading');
+    this.lobbyLoadingBar = requireElement<HTMLElement>(this.root, '#lobbyLoadingBar');
+    this.lobbyLoadingLabel = requireElement<HTMLElement>(this.root, '#lobbyLoadingLabel');
     this.lobbyNameInput.value = this.localDisplayName;
     this.leaveButton = requireElement<HTMLButtonElement>(
       this.root,
@@ -1155,6 +1169,11 @@ export class MultiplayerApp {
     this.lastFrameTimeMs = performance.now();
     this.animationFrameId = requestAnimationFrame(this.onFrame);
 
+    // Begin downloading/decoding the heavy gameplay assets immediately so they
+    // are usually finished by the time the player reaches a lobby. The lobby
+    // Ready button stays disabled until this resolves.
+    void this.preloadGameplayAssets();
+
     let roomId = currentUrl.searchParams.get('room');
     let hostPeer = currentUrl.searchParams.get('host');
     let signalUrl = currentUrl.searchParams.get('signal');
@@ -1202,6 +1221,11 @@ export class MultiplayerApp {
     window.removeEventListener('mouseup', this.onMouseUp);
     this.viewport.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('fullscreenchange', this.onFullscreenStateChange);
+
+    for (const id of this.preloadedVfxPackIds) {
+      this.vfxCache.release(id);
+    }
+    this.preloadedVfxPackIds = [];
 
     this.music.dispose();
     this.cleanupNetworking();
@@ -1354,6 +1378,10 @@ export class MultiplayerApp {
       return;
     }
 
+    // Re-arm asset loading in case a previous attempt failed; no-op if already
+    // loaded or in flight.
+    void this.preloadGameplayAssets();
+
     this.connecting = true;
     this.updateUiState();
 
@@ -1426,6 +1454,10 @@ export class MultiplayerApp {
     if (this.connecting) {
       return;
     }
+
+    // Re-arm asset loading in case a previous attempt failed; no-op if already
+    // loaded or in flight.
+    void this.preloadGameplayAssets();
 
     const roomId = this.mainMenu.getRoomId();
     const hostPeerId = this.mainMenu.getHostPeerId();
@@ -2740,7 +2772,11 @@ export class MultiplayerApp {
 
     const localReady = this.isLocalReadyInLobby();
     this.lobbyReadyButton.textContent = localReady ? 'Unready' : 'Ready';
-    this.lobbyReadyButton.disabled = !inLobby;
+    // Block readying up until this player's heavy assets are fully loaded.
+    // Because the host can only start once every player is Ready, this also
+    // prevents the match from starting until everyone has their assets.
+    this.lobbyReadyButton.disabled = !inLobby || !this.assetsReady;
+    this.lobbyLoading.dataset.visible = inLobby && !this.assetsReady ? 'true' : 'false';
     this.lobbyLeaveButton.disabled = !inLobby;
     this.lobbyCopyButton.disabled = !inLobby || this.currentShareUrl.length === 0;
 
@@ -2873,6 +2909,12 @@ export class MultiplayerApp {
                     <button id="lobbyCopyButton" type="button">Copy</button>
                   </div>
                 </label>
+                <div id="lobbyLoading" class="lobby-loading" data-visible="false">
+                  <span id="lobbyLoadingLabel" class="lobby-loading__label">Loading assets…</span>
+                  <div class="lobby-loading__track">
+                    <div id="lobbyLoadingBar" class="lobby-loading__bar"></div>
+                  </div>
+                </div>
                 <div class="lobby-actions">
                   <button id="lobbyReadyButton" class="action-secondary" type="button">Ready</button>
                   <button id="startGameButton" class="action-primary" type="button">Start Game</button>
@@ -3450,6 +3492,11 @@ export class MultiplayerApp {
     if (!this.roomId || !this.signaling || !this.isInRoom() || this.session?.state !== SessionState.Lobby) {
       return;
     }
+    // Defensive: the button is also disabled in updateUiState() until assets
+    // finish loading, but guard here too so a stray call can't ready-up early.
+    if (!this.assetsReady) {
+      return;
+    }
     const nextReady = !this.isLocalReadyInLobby();
     this.lobbyReadyByPeer.set(this.peerId, nextReady);
     this.debugLog('LOBBY', `Local player is ${nextReady ? 'ready' : 'not ready'}`);
@@ -3796,6 +3843,78 @@ export class MultiplayerApp {
 
     this.game.applyCharacterSelections(this.lobbyCharacterByPeer);
     this.renderer.preloadCharacterTextures(Array.from(this.lobbyCharacterByPeer.values()));
+  }
+
+  // Download and decode everything a match needs up front, reporting progress
+  // for the lobby loading bar. Idempotent: safe to call repeatedly — it no-ops
+  // while in flight or once complete, and re-enables itself after a failure so
+  // a later lobby entry can retry.
+  private async preloadGameplayAssets(): Promise<void> {
+    if (this.assetsReady || this.assetPreloadStarted) {
+      return;
+    }
+    this.assetPreloadStarted = true;
+
+    // Character/weapon sprites are small (~1.2 MB total). Warm all of them up
+    // front regardless of selection; the heavy VFX packs drive the progress
+    // bar, so this stays fire-and-forget.
+    this.renderer.preloadCharacterTextures(Array.from(CHARACTER_IDS));
+
+    // The 3-2-1 countdown and game-sequence VFX packs (~100 MB) are normally
+    // fetched/decoded on demand at round start, which stalls the match on a
+    // slow remote connection. Acquire them now and hold the refs for the whole
+    // session so the round-start acquire() resolves from cache instantly.
+    this.preloadedVfxPackIds = [COUNTDOWN_PACK.id, GAME_SEQUENCE_PACK.id];
+    const tasks: Promise<unknown>[] = [
+      this.vfxCache.acquire(COUNTDOWN_PACK),
+      this.vfxCache.acquire(GAME_SEQUENCE_PACK),
+    ];
+    // Ring-out is registered permanent in the constructor; fold it into the
+    // progress total so the bar only fills once everything is truly resident.
+    const ringOut = this.vfxCache.getPermanent(RING_OUT_PACK.id);
+    if (ringOut) {
+      tasks.push(ringOut);
+    }
+
+    const total = tasks.length;
+    let loaded = 0;
+    this.setAssetLoadProgress(0);
+    for (const task of tasks) {
+      void task
+        .then(() => {
+          loaded += 1;
+          this.setAssetLoadProgress(loaded / total);
+        })
+        .catch(() => {
+          /* aggregate failure handled by the Promise.all below */
+        });
+    }
+
+    try {
+      await Promise.all(tasks);
+      this.assetsReady = true;
+      this.setAssetLoadProgress(1);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Asset preload failed: ${msg}`, 'error');
+      this.debugLog('ASSET', `Preload failed: ${msg}`, 'error');
+      // Drop the held refs so a retry re-acquires fresh entries, and re-arm.
+      for (const id of this.preloadedVfxPackIds) {
+        this.vfxCache.release(id);
+      }
+      this.preloadedVfxPackIds = [];
+      this.assetPreloadStarted = false;
+    }
+    this.updateUiState();
+  }
+
+  private setAssetLoadProgress(fraction: number): void {
+    this.assetLoadProgress = Math.max(0, Math.min(1, fraction));
+    const pct = Math.round(this.assetLoadProgress * 100);
+    this.lobbyLoadingBar.style.width = `${pct}%`;
+    this.lobbyLoadingLabel.textContent = this.assetsReady
+      ? 'Assets ready'
+      : `Loading assets… ${pct}%`;
   }
 
 }

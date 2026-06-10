@@ -144,14 +144,25 @@ async function serveStaticRequest(pathname, response) {
             response.end('Not found\n');
             return true;
         }
-        await sendFile(assetPath, response);
+        await sendFile(assetPath, response, cacheControlForPath(pathname));
         return true;
     }
     if (await fileExists(indexPath)) {
-        await sendFile(indexPath, response);
+        await sendFile(indexPath, response, 'no-cache');
         return true;
     }
     return false;
+}
+// Vite emits content-hashed asset filenames under /assets/ (e.g.
+// 321GoSequence-0-C8pXkvDk.png), so those bytes are immutable and can be cached
+// by the browser indefinitely. Everything else (notably index.html) must be
+// revalidated so a new deploy — which points index.html at new hashed URLs — is
+// picked up immediately.
+function cacheControlForPath(pathname) {
+    if (pathname.startsWith('/assets/')) {
+        return 'public, max-age=31536000, immutable';
+    }
+    return 'no-cache';
 }
 function resolveStaticPath(pathname) {
     const relativePath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
@@ -171,12 +182,16 @@ async function fileExists(filePath) {
         return false;
     }
 }
-async function sendFile(filePath, response) {
+async function sendFile(filePath, response, cacheControl) {
     const body = await readFile(filePath);
-    response.writeHead(200, {
+    const headers = {
         'content-type': contentTypeForPath(filePath),
         'content-length': body.length,
-    });
+    };
+    if (cacheControl) {
+        headers['cache-control'] = cacheControl;
+    }
+    response.writeHead(200, headers);
     response.end(body);
 }
 function contentTypeForPath(filePath) {
