@@ -82,7 +82,6 @@ export class MusicSystem {
   private gain: GainNode | null = null;
   private source: AudioBufferSourceNode | null = null;
   private currentPhase: MusicPhase | null = null;
-  private currentTrack: Track | null = null;
   private musicVolume = 1;
   private phaseVolume = 0.2;
   // Monotonic counter so a stale onended callback from a track we already
@@ -112,7 +111,6 @@ export class MusicSystem {
       this.source.disconnect();
       this.source = null;
     }
-    this.currentTrack = null;
   }
 
   dispose(): void {
@@ -177,7 +175,6 @@ export class MusicSystem {
 
     this.stop();
     const token = ++this.playToken;
-    this.currentTrack = track;
 
     void this.decode(track).then((buffer) => {
       if (token !== this.playToken) return;
