@@ -28,10 +28,10 @@ const ERROR_SELECT_URL = new URL(
 const MENU_SELECTOR = '.overlay-backdrop, .lobby-overlay';
 const START_GAME_BUTTON_ID = 'startGameButton';
 
-const IR_DURATION_SECONDS = 0.8;
-const IR_DECAY = 4.0;
+const IR_DURATION_SECONDS = 1.2;
+const IR_DECAY = 5.0;
 const DRY_LEVEL = 1.0;
-const WET_LEVEL = 0.25;
+const WET_LEVEL = 0.55;
 
 const SOUND_URLS = [
   CURSOR_MOVE_OVER_URL,
