@@ -542,6 +542,9 @@ export class GameRenderer {
       if (justRingOut && this.vfxRingOutPool) {
         const vfx = this.vfxRingOutPool.spawn(this.scene);
         if (vfx) {
+          // Tint the effect toward this player's color (soft-light blend).
+          vfx.setTint(player.color, 0.5);
+
           // 1. Calculate direction vector pointing BACK to the stage center
           const dx = stageCenterX - player.x;
           const dy = stageCenterY - player.y;
