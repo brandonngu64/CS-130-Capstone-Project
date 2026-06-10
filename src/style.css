@@ -613,6 +613,48 @@ h2 {
   opacity: 1;
 }
 
+.lobby-loading {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.lobby-loading[data-visible='false'] {
+  display: none;
+}
+
+.lobby-loading__label {
+  font-size: clamp(0.62rem, 1.05vw, 0.82rem);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+}
+
+.lobby-loading__track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.lobby-loading__bar {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(74, 198, 185, 0.95), rgba(11, 127, 120, 0.95));
+  transition: width 0.2s ease;
+}
+
+/* When the loader is visible, the actions row no longer needs to absorb the
+   flex slack — the loader's margin-top:auto pushes both to the bottom. */
+.lobby-loading[data-visible='true'] + .lobby-actions {
+  margin-top: 0;
+}
+
 .lobby-actions {
   display: flex;
   justify-content: stretch;

@@ -335,6 +335,10 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
   // held constant for the match's lifetime to keep rollback deterministic.
   private splitScreenPeers: ReadonlySet<string> = new Set();
   private readonly expandedInputsScratch = new Map<string, Uint8Array>();
+  // Shared neutral (no buttons pressed) input byte. Used to fill a split-screen
+  // virtual player's slot when the peer's payload for this tick is shorter than
+  // expected (e.g. the predictor's cold-start fallback). Read-only at use sites.
+  private readonly neutralInputByte = new Uint8Array(1);
 
   constructor(map: TiledMapDefinition, options?: { startingStocks?: number; gameMode?: GameMode }) {
     this.map = map;
@@ -412,9 +416,23 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     const expanded = this.expandedInputsScratch;
     expanded.clear();
     for (const [peerId, bytes] of inputs) {
-      if (this.splitScreenPeers.has(peerId as string) && bytes.length >= 2) {
-        expanded.set(peerId as string, bytes.subarray(0, 1));
-        expanded.set(this.secondaryIdFor(peerId as string), bytes.subarray(1, 2));
+      if (this.splitScreenPeers.has(peerId as string)) {
+        // A split-screen peer always expands to its two virtual players,
+        // regardless of payload length. The byte count can drop below 2 when
+        // this tick's input is a prediction (the cold-start predictor falls
+        // back to a 1-byte neutral input). If we skipped the secondary in that
+        // case, the live player set — which step() derives from these keys and
+        // feeds to syncPlayers() — would differ between predicted and confirmed
+        // ticks (and across machines), destroying and respawning the secondary
+        // player and desyncing. Pad missing slots with a neutral input instead.
+        expanded.set(
+          peerId as string,
+          bytes.length >= 1 ? bytes.subarray(0, 1) : this.neutralInputByte,
+        );
+        expanded.set(
+          this.secondaryIdFor(peerId as string),
+          bytes.length >= 2 ? bytes.subarray(1, 2) : this.neutralInputByte,
+        );
       } else {
         expanded.set(peerId as string, bytes);
       }
