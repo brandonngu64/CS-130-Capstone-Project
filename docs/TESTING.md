@@ -187,9 +187,44 @@ Edge cases and error handling covered: neutral facing, exact walk threshold, hel
 
 Edge cases and error handling covered: duplicate player initialization, unknown players, player removal, clearing state, final-stock elimination, respawn timer boundary, invulnerability flash boundary, forced respawn reset, single-winner detection, multi-player serialization offsets, and missing-player serialization errors.
 
+## Suite 5: Signaling Client
+
+- Test class/file: [src/client/__tests__/SignalingClient.test.ts](../src/client/__tests__/SignalingClient.test.ts)
+- Framework mapping: `describe('signaling connection lifecycle')`, `describe('signaling message receive behavior')`, and `describe('signaling send behavior')` are Vitest suites; each `it(...)` block is a test case.
+- Setup: tests replace the global `WebSocket` with an in-memory fake socket and stub `window.setTimeout` so connection events can be triggered deterministically without a real signaling server.
+- Teardown: each test restores global stubs through Vitest and resets the fake socket instance list.
+
+### Signaling Connection Lifecycle
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `connects to the requested websocket URL after the socket opens` | Connect to `ws://example.test/ws`, then trigger fake `open` | The connection promise resolves and the fake socket records the requested URL. |
+| `rejects the connection attempt when the socket reports an error` | Connect, then trigger fake `error` | The connection promise rejects with `Failed to connect to signaling server`. |
+| `closes an existing socket before reconnecting` | Connect to `/first`, then connect to `/second` | The first fake socket is closed and the second socket uses the new URL. |
+| `notifies registered close handlers and supports unsubscribing them` | Register close handler, close the socket, unsubscribe, close again | The handler is called exactly once with close code `1000`. |
+
+### Signaling Message Receive Behavior
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `delivers valid server messages to all registered handlers` | Valid `room_hosted` JSON message | Every registered message handler receives the parsed server message. |
+| `ignores malformed messages, non-string payloads, and JSON without a type` | Invalid JSON, JSON without `type`, and a non-string object payload | No handlers are called. |
+| `stops delivering messages to unsubscribed handlers` | One kept handler and one unsubscribed handler, then a valid `peer_left` message | The kept handler runs once; the unsubscribed handler is not called. |
+
+### Signaling Send Behavior
+
+| Test method | Inputs | Expected outcome / test oracle |
+| --- | --- | --- |
+| `serializes client messages when the socket is open` | Open socket, then send `host_room` | The socket receives exactly the JSON string for the outgoing message. |
+| `builds signal relay messages with source and target peer ids` | `sendSignal('room-1', 'host', 'guest', candidate)` | The serialized message includes type `signal`, room id, source peer id, target peer id, and the candidate payload. |
+| `does not send when disconnected or before the socket opens` | Send before connecting and before fake `open` | No messages are written to the fake socket. |
+| `disconnect closes the socket and prevents future sends` | Open socket, call `disconnect`, then send | The socket is closed and no message is sent afterward. |
+
+Edge cases and error handling covered: connection error rejection, reconnect cleanup, close-handler unsubscribe, malformed inbound JSON, missing message type, non-string message payloads, message-handler unsubscribe, send-before-open, send while disconnected, and send after disconnect.
+
 ## Planned Suite Breakdown
 
 The remaining suites can be added as separate commits so the final report is easy to explain:
 
 1. Rollback physics gameplay suite: validate movement, jumping, dashing, projectile lifetime, hit detection, respawn timing, and blast-zone deaths using deterministic frame advancement.
-2. Signaling/server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
+2. Signaling server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
