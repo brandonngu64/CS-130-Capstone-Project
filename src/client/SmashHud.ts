@@ -61,6 +61,8 @@ export class SmashHud {
       return a.id.localeCompare(b.id);
     });
 
+    this.element.setAttribute('data-players', sorted.length.toString());
+
     this.element.innerHTML = sorted.map((p) => this.renderCard(p)).join('');
   }
 
