@@ -592,7 +592,6 @@ export class MultiplayerApp {
   // What the host has selected in the lobby map dropdown. May be a real map id
   // or the `'random'` sentinel; resolved into `selectedMapId` on match start.
   private lobbyMapSelectionId: string = this.selectedMapId;
-  private koBarEnabled = false;
   private inputDelayFrames = readStoredInputDelayFrames();
   private readonly inputDelayBuffer: Uint8Array[] = [];
   private localTickIndex = 0;
@@ -2583,7 +2582,6 @@ export class MultiplayerApp {
   }
 
   private setKoBarEnabled(enabled: boolean): void {
-    this.koBarEnabled = enabled;
     this.settingsMenu.setKoBarEnabled(enabled);
     this.smashHud.setKoBarEnabled(enabled);
   }
