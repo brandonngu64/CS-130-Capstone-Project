@@ -13,21 +13,67 @@ import {
 import {
   CHARACTER_DISPLAY_NAMES,
   CHARACTER_IDS,
+  DEFAULT_GAME_MODE,
+  DEFAULT_STOCKS,
+  GAME_MODES,
+  GAME_MODE_DISPLAY_NAMES,
+  LOBBY_NAME_MAX_LENGTH,
   MAX_PLAYERS,
+  MAX_STOCKS,
+  MIN_STOCKS,
+  PLAYER_COLOR_PALETTE,
+  POST_MATCH_DELAY_MS,
+  RANDOM_CHARACTER_SELECTION,
+  RANDOM_MAP_SELECTION,
   TICK_RATE,
   type CharacterId,
+  type GameMode,
+  type LobbyCharacterSelection,
   isCharacterId,
+  isGameMode,
+  isLobbyCharacterSelection,
 } from './constants';
-import { defaultCharacterForPlayer, getCharacterPreviewUrl } from './CharacterSprites';
+import {
+  defaultCharacterForPlayer,
+  getCharacterHeadshotUrl,
+} from './CharacterSprites';
 import { GameRenderer } from './GameRenderer';
 import type { CameraMode } from './GameRenderer';
-import { HealthBarOverlay } from './HealthBarOverlay';
+import { VFXAssetCache } from './vfx/assetCache';
+import { VFXClock } from './vfx/vfxClock';
+import { VFXPlayer } from './vfx/vfxPlayer';
+import { VFXCanvasOverlay } from './vfx/vfxCanvasOverlay';
+import {
+  COUNTDOWN_PACK,
+  COUNTDOWN_VFX_FPS,
+  COUNTDOWN_VFX_FRAME_OFFSET,
+  GAME_SEQUENCE_PACK,
+  GAME_SEQUENCE_VFX_FPS,
+  GAME_SEQUENCE_VFX_FRAME_OFFSET,
+  RING_OUT_PACK,
+} from './vfx/packs';
+import type { VFXAsset } from './vfx/assetLoader';
+import { ROUND_START_COUNTDOWN_TOTAL_TICKS } from './RollbackPhysicsGame';
 import { MainMenu, type StatusTone } from './MainMenu';
+import { attachMenuSounds } from './MenuSounds';
+import { LeavingManager } from './LeavingManager';
+import { claimPeerId, type PeerIdClaim } from './PeerIdClaim';
 import { RollbackPhysicsGame } from './RollbackPhysicsGame';
 import { SettingsMenu } from './SettingsMenu';
+import { StartupVolumeMenu } from './StartupVolumeMenu';
+import { MusicSystem, type MusicPhase } from './MusicSystem';
 import { SignalingClient, type ServerToClientMessage } from './SignalingClient';
-import { StockHud } from './StockHud';
-import { encodeInput } from './input';
+import { SmashHud } from './SmashHud';
+import { encodeInput, encodeSplitInput, type InputState } from './input';
+import {
+  DEFAULT_INPUT_SCHEME_ID,
+  INPUT_SCHEMES,
+  SPLIT_SCREEN_KEYMAP,
+  isInputSchemeId,
+  type GameAction,
+  type InputScheme,
+  type InputSchemeId,
+} from './inputSchemes';
 import { AVAILABLE_MAPS, DEFAULT_MAP_ID, loadMapDefinition } from './tiledMap';
 
 type DebugCounters = {
@@ -35,16 +81,6 @@ type DebugCounters = {
   rollbackTicks: number;
   desyncCount: number;
   errorCount: number;
-};
-
-type InputState = {
-  left: boolean;
-  right: boolean;
-  jump: boolean;
-  duck: boolean;
-  punch: boolean;
-  dash: boolean;
-  shoot: boolean;
 };
 
 type RecoveryMode = 'host' | 'join';
@@ -66,10 +102,65 @@ const SIGNALING_RECONNECT_BASE_DELAY_MS = 10000;
 const SIGNALING_RECONNECT_MAX_DELAY_MS = 10000;
 const SIGNALING_RECONNECT_MAX_ATTEMPTS = 15;
 const ROOM_RECOVERY_STORAGE_KEY = 'cs130-room-recovery';
+const INPUT_DELAY_STORAGE_KEY = 'cs130-input-delay';
+const FORCE_RELAY_STORAGE_KEY = 'cs130-force-relay';
+const INPUT_SCHEME_STORAGE_KEY = 'cs130-input-scheme';
+const SPLIT_SCREEN_STORAGE_KEY = 'cs130-split-screen';
+const VOLUME_MASTER_STORAGE_KEY = 'cs130-volume-master';
+const VOLUME_SFX_STORAGE_KEY = 'cs130-volume-sfx';
+const VOLUME_MUSIC_STORAGE_KEY = 'cs130-volume-music';
+const FIRST_RUN_STORAGE_KEY = 'cs130-first-run-seen';
+const DEFAULT_MASTER_VOLUME = 0.7;
+const DEFAULT_SFX_VOLUME = 0.6;
+const DEFAULT_MUSIC_VOLUME = 0.4;
+const DEFAULT_INPUT_DELAY_FRAMES = 2;
+const MAX_INPUT_DELAY_FRAMES = 6;
 
-const GAME_THEME_URL = new URL('../assets/sounds/game_theme.mp3', import.meta.url).href;
-const MENU_THEME_URL = new URL('../assets/sounds/menu.mp3', import.meta.url).href;
 const FIGHT_START_SOUND_URL = new URL('../assets/sounds/fight_start.wav', import.meta.url).href;
+const ANNOUNCER_GAME_SOUND_URL = new URL('../assets/sounds/sfx/announcer_game.wav', import.meta.url).href;
+
+const LOBBY_NAME_STORAGE_KEY = 'cs130-lobby-name';
+
+// Announcer SFX files are named with a character-based prefix; one source of
+// truth that maps a real CharacterId to its announcer clip. `sahai` is spelled
+// `saihai` in the asset name — keep this map authoritative.
+const CHARACTER_ANNOUNCER_FILENAMES: Record<CharacterId, string> = {
+  eggert: 'eggertAnnounce.mp3',
+  nachenburg: 'nachenbergAnnounce.mp3',
+  sahai: 'saihaiAnnounce.mp3',
+  smallberg: 'smallbergAnnounce.mp3',
+};
+
+const ANNOUNCER_SOUND_MODULES = import.meta.glob('../assets/sounds/announcer/*.mp3', {
+  eager: true,
+  import: 'default',
+}) as Record<string, string>;
+
+function getAnnouncerUrl(characterId: CharacterId): string | null {
+  const filename = CHARACTER_ANNOUNCER_FILENAMES[characterId];
+  const url = ANNOUNCER_SOUND_MODULES[`../assets/sounds/announcer/${filename}`];
+  return url ?? null;
+}
+
+function readStoredDisplayName(): string {
+  try {
+    const raw = globalThis.localStorage?.getItem(LOBBY_NAME_STORAGE_KEY);
+    if (raw && raw.trim().length > 0) {
+      return raw.trim().slice(0, LOBBY_NAME_MAX_LENGTH);
+    }
+  } catch {
+    // Ignore storage failures and fall back to the default.
+  }
+  return '';
+}
+
+function storeDisplayName(name: string): void {
+  try {
+    globalThis.localStorage?.setItem(LOBBY_NAME_STORAGE_KEY, name);
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 function requireElement<T extends HTMLElement>(
   parent: ParentNode,
@@ -89,6 +180,17 @@ function isArrowKey(code: string): boolean {
     code === 'ArrowUp' ||
     code === 'ArrowDown'
   );
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 function cameraModeLabel(mode: CameraMode): string {
@@ -168,6 +270,110 @@ function clearStoredRecoveryState(): void {
   }
 }
 
+function readStoredInputDelayFrames(): number {
+  try {
+    const raw = globalThis.localStorage?.getItem(INPUT_DELAY_STORAGE_KEY);
+    if (raw === null || raw === undefined) {
+      return DEFAULT_INPUT_DELAY_FRAMES;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      return DEFAULT_INPUT_DELAY_FRAMES;
+    }
+    return Math.max(0, Math.min(parsed, MAX_INPUT_DELAY_FRAMES));
+  } catch {
+    return DEFAULT_INPUT_DELAY_FRAMES;
+  }
+}
+
+function storeInputDelayFrames(frames: number): void {
+  try {
+    globalThis.localStorage?.setItem(INPUT_DELAY_STORAGE_KEY, String(frames));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredForceRelay(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(FORCE_RELAY_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function storeForceRelay(enabled: boolean): void {
+  try {
+    if (enabled) {
+      globalThis.localStorage?.setItem(FORCE_RELAY_STORAGE_KEY, '1');
+    } else {
+      globalThis.localStorage?.removeItem(FORCE_RELAY_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredInputSchemeId(): InputSchemeId {
+  try {
+    const raw = globalThis.localStorage?.getItem(INPUT_SCHEME_STORAGE_KEY);
+    if (raw && isInputSchemeId(raw)) {
+      return raw;
+    }
+  } catch {
+    // Ignore storage failures and use the default.
+  }
+  return DEFAULT_INPUT_SCHEME_ID;
+}
+
+function storeInputSchemeId(id: InputSchemeId): void {
+  try {
+    globalThis.localStorage?.setItem(INPUT_SCHEME_STORAGE_KEY, id);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredSplitScreen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SPLIT_SCREEN_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function storeSplitScreen(enabled: boolean): void {
+  try {
+    if (enabled) {
+      globalThis.localStorage?.setItem(SPLIT_SCREEN_STORAGE_KEY, '1');
+    } else {
+      globalThis.localStorage?.removeItem(SPLIT_SCREEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function readStoredVolume(key: string, fallback: number): number {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    if (raw === null || raw === undefined) return fallback;
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.min(1, parsed));
+  } catch {
+    return fallback;
+  }
+}
+
+function storeVolume(key: string, value: number): void {
+  try {
+    globalThis.localStorage?.setItem(key, String(Math.max(0, Math.min(1, value))));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function sessionStateLabel(state: SessionState): string {
   switch (state) {
     case SessionState.Disconnected:
@@ -185,31 +391,74 @@ function sessionStateLabel(state: SessionState): string {
   }
 }
 
-function makePeerId(): string {
-  const storedPeerId = readStoredPeerId();
-  if (storedPeerId) {
-    return storedPeerId;
-  }
-
+function generateFreshPeerId(): string {
   const cryptoApi = globalThis.crypto;
-  let peerId = '';
 
   if (cryptoApi?.randomUUID) {
-    peerId = `peer-${cryptoApi.randomUUID().slice(0, 8)}`;
-  } else if (cryptoApi?.getRandomValues) {
-    const bytes = new Uint8Array(4);
-    cryptoApi.getRandomValues(bytes);
-    const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0'))
-      .join('')
-      .slice(0, 8);
-    peerId = `peer-${hex}`;
-  } else {
-    const fallback = Math.floor(Math.random() * 0xffffffff)
-      .toString(16)
-      .padStart(8, '0');
-    peerId = `peer-${fallback}`;
+    return `peer-${cryptoApi.randomUUID().replace(/-/g, '').slice(0, 16)}`;
   }
 
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(8);
+    cryptoApi.getRandomValues(bytes);
+    const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+    return `peer-${hex}`;
+  }
+
+  const high = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  const low = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return `peer-${high}${low}`;
+}
+
+function summarizeIceTransport(report: RTCStatsReport): string | null {
+  let nominatedPair: RTCIceCandidatePairStats | null = null;
+  for (const stat of report.values()) {
+    if (stat.type !== 'candidate-pair') {
+      continue;
+    }
+    const pair = stat as RTCIceCandidatePairStats & { selected?: boolean; nominated?: boolean };
+    if (pair.state === 'succeeded' && (pair.selected === true || pair.nominated === true)) {
+      nominatedPair = pair;
+      break;
+    }
+  }
+  if (!nominatedPair) {
+    return null;
+  }
+  const localId = (nominatedPair as { localCandidateId?: string }).localCandidateId;
+  if (!localId) {
+    return null;
+  }
+  const local = report.get(localId) as
+    | (RTCStats & { candidateType?: string; protocol?: string })
+    | undefined;
+  const candidateType = local?.candidateType;
+  switch (candidateType) {
+    case 'host':
+      return 'direct (local network)';
+    case 'srflx':
+    case 'prflx':
+      return 'direct P2P via STUN';
+    case 'relay':
+      return 'relayed via TURN (extra latency)';
+    default:
+      return candidateType ? `via ${candidateType}` : null;
+  }
+}
+
+function makePeerId(): string {
+  // Only reuse a stored peer id when we are actively in a recovery flow.
+  // sessionStorage is copied by "Duplicate Tab" in Chromium browsers, so
+  // unconditional reuse caused the two-browsers-on-one-machine collision.
+  const recovery = readStoredRecoveryState();
+  if (recovery) {
+    const storedPeerId = readStoredPeerId();
+    if (storedPeerId) {
+      return storedPeerId;
+    }
+  }
+
+  const peerId = generateFreshPeerId();
   storePeerId(peerId);
   return peerId;
 }
@@ -241,12 +490,12 @@ export class MultiplayerApp {
   private readonly viewport: HTMLElement;
   private renderer: GameRenderer;
 
-  private readonly peerId: string;
+  private peerId: string;
+  private readonly peerIdClaim: PeerIdClaim;
   private readonly mainMenu: MainMenu;
   private readonly settingsMenu: SettingsMenu;
-  private readonly stockHud: StockHud;
+  private readonly smashHud: SmashHud;
 
-  private readonly gameHud: HTMLElement;
   private readonly statusBadge: HTMLElement;
   private readonly startGameButton: HTMLButtonElement;
   private readonly lobbyOverlay: HTMLElement;
@@ -257,16 +506,41 @@ export class MultiplayerApp {
   private readonly lobbyCopyButton: HTMLButtonElement;
   private readonly lobbyRoomIdValue: HTMLElement;
   private readonly lobbyShareUrlValue: HTMLInputElement;
+  private readonly lobbyStockSettings: HTMLElement;
+  private readonly lobbyStockCountSelect: HTMLSelectElement;
+  private readonly lobbyGameModeSelect: HTMLSelectElement;
+  private readonly lobbyMapSelect: HTMLSelectElement;
+  private readonly lobbyNameInput: HTMLInputElement;
+  private readonly lobbyLoading: HTMLElement;
+  private readonly lobbyLoadingBar: HTMLElement;
+  private readonly lobbyLoadingLabel: HTMLElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly cameraToggleButton: HTMLButtonElement;
-  private readonly settingsToggleButton: HTMLButtonElement;
-  private readonly healthBarOverlay: HealthBarOverlay;
-  private readonly winnerBanner: HTMLElement;
-  private readonly winnerBannerTitle: HTMLElement;
-  private readonly winnerBannerSubtitle: HTMLElement;
-  private readonly roundStartBanner: HTMLElement;
-  private readonly gameThemeAudio: HTMLAudioElement;
-  private readonly menuThemeAudio: HTMLAudioElement;
+  private readonly gameEndBanner: HTMLCanvasElement;
+  private gameEndAsset: VFXAsset | null = null;
+  private gameEndPlayer: VFXPlayer | null = null;
+  private gameEndOverlay: VFXCanvasOverlay | null = null;
+  private gameEndLoading = false;
+  private gameEndStartTimeMs = 0;
+  private gameEndAudio: HTMLAudioElement | null = null;
+  private readonly roundStartBanner: HTMLCanvasElement;
+  private readonly vfxCache = new VFXAssetCache();
+  private readonly vfxClock = new VFXClock();
+  // Gameplay-asset preload state. `assetsReady` gates the lobby Ready button so
+  // a player cannot start a match before their heavy VFX/sprite assets have
+  // finished downloading and decoding. Acquired VFX pack ids are held for the
+  // whole session so round-start acquire() resolves from cache instantly.
+  private assetsReady = false;
+  private assetPreloadStarted = false;
+  private assetLoadProgress = 0;
+  private preloadedVfxPackIds: string[] = [];
+  private countdownAsset: VFXAsset | null = null;
+  private countdownPlayer: VFXPlayer | null = null;
+  private countdownOverlay: VFXCanvasOverlay | null = null;
+  private countdownLoading = false;
+  private countdownWasActive = false;
+  private readonly music = new MusicSystem();
+  private currentMusicPhase: MusicPhase | null = null;
 
   private readonly tickValue: HTMLElement;
   private readonly confirmedTickValue: HTMLElement;
@@ -276,6 +550,12 @@ export class MultiplayerApp {
   private readonly peerCountValue: HTMLElement;
   private readonly playerCountValue: HTMLElement;
   private readonly rttValue: HTMLElement;
+
+  private netCountersPanel!: HTMLElement;
+  private debugConsolePanel!: HTMLElement;
+  private debugConsoleLog!: HTMLElement;
+  private toggleNetCountersBtn!: HTMLButtonElement;
+  private toggleDebugConsoleBtn!: HTMLButtonElement;
 
   private signaling: SignalingClient | null = null;
   private transport: WebRTCTransport | null = null;
@@ -287,10 +567,35 @@ export class MultiplayerApp {
   private readonly lobbyMembers = new Set<string>();
   private readonly lobbyReadyByPeer = new Map<string, boolean>();
   private readonly lobbyCharacterByPeer = new Map<string, CharacterId>();
+  // Tracks raw lobby selections — including the `'random'` sentinel which is
+  // resolved on match start. `lobbyCharacterByPeer` always holds a concrete
+  // CharacterId for rendering / game wiring; this map is the source of truth
+  // for the picker UI and for resolving randoms at start time.
+  private readonly lobbySelectionByPeer = new Map<string, LobbyCharacterSelection>();
+  private readonly lobbyNameByPeer = new Map<string, string>();
+  private localDisplayName: string = readStoredDisplayName();
+  // Currently playing announcer SFX so we can interrupt previous playback when
+  // a different character tile is clicked (and ignore re-clicks of the same).
+  private currentAnnouncerAudio: HTMLAudioElement | null = null;
   private currentShareUrl = '';
   private settingsOpen = false;
   private cameraMode: CameraMode = 'follow';
-  private masterVolume = 1;
+  private startupVolumeMenu: StartupVolumeMenu | null = null;
+  private readonly volumes = {
+    master: readStoredVolume(VOLUME_MASTER_STORAGE_KEY, DEFAULT_MASTER_VOLUME),
+    sfx: readStoredVolume(VOLUME_SFX_STORAGE_KEY, DEFAULT_SFX_VOLUME),
+    music: readStoredVolume(VOLUME_MUSIC_STORAGE_KEY, DEFAULT_MUSIC_VOLUME),
+  };
+  private effectiveSfxVolume = 1;
+  private startingStocks: number = DEFAULT_STOCKS;
+  private gameMode: GameMode = DEFAULT_GAME_MODE;
+  // What the host has selected in the lobby map dropdown. May be a real map id
+  // or the `'random'` sentinel; resolved into `selectedMapId` on match start.
+  private lobbyMapSelectionId: string = this.selectedMapId;
+  private inputDelayFrames = readStoredInputDelayFrames();
+  private readonly inputDelayBuffer: Uint8Array[] = [];
+  private localTickIndex = 0;
+  private forceRelay = readStoredForceRelay();
   private readonly cameraPanInput = {
     left: false,
     right: false,
@@ -307,9 +612,35 @@ export class MultiplayerApp {
     jump: false,
     duck: false,
     punch: false,
-    dash: false,
-    shoot: false,
+    dodge: false,
+    shield: false,
   };
+
+  private readonly inputStateP2: InputState = {
+    left: false,
+    right: false,
+    jump: false,
+    duck: false,
+    punch: false,
+    dodge: false,
+    shield: false,
+  };
+
+  private currentScheme: InputScheme = INPUT_SCHEMES[readStoredInputSchemeId()];
+
+  // User-toggleable in settings (main menu only). When true, the next room we
+  // host/join brings 2 local players into the match (peerId + `${peerId}#2`).
+  private splitScreenEnabled = readStoredSplitScreen();
+  // Latched at room entry. Cleared on leaveRoom. Held constant during a match
+  // to keep rollback deterministic.
+  private localSecondaryPlayerId: string | null = null;
+  // Per-peer split-screen state, propagated via lobby_split_screen. Drives the
+  // game-layer expansion (peerId → 2 virtual PlayerIds) and the host's
+  // capacity check before starting the match.
+  private readonly localPlayerCountByPeer = new Map<string, number>();
+  // Which local slot the character picker currently edits when split-screen
+  // is active. 'primary' = peerId, 'secondary' = `${peerId}#2`.
+  private characterPickerSlot: 'primary' | 'secondary' = 'primary';
 
   private readonly debugCounters: DebugCounters = {
     rollbackCount: 0,
@@ -322,8 +653,18 @@ export class MultiplayerApp {
   private reconnectTimerId: number | null = null;
   private reconnectAttempt = 0;
   private reconnectingSignaling = false;
+  private leavingManager: LeavingManager | null = null;
   private isCleaningUp = false;
   private respawnCameraLocked = false;
+  // Tracks the post-match return-to-lobby flow. `lastWinnerId` lets us detect
+  // the null → winner edge to schedule the rematch exactly once. The timer is
+  // tracked so leaveRoom / cleanupNetworking can cancel a pending rematch.
+  private lastWinnerId: string | null = null;
+  private postMatchTimerId: number | null = null;
+  // When a guest receives a `lobby_rematch` while still in the old room, it
+  // stashes the announced new room here so the rejoin can fire after the host
+  // has had a moment to re-host.
+  private pendingRematchJoin: { newRoomId: string; hostPeerId: string } | null = null;
 
   private unsubscribeSignalMessages: (() => void) | null = null;
   private unsubscribeSignalClose: (() => void) | null = null;
@@ -333,10 +674,36 @@ export class MultiplayerApp {
   private lastFrameTimeMs = 0;
   private accumulatedTimeMs = 0;
   private connecting = false;
-  private gameThemeStarted = false;
-  private menuThemeStarted = false;
+
+  private setInputAction(action: GameAction, pressed: boolean): void {
+    this.inputState[action] = pressed;
+  }
+
+  private setSplitScreenInputAction(
+    slot: 'primary' | 'secondary',
+    action: GameAction,
+    pressed: boolean,
+  ): void {
+    if (slot === 'primary') {
+      this.inputState[action] = pressed;
+    } else {
+      this.inputStateP2[action] = pressed;
+    }
+  }
+
+  private isSplitScreenActive(): boolean {
+    return this.localSecondaryPlayerId !== null;
+  }
+
+  private isLocalPlayerId(playerId: string): boolean {
+    return playerId === this.peerId || playerId === this.localSecondaryPlayerId;
+  }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (isEditableTarget(event.target)) {
+      return;
+    }
+    // System keys take precedence over any scheme binding.
     if (event.code === 'KeyC') {
       event.preventDefault();
       if (this.isInRoom() || this.connecting) {
@@ -369,48 +736,31 @@ export class MultiplayerApp {
       return;
     }
 
-    if (
-      event.code === 'ArrowLeft' ||
-      event.code === 'KeyA' ||
-      event.code === 'ArrowRight' ||
-      event.code === 'KeyD' ||
-      event.code === 'ArrowUp' ||
-      event.code === 'KeyW' ||
-      event.code === 'Space' ||
-      event.code === 'ArrowDown' ||
-      event.code === 'KeyS' ||
-      event.code === 'KeyU' ||
-      event.code === 'ShiftLeft' ||
-      event.code === 'ShiftRight'
-    ) {
-      event.preventDefault();
-    }
-
-    if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
-      this.inputState.left = true;
-    }
-    if (event.code === 'ArrowRight' || event.code === 'KeyD') {
-      this.inputState.right = true;
-    }
-    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
-      this.inputState.jump = true;
-    }
-    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
-      this.inputState.duck = true;
-    }
-    if (event.code === 'KeyU') {
-      this.inputState.punch = true;
-    }
-    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-      this.inputState.dash = true;
-    }
-
-    if (event.code === 'Escape' && this.isInRoom()) {
+    if (event.code === 'Escape') {
       this.toggleSettings();
+      return;
+    }
+
+    if (this.isSplitScreenActive()) {
+      const binding = SPLIT_SCREEN_KEYMAP[event.code];
+      if (binding) {
+        event.preventDefault();
+        this.setSplitScreenInputAction(binding.slot, binding.action, true);
+      }
+      return;
+    }
+
+    const action = this.currentScheme.keys[event.code];
+    if (action) {
+      event.preventDefault();
+      this.setInputAction(action, true);
     }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
+    if (isEditableTarget(event.target)) {
+      return;
+    }
     if (this.cameraMode === 'free' && isArrowKey(event.code)) {
       if (event.code === 'ArrowLeft') {
         this.cameraPanInput.left = false;
@@ -433,37 +783,131 @@ export class MultiplayerApp {
       return;
     }
 
-    if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
-      this.inputState.left = false;
+    if (this.isSplitScreenActive()) {
+      const binding = SPLIT_SCREEN_KEYMAP[event.code];
+      if (binding) {
+        this.setSplitScreenInputAction(binding.slot, binding.action, false);
+      }
+      return;
     }
-    if (event.code === 'ArrowRight' || event.code === 'KeyD') {
-      this.inputState.right = false;
-    }
-    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
-      this.inputState.jump = false;
-    }
-    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
-      this.inputState.duck = false;
-    }
-    if (event.code === 'KeyU') {
-      this.inputState.punch = false;
-    }
-    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-      this.inputState.dash = false;
+
+    const action = this.currentScheme.keys[event.code];
+    if (action) {
+      this.setInputAction(action, false);
     }
   };
+
+  private readonly onMouseDown = (event: MouseEvent): void => {
+    if (!this.shouldRouteMouseToGame(event)) {
+      return;
+    }
+    const action = this.currentScheme.mouse?.[event.button];
+    if (action) {
+      event.preventDefault();
+      this.setInputAction(action, true);
+    }
+  };
+
+  private readonly onMouseUp = (event: MouseEvent): void => {
+    if (!this.currentScheme.mouse) {
+      return;
+    }
+    const action = this.currentScheme.mouse[event.button];
+    if (action) {
+      this.setInputAction(action, false);
+    }
+  };
+
+  private readonly onContextMenu = (event: MouseEvent): void => {
+    // Suppress the browser context menu over the game viewport so M&K
+    // right-click-to-shield doesn't pop a menu.
+    if (this.currentScheme.mouse && this.shouldRouteMouseToGame(event)) {
+      event.preventDefault();
+    }
+  };
+
+  private shouldRouteMouseToGame(event: MouseEvent): boolean {
+    if (!this.currentScheme.mouse) {
+      return false;
+    }
+    if (!this.isInRoom() || this.settingsOpen) {
+      return false;
+    }
+    // Avoid hijacking clicks on overlays / buttons that live on top of the viewport.
+    const target = event.target as Element | null;
+    if (target && target.closest('button, a, input, select, textarea, .overlay-card')) {
+      return false;
+    }
+    return true;
+  }
+
+  private resetInputState(): void {
+    this.inputState.left = false;
+    this.inputState.right = false;
+    this.inputState.jump = false;
+    this.inputState.duck = false;
+    this.inputState.punch = false;
+    this.inputState.dodge = false;
+    this.inputState.shield = false;
+
+    this.inputStateP2.left = false;
+    this.inputStateP2.right = false;
+    this.inputStateP2.jump = false;
+    this.inputStateP2.duck = false;
+    this.inputStateP2.punch = false;
+    this.inputStateP2.dodge = false;
+    this.inputStateP2.shield = false;
+  }
+
+  setSplitScreenEnabled(enabled: boolean): void {
+    if (this.isInRoom() || this.connecting) {
+      this.settingsMenu.setSplitScreenEnabled(this.splitScreenEnabled);
+      this.setStatus(
+        'Split-screen can only be toggled from the main menu. Leave the room first.',
+        'error',
+      );
+      return;
+    }
+    if (enabled === this.splitScreenEnabled) {
+      return;
+    }
+    this.splitScreenEnabled = enabled;
+    storeSplitScreen(enabled);
+    this.settingsMenu.setSplitScreenEnabled(enabled);
+    this.setStatus(
+      enabled
+        ? 'Split-screen enabled. 2 local players will join the next room.'
+        : 'Split-screen disabled.',
+    );
+  }
+
+  setInputScheme(id: InputSchemeId): void {
+    const scheme = INPUT_SCHEMES[id];
+    if (!scheme || scheme === this.currentScheme) {
+      return;
+    }
+    this.currentScheme = scheme;
+    this.resetInputState();
+    storeInputSchemeId(id);
+    this.settingsMenu.setInputScheme(scheme);
+  }
 
   constructor(root: HTMLElement) {
     this.root = root;
     this.peerId = makePeerId();
+    this.peerIdClaim = claimPeerId(this.peerId, () => {
+      const replacement = generateFreshPeerId();
+      storePeerId(replacement);
+      return replacement;
+    });
 
     this.root.innerHTML = this.renderAppTemplate();
 
     this.viewport = requireElement<HTMLElement>(this.root, '#viewport');
-    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
-    this.stockHud = new StockHud(this.viewport);
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition, this.vfxCache);
+    void this.vfxCache.registerPermanent(RING_OUT_PACK);
+    this.smashHud = new SmashHud(this.viewport);
 
-    this.gameHud = requireElement<HTMLElement>(this.root, '#gameHud');
     this.statusBadge = requireElement<HTMLElement>(this.root, '#statusBadge');
     this.startGameButton = requireElement<HTMLButtonElement>(this.root, '#startGameButton');
     this.lobbyOverlay = requireElement<HTMLElement>(this.root, '#lobbyOverlay');
@@ -474,32 +918,31 @@ export class MultiplayerApp {
     this.lobbyCopyButton = requireElement<HTMLButtonElement>(this.root, '#lobbyCopyButton');
     this.lobbyRoomIdValue = requireElement<HTMLElement>(this.root, '#lobbyRoomIdValue');
     this.lobbyShareUrlValue = requireElement<HTMLInputElement>(this.root, '#lobbyShareUrlValue');
+    this.lobbyStockSettings = requireElement<HTMLElement>(this.root, '#lobbyStockSettings');
+    this.lobbyStockCountSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyStockCountSelect');
+    this.lobbyGameModeSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyGameModeSelect');
+    this.lobbyMapSelect = requireElement<HTMLSelectElement>(this.root, '#lobbyMapSelect');
+    this.lobbyNameInput = requireElement<HTMLInputElement>(this.root, '#lobbyNameInput');
+    this.lobbyNameInput.maxLength = LOBBY_NAME_MAX_LENGTH;
+    this.lobbyLoading = requireElement<HTMLElement>(this.root, '#lobbyLoading');
+    this.lobbyLoadingBar = requireElement<HTMLElement>(this.root, '#lobbyLoadingBar');
+    this.lobbyLoadingLabel = requireElement<HTMLElement>(this.root, '#lobbyLoadingLabel');
+    this.lobbyNameInput.value = this.localDisplayName;
     this.leaveButton = requireElement<HTMLButtonElement>(
       this.root,
       '#leaveButton',
-    );
-    this.settingsToggleButton = requireElement<HTMLButtonElement>(
-      this.root,
-      '#settingsToggleButton',
     );
     this.cameraToggleButton = requireElement<HTMLButtonElement>(
       this.root,
       '#cameraModeButton',
     );
-    this.healthBarOverlay = new HealthBarOverlay(this.gameHud);
 
-    this.winnerBanner = document.createElement('div');
-    this.winnerBanner.className = 'winner-banner';
-    this.winnerBanner.dataset.visible = 'false';
-    this.winnerBannerTitle = document.createElement('div');
-    this.winnerBannerTitle.className = 'winner-banner__title';
-    this.winnerBannerSubtitle = document.createElement('div');
-    this.winnerBannerSubtitle.className = 'winner-banner__subtitle';
-    this.winnerBanner.appendChild(this.winnerBannerTitle);
-    this.winnerBanner.appendChild(this.winnerBannerSubtitle);
-    this.viewport.appendChild(this.winnerBanner);
+    this.gameEndBanner = document.createElement('canvas');
+    this.gameEndBanner.className = 'game-end-banner';
+    this.gameEndBanner.dataset.visible = 'false';
+    this.viewport.appendChild(this.gameEndBanner);
 
-    this.roundStartBanner = document.createElement('div');
+    this.roundStartBanner = document.createElement('canvas');
     this.roundStartBanner.className = 'round-start-banner';
     this.roundStartBanner.dataset.visible = 'false';
     this.viewport.appendChild(this.roundStartBanner);
@@ -527,6 +970,18 @@ export class MultiplayerApp {
       '#playerCountValue',
     );
     this.rttValue = requireElement<HTMLElement>(this.root, '#rttValue');
+
+    this.netCountersPanel = requireElement<HTMLElement>(this.root, '#netCountersPanel');
+    this.debugConsolePanel = requireElement<HTMLElement>(this.root, '#debugConsolePanel');
+    this.debugConsoleLog = requireElement<HTMLElement>(this.root, '#debugConsoleLog');
+    this.toggleNetCountersBtn = requireElement<HTMLButtonElement>(this.root, '#toggleNetCounters');
+    this.toggleDebugConsoleBtn = requireElement<HTMLButtonElement>(this.root, '#toggleDebugConsole');
+
+    this.bindDebugToggleButtons();
+
+    attachMenuSounds(this.root, {
+      getSfxVolume: () => this.effectiveSfxVolume,
+    });
 
     this.mainMenu = new MainMenu(this.viewport, {
       onHost: () => {
@@ -565,8 +1020,29 @@ export class MultiplayerApp {
       onFullscreenChange: (enabled) => {
         this.toggleFullscreen(enabled);
       },
-      onVolumeChange: (volume) => {
+      onMasterVolumeChange: (volume) => {
         this.setMasterVolume(volume);
+      },
+      onSfxVolumeChange: (volume) => {
+        this.setSfxVolume(volume);
+      },
+      onMusicVolumeChange: (volume) => {
+        this.setMusicVolume(volume);
+      },
+      onInputDelayChange: (frames) => {
+        this.setInputDelayFrames(frames);
+      },
+      onForceRelayChange: (enabled) => {
+        this.setForceRelay(enabled);
+      },
+      onInputSchemeChange: (id) => {
+        this.setInputScheme(id);
+      },
+      onKoBarEnabledChange: (enabled) => {
+        this.setKoBarEnabled(enabled);
+      },
+      onSplitScreenChange: (enabled) => {
+        this.setSplitScreenEnabled(enabled);
       },
     });
 
@@ -576,16 +1052,18 @@ export class MultiplayerApp {
     this.mainMenu.setSignalUrl(this.defaultSignalUrl());
     this.settingsMenu.setPeerId(this.peerId);
     this.settingsMenu.setMap(this.getSelectedMapManifest());
-    this.settingsMenu.setVolume(this.masterVolume);
+    this.settingsMenu.setVolumes(this.volumes);
+    this.settingsMenu.setInputDelay(this.inputDelayFrames);
+    this.settingsMenu.setForceRelay(this.forceRelay);
+    this.settingsMenu.setInputScheme(this.currentScheme);
+    this.settingsMenu.setSplitScreenEnabled(this.splitScreenEnabled);
+    this.settingsMenu.setSplitScreenEditable(true);
 
     this.renderer.setCameraMode(this.cameraMode);
     this.updateCameraButton();
 
     this.leaveButton.addEventListener('click', () => {
       this.leaveRoom();
-    });
-    this.settingsToggleButton.addEventListener('click', () => {
-      this.toggleSettings();
     });
     this.cameraToggleButton.addEventListener('click', () => {
       this.toggleCameraMode();
@@ -602,7 +1080,36 @@ export class MultiplayerApp {
     this.lobbyCopyButton.addEventListener('click', () => {
       void this.copyShareLink();
     });
+    this.lobbyStockCountSelect.addEventListener('change', () => {
+      const value = Number.parseInt(this.lobbyStockCountSelect.value, 10);
+      if (Number.isFinite(value)) {
+        this.setStartingStocks(value);
+      }
+    });
+    this.lobbyGameModeSelect.addEventListener('change', () => {
+      const value = this.lobbyGameModeSelect.value;
+      if (isGameMode(value)) {
+        this.setGameMode(value, { broadcast: true });
+      }
+    });
+    this.lobbyMapSelect.addEventListener('change', () => {
+      this.setLobbyMap(this.lobbyMapSelect.value, { broadcast: true });
+    });
+    this.lobbyNameInput.addEventListener('input', () => {
+      this.setLocalDisplayName(this.lobbyNameInput.value, { broadcast: true });
+    });
     this.lobbyCharacterGrid.addEventListener('click', (event) => {
+      const slotToggle = (event.target as HTMLElement).closest<HTMLButtonElement>(
+        '[data-slot-toggle]',
+      );
+      if (slotToggle) {
+        const slot = slotToggle.dataset.slotToggle;
+        if (slot === 'primary' || slot === 'secondary') {
+          this.characterPickerSlot = slot;
+          this.updateUiState();
+        }
+        return;
+      }
       const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
         '[data-character-id]',
       );
@@ -610,30 +1117,36 @@ export class MultiplayerApp {
         return;
       }
       const characterId = target.dataset.characterId;
-      if (characterId && isCharacterId(characterId)) {
+      if (characterId && isLobbyCharacterSelection(characterId)) {
         this.selectLocalCharacter(characterId);
       }
     });
 
     window.addEventListener('keydown', this.onKeyDown, { passive: false });
     window.addEventListener('keyup', this.onKeyUp);
+    this.viewport.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
+    this.viewport.addEventListener('contextmenu', this.onContextMenu);
 
     this.updateUiState();
     this.refreshDebugValues();
     this.setStatus('Initializing Rapier runtime...');
 
-    // Initialize looping audio tracks
-    this.gameThemeAudio = new Audio(GAME_THEME_URL);
-    this.gameThemeAudio.loop = true;
-    this.gameThemeAudio.volume = this.masterVolume * 0.15;
-
-    this.menuThemeAudio = new Audio(MENU_THEME_URL);
-    this.menuThemeAudio.loop = true;
-    this.menuThemeAudio.volume = this.masterVolume * 0.2;
+    this.applyVolumes();
+    this.maybeShowStartupVolumeMenu();
   }
 
   async start(): Promise<void> {
     await RAPIER.init();
+
+    // Wait for the peer-id claim arbiter to resolve any duplicate-tab
+    // collision before doing anything network-facing.
+    const resolvedPeerId = await this.peerIdClaim.resolved;
+    if (resolvedPeerId !== this.peerId) {
+      this.peerId = resolvedPeerId;
+      this.mainMenu.setPeerId(this.peerId);
+      this.settingsMenu.setPeerId(this.peerId);
+    }
 
     const currentUrl = new URL(window.location.href);
     const storedRecovery = readStoredRecoveryState();
@@ -643,7 +1156,10 @@ export class MultiplayerApp {
     }
 
     if (!this.game) {
-      this.game = new RollbackPhysicsGame(this.mapDefinition);
+      this.game = new RollbackPhysicsGame(this.mapDefinition, {
+        startingStocks: this.startingStocks,
+        gameMode: this.gameMode,
+      });
     }
 
     this.setStatus('Ready. Host a room or join from a shared URL.');
@@ -651,6 +1167,11 @@ export class MultiplayerApp {
 
     this.lastFrameTimeMs = performance.now();
     this.animationFrameId = requestAnimationFrame(this.onFrame);
+
+    // Begin downloading/decoding the heavy gameplay assets immediately so they
+    // are usually finished by the time the player reaches a lobby. The lobby
+    // Ready button stays disabled until this resolves.
+    void this.preloadGameplayAssets();
 
     let roomId = currentUrl.searchParams.get('room');
     let hostPeer = currentUrl.searchParams.get('host');
@@ -695,13 +1216,23 @@ export class MultiplayerApp {
 
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    this.viewport.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
+    this.viewport.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('fullscreenchange', this.onFullscreenStateChange);
 
+    for (const id of this.preloadedVfxPackIds) {
+      this.vfxCache.release(id);
+    }
+    this.preloadedVfxPackIds = [];
+
+    this.music.dispose();
     this.cleanupNetworking();
+    this.startupVolumeMenu?.destroy();
+    this.startupVolumeMenu = null;
     this.mainMenu.destroy();
     this.settingsMenu.destroy();
-    this.stockHud.destroy();
-    this.healthBarOverlay.dispose();
+    this.smashHud.destroy();
     this.renderer.dispose();
 
     if (this.game) {
@@ -721,26 +1252,14 @@ export class MultiplayerApp {
     }
 
     const isPlaying = this.session?.state === SessionState.Playing;
-    if (isPlaying) {
-      if (!this.gameThemeStarted) {
-        this.gameThemeStarted = true;
-        this.menuThemeStarted = false;
-        this.menuThemeAudio.pause();
-        this.gameThemeAudio.currentTime = 0;
-        void this.gameThemeAudio.play().catch((err) => {
-          console.warn('Game theme could not play:', err);
-        });
-      }
-    } else {
-      if (!this.menuThemeStarted) {
-        this.menuThemeStarted = true;
-        this.gameThemeStarted = false;
-        this.gameThemeAudio.pause();
-        this.gameThemeAudio.currentTime = 0;
-        void this.menuThemeAudio.play().catch((err) => {
-          console.warn('Menu theme could not play:', err);
-        });
-      }
+    const nextPhase: MusicPhase = isPlaying
+      ? 'game'
+      : (this.isInRoom() || this.connecting)
+        ? 'lobby'
+        : 'start';
+    if (nextPhase !== this.currentMusicPhase) {
+      this.currentMusicPhase = nextPhase;
+      this.music.setPhase(nextPhase);
     }
 
     if (this.cameraMode === 'free') {
@@ -750,27 +1269,26 @@ export class MultiplayerApp {
     if (this.game) {
       const renderDelaySeconds = this.accumulatedTimeMs / 1000;
       const renderState = this.game.getRenderState(renderDelaySeconds);
-      this.renderer.render(renderState, this.peerId);
+      const vfxDelta = this.vfxClock.tick(frameDelta);
+      this.applyCountdownCamera(this.game.getCountdownCameraTargetId());
+      this.renderer.render(renderState, this.peerId, vfxDelta, this.localSecondaryPlayerId);
       if (this.isInRoom() || this.connecting) {
-        this.stockHud.update(renderState.players, this.peerId);
+        this.smashHud.update(renderState.players, this.peerId);
       }
 
       const localPlayer = renderState.players.find(
-        (player: { id: string; health: number; maxHealth: number }) =>
-          player.id === this.peerId,
+        (player: { id: string }) => this.isLocalPlayerId(player.id),
       );
       if (localPlayer) {
         this.syncRespawnCamera(localPlayer);
-        this.healthBarOverlay.update(localPlayer.health, localPlayer.maxHealth);
       } else {
         this.releaseRespawnCamera();
-        this.healthBarOverlay.hide();
       }
 
       this.updateWinnerBanner(renderState);
-      this.updateRoundStartBanner(renderState.roundStartCountdownLabel);
+      this.updateRoundStartBanner(renderState.roundStartCountdownTicks);
     } else {
-      this.winnerBanner.dataset.visible = 'false';
+      this.hideGameEndBanner();
       this.roundStartBanner.dataset.visible = 'false';
     }
 
@@ -778,30 +1296,79 @@ export class MultiplayerApp {
     this.animationFrameId = requestAnimationFrame(this.onFrame);
   };
 
+  private ensureInputDelayBuffer(): void {
+    const requiredLength = this.inputDelayFrames + 1;
+    if (this.inputDelayBuffer.length === requiredLength) {
+      return;
+    }
+    this.inputDelayBuffer.length = 0;
+    for (let i = 0; i < requiredLength; i += 1) {
+      this.inputDelayBuffer.push(new Uint8Array([0]));
+    }
+    this.localTickIndex = 0;
+  }
+
+  private getDelayedInput(currentInput: Uint8Array): Uint8Array {
+    if (this.inputDelayFrames === 0) {
+      return currentInput;
+    }
+    this.ensureInputDelayBuffer();
+    const buf = this.inputDelayBuffer;
+    const len = buf.length;
+    const writeSlot = this.localTickIndex % len;
+    const readSlot = (this.localTickIndex + 1) % len;
+    if (buf[writeSlot].length !== currentInput.length) {
+      buf[writeSlot] = new Uint8Array(currentInput.length);
+    }
+    buf[writeSlot].set(currentInput);
+    this.localTickIndex += 1;
+    return buf[readSlot];
+  }
+
+  setInputDelayFrames(frames: number): void {
+    const clamped = Math.max(0, Math.min(Math.floor(frames), MAX_INPUT_DELAY_FRAMES));
+    if (clamped === this.inputDelayFrames) {
+      return;
+    }
+    this.inputDelayFrames = clamped;
+    this.inputDelayBuffer.length = 0;
+    this.localTickIndex = 0;
+    storeInputDelayFrames(clamped);
+  }
+
   private tickSimulation(): void {
     if (!this.session) {
       return;
     }
 
-    const input = encodeInput(this.inputState);
+    const rawInput = this.isSplitScreenActive()
+      ? encodeSplitInput(this.inputState, this.inputStateP2)
+      : encodeInput(this.inputState);
+    const input = this.getDelayedInput(rawInput);
 
     let tickResult: TickResult;
+    const t0 = performance.now();
     try {
       tickResult = this.session.tick(input);
     } catch (error) {
       this.debugCounters.errorCount += 1;
-      this.setStatus(
-        `Session tick failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        'error',
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Session tick failed: ${msg}`, 'error');
+      this.debugLog('ERR', `Session tick failed: ${msg}`, 'error');
       return;
     }
 
     if (tickResult.rolledBack) {
       this.debugCounters.rollbackCount += 1;
       this.debugCounters.rollbackTicks += tickResult.rollbackTicks ?? 0;
+      const elapsed = performance.now() - t0;
+      if (elapsed > 50) {
+        this.debugLog(
+          'ROLLBACK',
+          `Slow recalc: ${elapsed.toFixed(1)}ms, ${tickResult.rollbackTicks ?? 0} ticks rolled back`,
+          'warn',
+        );
+      }
     }
   }
 
@@ -809,6 +1376,10 @@ export class MultiplayerApp {
     if (this.connecting) {
       return;
     }
+
+    // Re-arm asset loading in case a previous attempt failed; no-op if already
+    // loaded or in flight.
+    void this.preloadGameplayAssets();
 
     this.connecting = true;
     this.updateUiState();
@@ -866,13 +1437,11 @@ export class MultiplayerApp {
           ? `Recovered host room ${roomId}. Waiting in lobby.`
           : `Hosting room ${roomId}. Waiting in lobby for players before start.`,
       );
+      this.debugLog('MATCH', `Hosting room ${roomId}`);
     } catch (error) {
-      this.setStatus(
-        `Unable to host room: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        'error',
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Unable to host room: ${msg}`, 'error');
+      this.debugLog('MATCH', `Host failed: ${msg}`, 'error');
       this.cleanupNetworking();
     } finally {
       this.connecting = false;
@@ -884,6 +1453,10 @@ export class MultiplayerApp {
     if (this.connecting) {
       return;
     }
+
+    // Re-arm asset loading in case a previous attempt failed; no-op if already
+    // loaded or in flight.
+    void this.preloadGameplayAssets();
 
     const roomId = this.mainMenu.getRoomId();
     const hostPeerId = this.mainMenu.getHostPeerId();
@@ -928,6 +1501,18 @@ export class MultiplayerApp {
         throw new Error('Unexpected signaling response while joining room');
       }
 
+      // Fast pre-join capacity check for split-screen. Assumes other peers
+      // are non-split-screen; the host re-validates the precise total before
+      // starting the match.
+      if (this.splitScreenEnabled) {
+        const projectedTotal = response.members.length + 2;
+        if (projectedTotal > MAX_PLAYERS) {
+          throw new Error(
+            `Room is too full for 2 local players (${response.members.length}/${MAX_PLAYERS} taken). Disable split-screen and retry.`,
+          );
+        }
+      }
+
       const resolvedHostPeer = response.hostPeerId || hostPeerId;
       this.setRoomState(roomId, resolvedHostPeer, response.members);
       this.recoveryState = {
@@ -943,13 +1528,11 @@ export class MultiplayerApp {
       this.setStatus(
         `Joined room ${roomId}. Waiting for host to relay and start the session.`,
       );
+      this.debugLog('MATCH', `Joined room ${roomId} (host: ${resolvedHostPeer})`);
     } catch (error) {
-      this.setStatus(
-        `Unable to join room: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        'error',
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Unable to join room: ${msg}`, 'error');
+      this.debugLog('MATCH', `Join failed: ${msg}`, 'error');
       this.cleanupNetworking();
     } finally {
       this.connecting = false;
@@ -972,10 +1555,17 @@ export class MultiplayerApp {
   }
 
   private leaveRoom(): void {
+    this.debugLog('DC', `Local player left room ${this.roomId ?? '?'}`);
     this.settingsOpen = false;
+    this.clearPostMatchTimer();
+    this.pendingRematchJoin = null;
+    this.lastWinnerId = null;
     this.cleanupNetworking({ sendLeave: true });
     this.clearCameraInput();
     this.setCameraMode('follow');
+    this.disposeCountdownAsset();
+    this.disposeGameEndAsset();
+    this.countdownWasActive = false;
 
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.delete('room');
@@ -986,6 +1576,9 @@ export class MultiplayerApp {
     this.lobbyMembers.clear();
     this.lobbyReadyByPeer.clear();
     this.lobbyCharacterByPeer.clear();
+    this.localPlayerCountByPeer.clear();
+    this.localSecondaryPlayerId = null;
+    this.resetInputState();
     this.mainMenu.setShareUrl('');
     this.mainMenu.setRoomId('');
     this.mainMenu.setHostPeerId('');
@@ -1055,6 +1648,7 @@ export class MultiplayerApp {
             credential: 'openrelayproject',
           },
         ],
+        iceTransportPolicy: this.forceRelay ? 'relay' : 'all',
       },
       maxReconnectAttempts: 5,
       reconnectDelay: 1000,
@@ -1079,10 +1673,7 @@ export class MultiplayerApp {
     });
 
     this.transport.onError = (peerId, error) => {
-      this.setStatus(
-        `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${error.message}`,
-        'error',
-      );
+      this.setStatus(this.formatTransportError(peerId, error), 'error');
     };
 
     this.session = createSession({
@@ -1095,8 +1686,8 @@ export class MultiplayerApp {
         topology: Topology.Star,
         hashInterval: TICK_RATE,
         disconnectTimeout: ROOM_DISCONNECT_GRACE_MS,
-        snapshotHistorySize: TICK_RATE * 4,
-        maxSpeculationTicks: TICK_RATE * 2,
+        snapshotHistorySize: TICK_RATE,
+        maxSpeculationTicks: Math.floor(TICK_RATE / 2),
         debug: false,
       },
     });
@@ -1106,30 +1697,51 @@ export class MultiplayerApp {
       if (nextState !== SessionState.Lobby) {
         this.lobbyOverlay.dataset.visible = 'false';
       }
+      if (nextState === SessionState.Lobby) {
+        if (!this.leavingManager) {
+          this.leavingManager = new LeavingManager(() => {
+            this.setStatus('You were removed from the lobby after tabbing out.');
+            this.leaveRoom();
+          });
+        }
+      } else {
+        this.leavingManager?.dispose();
+        this.leavingManager = null;
+      }
       this.updateUiState();
     });
 
     this.session.on('playerJoined', (player) => {
       this.setStatus(`Player joined: ${player.id}`);
+      this.debugLog('JOIN', `Player joined: ${player.id}`);
       this.lobbyMembers.add(player.id);
       this.lobbyReadyByPeer.set(player.id, false);
       this.assignDefaultCharacterIfMissing(player.id);
       this.updateUiState();
+      if (player.id !== this.peerId) {
+        this.probePeerConnectionType(player.id);
+      }
     });
 
     this.session.on('playerLeft', (player) => {
       this.setStatus(`Player left cleanly: ${player.id}`);
+      this.debugLog('DC', `Player left cleanly: ${player.id}`);
       this.lobbyMembers.delete(player.id);
       this.lobbyReadyByPeer.delete(player.id);
       this.lobbyCharacterByPeer.delete(player.id);
+      this.lobbySelectionByPeer.delete(player.id);
+      this.lobbyNameByPeer.delete(player.id);
       this.updateUiState();
     });
 
     this.session.on('playerDropped', (playerId) => {
       this.setStatus(`Player disconnected abruptly and was removed: ${playerId}`);
+      this.debugLog('DC', `Player dropped (abrupt disconnect): ${playerId}`, 'warn');
       this.lobbyMembers.delete(playerId);
       this.lobbyReadyByPeer.delete(playerId);
       this.lobbyCharacterByPeer.delete(playerId);
+      this.lobbySelectionByPeer.delete(playerId);
+      this.lobbyNameByPeer.delete(playerId);
       this.updateUiState();
     });
 
@@ -1137,7 +1749,7 @@ export class MultiplayerApp {
       this.applyLobbyCharactersToGame();
       this.setStatus('Game started. Rollback simulation is active.');
       const fightStartAudio = new Audio(FIGHT_START_SOUND_URL);
-      fightStartAudio.volume = 0.5 * this.masterVolume;
+      fightStartAudio.volume = 0.5 * this.effectiveSfxVolume;
       void fightStartAudio.play().catch((err) => {
         console.warn('Fight start sound could not play:', err);
       });
@@ -1149,6 +1761,7 @@ export class MultiplayerApp {
         `Desync at tick ${tick}: local=${localHash} remote=${remoteHash}`,
         'error',
       );
+      this.debugLog('DESYNC', `Tick ${tick}: local=${localHash} remote=${remoteHash}`, 'error');
     });
 
     this.session.on('error', (error, context) => {
@@ -1157,6 +1770,7 @@ export class MultiplayerApp {
         `Session error (${context.source}): ${error.message}`,
         'error',
       );
+      this.debugLog('ERR', `(${context.source}): ${error.message}`, 'error');
     });
 
     const sessionOnConnect = this.transport.onConnect;
@@ -1165,6 +1779,7 @@ export class MultiplayerApp {
     this.transport.onConnect = (peerId: string) => {
       sessionOnConnect?.(peerId);
       this.setStatus(`WebRTC peer connected: ${peerId}`);
+      this.debugLog('ICE', `WebRTC connected to ${peerId}`);
     };
 
     this.transport.onDisconnect = (peerId: string) => {
@@ -1174,6 +1789,7 @@ export class MultiplayerApp {
         peerId !== this.peerId;
 
       if (isHostDroppingPeer) {
+        this.debugLog('DC', `Host dropped peer ${peerId} (will trigger rollback)`, 'warn');
         try {
           const hostSession = this.session;
           if (hostSession) {
@@ -1185,15 +1801,27 @@ export class MultiplayerApp {
         return;
       }
 
+      this.debugLog('DC', `Disconnected from peer ${peerId}`, 'warn');
       sessionOnDisconnect?.(peerId);
     };
 
     this.setStatus('Connected to signaling server.');
+    this.debugLog('MATCH', 'Connected to signaling server');
     this.statusBadge.textContent = sessionStateLabel(this.session.state);
   }
 
   private cleanupNetworking(options: { sendLeave?: boolean } = {}): void {
     const { sendLeave = false } = options;
+
+    this.leavingManager?.dispose();
+    this.leavingManager = null;
+
+    // Any pending rematch timer is no longer meaningful once the netcode
+    // stack is being torn down. Leave `pendingRematchJoin` alone — guests
+    // need it to survive across the teardown so handlePendingRematchJoin
+    // can complete its rejoin after prepareNetworking() re-runs.
+    this.clearPostMatchTimer();
+    this.lastWinnerId = null;
 
     this.isCleaningUp = true;
 
@@ -1244,6 +1872,11 @@ export class MultiplayerApp {
       this.lobbyMembers.clear();
       this.lobbyReadyByPeer.clear();
       this.lobbyCharacterByPeer.clear();
+      this.lobbySelectionByPeer.clear();
+      this.lobbyNameByPeer.clear();
+      this.localPlayerCountByPeer.clear();
+      this.localSecondaryPlayerId = null;
+      this.stopAnnouncer();
     } finally {
       this.isCleaningUp = false;
     }
@@ -1429,8 +2062,32 @@ export class MultiplayerApp {
         this.setStatus(`Peer joined room: ${message.peerId}`);
         this.lobbyMembers.add(message.peerId);
         this.lobbyReadyByPeer.set(message.peerId, false);
+        if (!this.localPlayerCountByPeer.has(message.peerId)) {
+          this.localPlayerCountByPeer.set(message.peerId, 1);
+        }
         this.assignDefaultCharacterIfMissing(message.peerId);
         this.broadcastLocalCharacterSelection();
+        this.broadcastLocalReadyState();
+        this.broadcastLocalDisplayName();
+        this.broadcastLocalSplitScreenState();
+        // Host owns the game mode and map — re-broadcast them so the joining
+        // peer adopts them. Without this, joiners stay at the defaults and
+        // their local sim diverges from the host's (e.g. classic knockback vs
+        // smash), which manifests as rubber-banding and out-of-sync damage.
+        if (this.session?.isHost && this.signaling && this.roomId) {
+          this.signaling.send({
+            type: 'lobby_game_mode_select',
+            roomId: this.roomId,
+            peerId: this.peerId,
+            gameMode: this.gameMode,
+          });
+          this.signaling.send({
+            type: 'lobby_map_select',
+            roomId: this.roomId,
+            peerId: this.peerId,
+            mapId: this.lobbyMapSelectionId,
+          });
+        }
         this.updateUiState();
         break;
 
@@ -1439,6 +2096,12 @@ export class MultiplayerApp {
         this.lobbyMembers.delete(message.peerId);
         this.lobbyReadyByPeer.delete(message.peerId);
         this.lobbyCharacterByPeer.delete(message.peerId);
+        this.lobbySelectionByPeer.delete(message.peerId);
+        this.lobbyNameByPeer.delete(message.peerId);
+        this.localPlayerCountByPeer.delete(message.peerId);
+        // Drop any secondary virtual-id lobby state for this peer too.
+        this.lobbyCharacterByPeer.delete(`${message.peerId}#2`);
+        this.lobbySelectionByPeer.delete(`${message.peerId}#2`);
         this.updateUiState();
         break;
 
@@ -1451,9 +2114,16 @@ export class MultiplayerApp {
           if (!this.lobbyReadyByPeer.has(member)) {
             this.lobbyReadyByPeer.set(member, false);
           }
+          if (!this.localPlayerCountByPeer.has(member)) {
+            this.localPlayerCountByPeer.set(
+              member,
+              member === this.peerId && this.splitScreenEnabled ? 2 : 1,
+            );
+          }
           this.assignDefaultCharacterIfMissing(member);
         }
         this.ensureLocalCharacterSelection();
+        this.broadcastLocalSplitScreenState();
         this.updateUiState();
         break;
 
@@ -1463,23 +2133,113 @@ export class MultiplayerApp {
           if (!this.lobbyReadyByPeer.has(member)) {
             this.lobbyReadyByPeer.set(member, false);
           }
+          if (!this.localPlayerCountByPeer.has(member)) {
+            this.localPlayerCountByPeer.set(
+              member,
+              member === this.peerId && this.splitScreenEnabled ? 2 : 1,
+            );
+          }
           this.assignDefaultCharacterIfMissing(member);
         }
         this.ensureLocalCharacterSelection();
+        this.broadcastLocalSplitScreenState();
         this.updateUiState();
         break;
 
       case 'lobby_ready':
         this.lobbyReadyByPeer.set(message.peerId, message.ready);
+        this.debugLog('LOBBY', `${message.peerId} is ${message.ready ? 'ready' : 'not ready'}`);
+        if (!message.ready || !this.areAllLobbyPlayersReady()) {
+          const notReady = Array.from(this.lobbyMembers).filter(
+            (id) => this.lobbyReadyByPeer.get(id) !== true,
+          );
+          if (notReady.length > 0) {
+            this.debugLog('LOBBY', `Waiting on: ${notReady.join(', ')}`);
+          }
+        }
         this.updateUiState();
         break;
 
-      case 'lobby_character_select':
-        if (isCharacterId(message.characterId)) {
-          this.lobbyCharacterByPeer.set(message.peerId, message.characterId);
-          this.game?.setCharacterSelection(message.peerId, message.characterId);
+      case 'lobby_character_select': {
+        const targetId = message.virtualPlayerId ?? message.peerId;
+        if (isLobbyCharacterSelection(message.characterId)) {
+          this.lobbySelectionByPeer.set(targetId, message.characterId);
+          if (isCharacterId(message.characterId)) {
+            this.lobbyCharacterByPeer.set(targetId, message.characterId);
+            this.game?.setCharacterSelection(targetId, message.characterId);
+          }
         }
         this.updateUiState();
+        break;
+      }
+
+      case 'lobby_game_mode_select':
+        if (isGameMode(message.gameMode)) {
+          // Host-authoritative: only adopt if it came from the room host (the
+          // server already enforces this, but check defensively).
+          if (!this.session?.isHost) {
+            this.setGameMode(message.gameMode, { broadcast: false });
+          }
+        }
+        break;
+
+      case 'lobby_name_change':
+        this.lobbyNameByPeer.set(message.peerId, message.name);
+        this.updateUiState();
+        break;
+
+      case 'lobby_map_select':
+        // Server enforces host-only; mirror the same defensive check.
+        if (!this.session?.isHost) {
+          this.setLobbyMap(message.mapId, { broadcast: false });
+        }
+        break;
+
+      case 'lobby_random_resolved':
+        // Host has finalized random selections — apply them locally so all
+        // clients agree on character/map before the rollback session starts.
+        if (!this.session?.isHost) {
+          this.applyResolvedSelections(message.mapId, message.characters);
+          // Mirror handleStartGame()'s pre-start sequence so split-screen
+          // peers expand into their secondary virtual players before the
+          // rollback session ticks — otherwise ${peerId}#2 is never created
+          // on the client and the secondary players never render.
+          this.applyLobbyCharactersToGame();
+          this.configureSplitScreenAndInitializePlayers();
+        }
+        break;
+
+      case 'lobby_split_screen': {
+        const count = Math.max(1, Math.min(2, Math.floor(message.localPlayerCount)));
+        this.localPlayerCountByPeer.set(message.peerId, count);
+        this.assignDefaultCharacterIfMissing(message.peerId);
+        if (count === 2) {
+          this.assignDefaultCharacterIfMissing(`${message.peerId}#2`);
+        } else {
+          this.lobbyCharacterByPeer.delete(`${message.peerId}#2`);
+          this.lobbySelectionByPeer.delete(`${message.peerId}#2`);
+        }
+        this.updateUiState();
+        break;
+      }
+
+      case 'lobby_rematch':
+        // Host has announced a fresh room for the rematch. Guests need to
+        // tear down their current session and rejoin the new room. Host
+        // ignores its own broadcast — it's already handling the rebuild.
+        if (
+          !this.session?.isHost &&
+          this.roomId === message.roomId &&
+          message.newRoomId &&
+          message.hostPeerId
+        ) {
+          this.clearPostMatchTimer();
+          this.pendingRematchJoin = {
+            newRoomId: message.newRoomId,
+            hostPeerId: message.hostPeerId,
+          };
+          void this.handlePendingRematchJoin();
+        }
         break;
 
       case 'room_error':
@@ -1523,6 +2283,23 @@ export class MultiplayerApp {
     this.roomId = roomId;
     this.hostPeerId = hostPeerId;
 
+    // Latch our split-screen choice at room entry. Held constant for the
+    // match's lifetime to keep rollback determinism intact.
+    this.localSecondaryPlayerId = this.splitScreenEnabled
+      ? `${this.peerId}#2`
+      : null;
+    this.localPlayerCountByPeer.set(
+      this.peerId,
+      this.splitScreenEnabled ? 2 : 1,
+    );
+
+    // Preload the 3-2-1 countdown VFX so it's resident before the round starts.
+    this.ensureCountdownAsset();
+    // Preload the GAME! end-sequence VFX (~31 MB) so it's resident before the
+    // match ends — otherwise the network load races the 1.67s clip on AWS and
+    // the sequence is already "over" by the time it can render.
+    this.ensureGameEndAsset();
+
     this.mainMenu.setRoomId(roomId);
     this.mainMenu.setHostPeerId(hostPeerId);
     this.settingsMenu.setRoomId(roomId);
@@ -1537,6 +2314,17 @@ export class MultiplayerApp {
     this.lobbyMembers.add(this.peerId);
     this.seedLobbyMembers();
     this.ensureLocalCharacterSelection();
+    // Seed our own display-name entry and tell the rest of the room what to
+    // call us. Joiners overwrite this if they later edit the name input.
+    if (this.localDisplayName) {
+      this.lobbyNameByPeer.set(this.peerId, this.localDisplayName);
+      this.broadcastLocalDisplayName();
+    }
+    // Host's lobby map starts mirroring the loaded selection; joiners adopt
+    // whatever the host re-broadcasts via lobby_map_select shortly after.
+    if (this.session?.isHost) {
+      this.lobbyMapSelectionId = this.selectedMapId;
+    }
 
     this.publishShareUrl(roomId, hostPeerId);
   }
@@ -1598,6 +2386,35 @@ export class MultiplayerApp {
     this.settingsMenu.setStatus(message, tone);
   }
 
+  private bindDebugToggleButtons(): void {
+    this.toggleNetCountersBtn.addEventListener('click', () => {
+      const visible = this.netCountersPanel.style.display !== 'none';
+      this.netCountersPanel.style.display = visible ? 'none' : '';
+      this.toggleNetCountersBtn.classList.toggle('active', !visible);
+    });
+    this.toggleDebugConsoleBtn.addEventListener('click', () => {
+      const visible = this.debugConsolePanel.style.display !== 'none';
+      this.debugConsolePanel.style.display = visible ? 'none' : '';
+      this.toggleDebugConsoleBtn.classList.toggle('active', !visible);
+    });
+    requireElement<HTMLButtonElement>(this.root, '#debugSettingsBtn').addEventListener('click', () => {
+      this.toggleSettings();
+    });
+  }
+
+  debugLog(tag: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+    const entry = document.createElement('div');
+    entry.className = 'debug-log-entry';
+    entry.dataset.level = level;
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    entry.textContent = `[${time}] [${tag}] ${message}`;
+    this.debugConsoleLog.appendChild(entry);
+    while (this.debugConsoleLog.children.length > 200) {
+      this.debugConsoleLog.firstElementChild?.remove();
+    }
+    this.debugConsoleLog.scrollTop = this.debugConsoleLog.scrollHeight;
+  }
+
   private isInRoom(): boolean {
     return (
       this.session !== null && this.session.state !== SessionState.Disconnected
@@ -1605,9 +2422,6 @@ export class MultiplayerApp {
   }
 
   private toggleSettings(): void {
-    if (!this.isInRoom() && !this.connecting) {
-      return;
-    }
     this.settingsOpen = !this.settingsOpen;
     this.updateUiState();
   }
@@ -1619,6 +2433,157 @@ export class MultiplayerApp {
       ? ' All players in the room should use the same setting to avoid desync.'
       : '';
     this.setStatus(`Arena side walls ${wallLabel}.${syncHint}`);
+  }
+
+  private setStartingStocks(stocks: number): void {
+    const clamped = Math.max(MIN_STOCKS, Math.min(MAX_STOCKS, Math.floor(stocks)));
+    this.startingStocks = clamped;
+    this.lobbyStockCountSelect.value = String(clamped);
+    this.game?.setStartingStocks(clamped);
+    const syncHint = this.isInRoom()
+      ? ' Applies to the next match.'
+      : ' Applies to the next match.';
+    this.setStatus(`Stocks set to ${clamped}.${syncHint}`);
+  }
+
+  private setLobbyMap(mapId: string, options?: { broadcast?: boolean }): void {
+    const normalized = mapId.trim();
+    const isRandom = normalized === RANDOM_MAP_SELECTION;
+    const isKnown = isRandom || this.availableMaps.some((entry) => entry.id === normalized);
+    if (!isKnown) {
+      return;
+    }
+    if (this.lobbyMapSelectionId === normalized) {
+      // No change — avoid a redundant broadcast / map reload.
+      return;
+    }
+    this.lobbyMapSelectionId = normalized;
+    if (this.lobbyMapSelect.value !== normalized) {
+      this.lobbyMapSelect.value = normalized;
+    }
+    if (!isRandom) {
+      // Concrete picks update the loaded map immediately so everyone sees the
+      // same preview behind the lobby UI. 'random' keeps whatever map is
+      // currently loaded as a placeholder until start resolves the pick.
+      this.applySelectedMapForPreview(normalized);
+    }
+    if (
+      options?.broadcast &&
+      this.session?.isHost &&
+      this.signaling &&
+      this.roomId
+    ) {
+      this.signaling.send({
+        type: 'lobby_map_select',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        mapId: normalized,
+      });
+    }
+  }
+
+  private applySelectedMapForPreview(mapId: string): void {
+    if (this.isInRoom() && this.session?.state !== SessionState.Lobby) {
+      return;
+    }
+    if (mapId === this.selectedMapId) {
+      return;
+    }
+    // setSelectedMap normally bails when in a room — bypass that guard here
+    // because lobby map changes are explicitly intended to swap the preview.
+    this.selectedMapId = mapId;
+    this.mapDefinition = loadMapDefinition(this.selectedMapId);
+    this.mainMenu.setMaps(this.availableMaps, this.selectedMapId);
+    this.settingsMenu.setMap(this.getSelectedMapManifest());
+
+    this.renderer.dispose();
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition, this.vfxCache);
+    this.renderer.setCameraMode(this.cameraMode);
+    // Newly constructed renderer defaults to gameplay camera; re-apply lobby
+    // preview mode immediately so the shifted/zoomed framing kicks in right
+    // away rather than waiting for the next updateUiState pass.
+    this.renderer.setLobbyPreviewMode(true);
+
+    if (this.game) {
+      // Swap the map on the existing game instance instead of constructing a
+      // new one — the active session holds the original game reference, and
+      // replacing it would leave the session ticking a stale instance while
+      // the renderer shows the new map (no countdown, no GO sequence).
+      this.game.setMap(this.mapDefinition);
+    }
+  }
+
+  private setLocalDisplayName(name: string, options?: { broadcast?: boolean }): void {
+    const trimmed = name.slice(0, LOBBY_NAME_MAX_LENGTH);
+    if (trimmed === this.localDisplayName) {
+      return;
+    }
+    this.localDisplayName = trimmed;
+    storeDisplayName(trimmed);
+    this.lobbyNameByPeer.set(this.peerId, trimmed);
+    if (options?.broadcast) {
+      this.broadcastLocalDisplayName();
+    }
+    this.updateUiState();
+  }
+
+  private broadcastLocalDisplayName(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
+    this.signaling.send({
+      type: 'lobby_name_change',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      name: this.localDisplayName,
+    });
+  }
+
+  private applyResolvedSelections(mapId: string, characters: Record<string, string>): void {
+    for (const [peerId, characterId] of Object.entries(characters)) {
+      if (!isCharacterId(characterId)) {
+        continue;
+      }
+      this.lobbySelectionByPeer.set(peerId, characterId);
+      this.lobbyCharacterByPeer.set(peerId, characterId);
+      this.game?.setCharacterSelection(peerId, characterId);
+    }
+    // Adopt the resolved map even if we'd previously had a different one
+    // selected — host is authoritative on randoms.
+    if (this.availableMaps.some((entry) => entry.id === mapId)) {
+      this.lobbyMapSelectionId = mapId;
+      if (this.lobbyMapSelect.value !== mapId) {
+        this.lobbyMapSelect.value = mapId;
+      }
+      this.applySelectedMapForPreview(mapId);
+    }
+    this.updateUiState();
+  }
+
+  private setGameMode(mode: GameMode, options?: { broadcast?: boolean }): void {
+    this.gameMode = mode;
+    this.lobbyGameModeSelect.value = mode;
+    this.game?.setGameMode(mode);
+    this.smashHud.setGameMode(mode);
+    if (
+      options?.broadcast &&
+      this.session?.isHost &&
+      this.signaling &&
+      this.roomId
+    ) {
+      this.signaling.send({
+        type: 'lobby_game_mode_select',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        gameMode: mode,
+      });
+    }
+    this.setStatus(`Game mode: ${GAME_MODE_DISPLAY_NAMES[mode]}.`);
+  }
+
+  private setKoBarEnabled(enabled: boolean): void {
+    this.settingsMenu.setKoBarEnabled(enabled);
+    this.smashHud.setKoBarEnabled(enabled);
   }
 
   private toggleFullscreen(enabled: boolean): void {
@@ -1652,12 +2617,125 @@ export class MultiplayerApp {
   };
 
   private setMasterVolume(volume: number): void {
-    this.masterVolume = Math.max(0, Math.min(1, volume));
-    this.gameThemeAudio.volume = this.masterVolume * 0.15;
-    this.menuThemeAudio.volume = this.masterVolume * 0.2;
+    this.volumes.master = Math.max(0, Math.min(1, volume));
+    storeVolume(VOLUME_MASTER_STORAGE_KEY, this.volumes.master);
+    this.applyVolumes();
+  }
+
+  private setSfxVolume(volume: number): void {
+    this.volumes.sfx = Math.max(0, Math.min(1, volume));
+    storeVolume(VOLUME_SFX_STORAGE_KEY, this.volumes.sfx);
+    this.applyVolumes();
+  }
+
+  private setMusicVolume(volume: number): void {
+    this.volumes.music = Math.max(0, Math.min(1, volume));
+    storeVolume(VOLUME_MUSIC_STORAGE_KEY, this.volumes.music);
+    this.applyVolumes();
+  }
+
+  private applyVolumes(): void {
+    this.effectiveSfxVolume = this.volumes.master * this.volumes.sfx;
+    const effectiveMusic = this.volumes.master * this.volumes.music;
+    this.music.setVolume(effectiveMusic);
     if (this.game) {
-      this.game.setVolume(this.masterVolume);
+      this.game.setVolume(this.effectiveSfxVolume);
     }
+  }
+
+  private maybeShowStartupVolumeMenu(): void {
+    let alreadySeen = false;
+    try {
+      alreadySeen = globalThis.localStorage?.getItem(FIRST_RUN_STORAGE_KEY) === '1';
+    } catch {
+      // If storage is unavailable, show the menu but won't be able to persist
+      // dismissal — better than blasting audio.
+    }
+    if (alreadySeen) {
+      return;
+    }
+    this.startupVolumeMenu = new StartupVolumeMenu(this.viewport, this.volumes, {
+      onMasterVolumeChange: (v) => this.setMasterVolume(v),
+      onSfxVolumeChange: (v) => this.setSfxVolume(v),
+      onMusicVolumeChange: (v) => this.setMusicVolume(v),
+      onDismiss: () => {
+        try {
+          globalThis.localStorage?.setItem(FIRST_RUN_STORAGE_KEY, '1');
+        } catch {
+          // Ignore storage failures.
+        }
+        this.startupVolumeMenu?.destroy();
+        this.startupVolumeMenu = null;
+        this.settingsMenu.setVolumes(this.volumes);
+      },
+    });
+  }
+
+  setForceRelay(enabled: boolean): void {
+    if (enabled === this.forceRelay) {
+      return;
+    }
+    this.forceRelay = enabled;
+    storeForceRelay(enabled);
+    this.setStatus(
+      enabled
+        ? 'Force-relay mode enabled. Reconnect to the room for it to take effect.'
+        : 'Force-relay mode disabled. Reconnect to the room for it to take effect.',
+    );
+  }
+
+  private formatTransportError(peerId: string | null, error: Error): string {
+    const message = error.message || 'Unknown error';
+    const lower = message.toLowerCase();
+    const isLikelyIceFailure =
+      lower.includes('ice') ||
+      lower.includes('connection failed') ||
+      lower.includes('timeout') ||
+      lower.includes('unreachable');
+
+    if (isLikelyIceFailure) {
+      if (this.forceRelay) {
+        return (
+          `Couldn't reach the relay server${peerId ? ` (${peerId})` : ''}. ` +
+          'Check your internet connection or try a different network.'
+        );
+      }
+      return (
+        `Couldn't establish a peer connection${peerId ? ` (${peerId})` : ''}. ` +
+        'This network (school/office Wi-Fi, symmetric NAT) may be blocking UDP. ' +
+        "Try enabling 'Force relay mode' in Settings."
+      );
+    }
+
+    return `WebRTC transport error${peerId ? ` (${peerId})` : ''}: ${message}`;
+  }
+
+  private probePeerConnectionType(peerId: string): void {
+    if (!this.transport) {
+      return;
+    }
+    // Give ICE a moment to finalize candidate selection before reading stats.
+    window.setTimeout(() => {
+      if (!this.transport) {
+        return;
+      }
+      this.transport
+        .getConnectionStats(peerId)
+        .then((report) => {
+          if (!report) {
+            return;
+          }
+          const summary = summarizeIceTransport(report);
+          if (summary) {
+            this.setStatus(`Connection to ${peerId}: ${summary}`);
+            const level = summary.includes('TURN') ? 'warn' : 'info';
+            this.debugLog('ICE', `${peerId}: ${summary}`, level);
+          }
+        })
+        .catch(() => {
+          // Stats are best-effort; ignore failures.
+        });
+    }, 750);
   }
 
   private updateUiState(): void {
@@ -1674,12 +2752,15 @@ export class MultiplayerApp {
     this.mainMenu.setMapSelectionEnabled(!inActiveSession);
     this.cameraToggleButton.disabled = !inActiveSession;
     this.updateCameraButton();
+    this.settingsMenu.setSplitScreenEditable(!inActiveSession);
 
     const inLobby = inRoom && this.session?.state === SessionState.Lobby;
     const inPlayingSession = inRoom && this.session?.state === SessionState.Playing;
+    // Out-of-room idle and lobby both want the "fit the whole map" preview;
+    // gameplay swaps back to the regular follow/action camera.
+    this.renderer.setLobbyPreviewMode(!inPlayingSession);
 
-    this.gameHud.dataset.visible = inPlayingSession ? 'true' : 'false';
-    this.stockHud.setVisible(inPlayingSession);
+    this.smashHud.setVisible(inPlayingSession);
     this.leaveButton.disabled = !inRoom || this.connecting;
     this.lobbyOverlay.dataset.visible = inLobby ? 'true' : 'false';
     this.renderCharacterPicker();
@@ -1689,7 +2770,11 @@ export class MultiplayerApp {
 
     const localReady = this.isLocalReadyInLobby();
     this.lobbyReadyButton.textContent = localReady ? 'Unready' : 'Ready';
-    this.lobbyReadyButton.disabled = !inLobby;
+    // Block readying up until this player's heavy assets are fully loaded.
+    // Because the host can only start once every player is Ready, this also
+    // prevents the match from starting until everyone has their assets.
+    this.lobbyReadyButton.disabled = !inLobby || !this.assetsReady;
+    this.lobbyLoading.dataset.visible = inLobby && !this.assetsReady ? 'true' : 'false';
     this.lobbyLeaveButton.disabled = !inLobby;
     this.lobbyCopyButton.disabled = !inLobby || this.currentShareUrl.length === 0;
 
@@ -1699,13 +2784,23 @@ export class MultiplayerApp {
       ? 'inline-flex'
       : 'none';
 
-    if (this.settingsOpen && inActiveSession) {
+    const isHost = Boolean(this.session?.isHost);
+    this.lobbyStockSettings.style.display = inLobby && isHost ? '' : 'none';
+    if (inLobby) {
+      // Keep the dropdown synced with the authoritative state in case some
+      // other code path mutated it (or the host re-broadcast a value).
+      if (this.lobbyMapSelect.value !== this.lobbyMapSelectionId) {
+        this.lobbyMapSelect.value = this.lobbyMapSelectionId;
+      }
+      if (this.lobbyNameInput.value !== this.localDisplayName) {
+        this.lobbyNameInput.value = this.localDisplayName;
+      }
+    }
+
+    if (this.settingsOpen) {
       this.settingsMenu.show();
     } else {
       this.settingsMenu.hide();
-      if (!inActiveSession) {
-        this.settingsOpen = false;
-      }
     }
   }
 
@@ -1729,12 +2824,15 @@ export class MultiplayerApp {
     this.settingsMenu.setMap(this.getSelectedMapManifest());
 
     this.renderer.dispose();
-    this.renderer = new GameRenderer(this.viewport, this.mapDefinition);
+    this.renderer = new GameRenderer(this.viewport, this.mapDefinition, this.vfxCache);
     this.renderer.setCameraMode(this.cameraMode);
 
     if (this.game) {
       this.game.reset();
-      this.game = new RollbackPhysicsGame(this.mapDefinition);
+      this.game = new RollbackPhysicsGame(this.mapDefinition, {
+        startingStocks: this.startingStocks,
+        gameMode: this.gameMode,
+      });
     }
   }
 
@@ -1747,62 +2845,118 @@ export class MultiplayerApp {
   }
 
   private renderAppTemplate(): string {
+    const stockOptions = Array.from({ length: MAX_STOCKS - MIN_STOCKS + 1 }, (_, i) => {
+      const n = MIN_STOCKS + i;
+      const selected = n === DEFAULT_STOCKS ? ' selected' : '';
+      return `<option value="${n}"${selected}>${n}</option>`;
+    }).join('');
+
+    const gameModeOptions = GAME_MODES.map((mode) => {
+      const selected = mode === DEFAULT_GAME_MODE ? ' selected' : '';
+      return `<option value="${mode}"${selected}>${GAME_MODE_DISPLAY_NAMES[mode]}</option>`;
+    }).join('');
+
+    const mapOptionsHtml = [
+      `<option value="${RANDOM_MAP_SELECTION}">Random</option>`,
+      ...this.availableMaps.map((manifest) => {
+        const selected = manifest.id === this.selectedMapId ? ' selected' : '';
+        return `<option value="${manifest.id}"${selected}>${manifest.name}</option>`;
+      }),
+    ].join('');
+
     return `
       <div class="app-shell">
         <section id="viewport" class="panel viewport-panel">
           <div id="lobbyOverlay" class="lobby-overlay" data-visible="false">
-            <div class="lobby-card">
-              <p class="overlay-eyebrow">Lobby</p>
-              <h2 class="overlay-title--small">Waiting Room</h2>
-              <div class="lobby-character-select">
-                <span class="lobby-section-label">Choose Your Character</span>
+            <div class="lobby-card lobby-card--wide">
+              <aside class="lobby-column lobby-column--left">
+                <p class="overlay-eyebrow">Lobby</p>
+                <h2 class="overlay-title--small">Choose Your Character</h2>
                 <div id="lobbyCharacterGrid" class="lobby-character-grid"></div>
-              </div>
-              <label>
-                <span>Lobby ID</span>
-                <output id="lobbyRoomIdValue">-</output>
-              </label>
-              <label class="share-field">
-                <span>Invite URL</span>
-                <div>
-                  <input id="lobbyShareUrlValue" type="text" readonly placeholder="Host to generate URL" />
-                  <button id="lobbyCopyButton" type="button">Copy</button>
+                <div id="lobbyPlayersList" class="lobby-players-row"></div>
+              </aside>
+
+              <section class="lobby-column lobby-column--middle">
+                <h2 class="overlay-title--small">Match Setup</h2>
+                <label class="lobby-field">
+                  <span>Display Name</span>
+                  <input id="lobbyNameInput" type="text" autocomplete="off" spellcheck="false" placeholder="Enter a name" />
+                </label>
+                <div id="lobbyStockSettings" class="lobby-stock-settings" style="display:none">
+                  <label class="select-field lobby-stock-field">
+                    <span>Stocks per player</span>
+                    <select id="lobbyStockCountSelect">${stockOptions}</select>
+                  </label>
+                  <label class="select-field lobby-gamemode-field">
+                    <span>Game mode</span>
+                    <select id="lobbyGameModeSelect">${gameModeOptions}</select>
+                  </label>
+                  <label class="select-field lobby-map-field">
+                    <span>Map</span>
+                    <select id="lobbyMapSelect">${mapOptionsHtml}</select>
+                  </label>
                 </div>
-              </label>
-              <div id="lobbyPlayersList" class="lobby-players-list"></div>
-              <div class="lobby-actions">
-                <button id="lobbyReadyButton" class="action-secondary" type="button">Ready</button>
-                <button id="startGameButton" class="action-primary" type="button">Start Game</button>
-                <button id="lobbyLeaveButton" class="action-ghost" type="button">Leave Lobby</button>
-              </div>
-            </div>
-          </div>
-          <div id="gameHud" class="game-hud" data-visible="false">
-            <div class="state-pill">
-              <span>Session</span>
-              <strong id="statusBadge">Disconnected</strong>
-            </div>
-            <div class="game-hud-actions">
-              <button id="cameraModeButton" class="action-ghost" type="button">Camera: Follow</button>
-              <button id="settingsToggleButton" class="action-ghost" type="button">Settings</button>
-              <button id="leaveButton" class="action-ghost" type="button">Leave</button>
+                <label class="lobby-field">
+                  <span>Lobby ID</span>
+                  <output id="lobbyRoomIdValue">-</output>
+                </label>
+                <label class="lobby-field share-field">
+                  <span>Invite URL</span>
+                  <div>
+                    <input id="lobbyShareUrlValue" type="text" readonly placeholder="Host to generate URL" />
+                    <button id="lobbyCopyButton" type="button">Copy</button>
+                  </div>
+                </label>
+                <div id="lobbyLoading" class="lobby-loading" data-visible="false">
+                  <span id="lobbyLoadingLabel" class="lobby-loading__label">Loading assets…</span>
+                  <div class="lobby-loading__track">
+                    <div id="lobbyLoadingBar" class="lobby-loading__bar"></div>
+                  </div>
+                </div>
+                <div class="lobby-actions">
+                  <button id="lobbyReadyButton" class="action-secondary" type="button">Ready</button>
+                  <button id="startGameButton" class="action-primary" type="button">Start Game</button>
+                  <button id="lobbyLeaveButton" class="action-ghost" type="button">Leave Lobby</button>
+                </div>
+              </section>
+
+              <aside class="lobby-column lobby-column--right">
+                <h2 class="overlay-title--small">Stage Preview</h2>
+                <div class="lobby-map-preview"></div>
+              </aside>
             </div>
           </div>
         </section>
 
-        <section class="panel debug-panel">
-          <h2>Net Debug Counters</h2>
-          <div class="metrics-grid">
-            <article><span>Tick</span><strong id="tickValue">-1</strong></article>
-            <article><span>Confirmed Tick</span><strong id="confirmedTickValue">-1</strong></article>
-            <article><span>Rollbacks</span><strong id="rollbackCountValue">0</strong></article>
-            <article><span>Rollback Ticks</span><strong id="rollbackTicksValue">0</strong></article>
-            <article><span>Desync Events</span><strong id="desyncCountValue">0</strong></article>
-            <article><span>Connected Peers</span><strong id="peerCountValue">0</strong></article>
-            <article><span>Players</span><strong id="playerCountValue">0</strong></article>
-            <article><span>RTT</span><strong id="rttValue">-</strong></article>
+        <div class="debug-footer">
+          <div class="debug-toggle-bar">
+            <span class="debug-status-badge">Session: <strong id="statusBadge">Disconnected</strong></span>
+            <button id="toggleNetCounters" class="debug-toggle-btn active" type="button">Net Counters</button>
+            <button id="toggleDebugConsole" class="debug-toggle-btn active" type="button">Debug Console</button>
+            <button id="cameraModeButton" class="debug-toggle-btn debug-toggle-btn--right" type="button">Camera: Follow</button>
+            <button id="leaveButton" class="debug-toggle-btn" type="button">Leave</button>
+            <button id="debugSettingsBtn" class="debug-toggle-btn" type="button">Settings</button>
           </div>
-        </section>
+          <div class="debug-panels-row">
+            <section id="netCountersPanel" class="panel debug-panel">
+              <h2>Net Debug Counters</h2>
+              <div class="metrics-grid">
+                <article><span>Tick</span><strong id="tickValue">-1</strong></article>
+                <article><span>Confirmed Tick</span><strong id="confirmedTickValue">-1</strong></article>
+                <article><span>Rollbacks</span><strong id="rollbackCountValue">0</strong></article>
+                <article><span>Rollback Ticks</span><strong id="rollbackTicksValue">0</strong></article>
+                <article><span>Desync Events</span><strong id="desyncCountValue">0</strong></article>
+                <article><span>Connected Peers</span><strong id="peerCountValue">0</strong></article>
+                <article><span>Players</span><strong id="playerCountValue">0</strong></article>
+                <article><span>RTT</span><strong id="rttValue">-</strong></article>
+              </div>
+            </section>
+            <section id="debugConsolePanel" class="panel debug-console-panel">
+              <h2>Debug Console</h2>
+              <div id="debugConsoleLog" class="debug-console-log"></div>
+            </section>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1816,6 +2970,21 @@ export class MultiplayerApp {
         width: this.mapDefinition.width,
       }
     );
+  }
+
+  private countdownCameraActive = false;
+
+  private applyCountdownCamera(targetId: string | null): void {
+    if (targetId) {
+      this.renderer.setCountdownCameraTarget(targetId);
+      this.countdownCameraActive = true;
+    } else if (this.countdownCameraActive) {
+      // GO: countdown just ended. Drop the per-target override and default to
+      // action camera so the match opens with everyone framed.
+      this.renderer.setCountdownCameraTarget(null);
+      this.countdownCameraActive = false;
+      this.setCameraMode('action');
+    }
   }
 
   private toggleCameraMode(): void {
@@ -1872,7 +3041,8 @@ export class MultiplayerApp {
   }
 
   private syncRespawnCamera(localPlayer: { eliminated: boolean; respawning: boolean }): void {
-    const shouldLock = this.cameraMode !== 'free' && (localPlayer.eliminated || localPlayer.respawning);
+    const shouldLock =
+      this.cameraMode === 'follow' && (localPlayer.eliminated || localPlayer.respawning);
 
     if (shouldLock) {
       if (!this.respawnCameraLocked) {
@@ -1897,34 +3067,303 @@ export class MultiplayerApp {
   private updateWinnerBanner(renderState: { winnerId: string | null; players: { id: string; color: number }[] }): void {
     const winnerId = renderState.winnerId;
     if (winnerId === null) {
-      this.winnerBanner.dataset.visible = 'false';
+      this.hideGameEndBanner();
+      this.lastWinnerId = null;
       return;
     }
 
     const winner = renderState.players.find((player) => player.id === winnerId);
     if (!winner) {
-      this.winnerBanner.dataset.visible = 'false';
+      this.hideGameEndBanner();
+      this.lastWinnerId = null;
       return;
     }
 
-    const isLocal = winnerId === this.peerId;
-    const colorHex = `#${winner.color.toString(16).padStart(6, '0')}`;
-    this.winnerBannerTitle.textContent = isLocal ? 'You Win!' : 'Defeat';
-    this.winnerBannerSubtitle.textContent = isLocal
-      ? 'Last one standing.'
-      : `${this.truncatePeerId(winnerId)} wins the match.`;
-    this.winnerBanner.style.setProperty('--winner-color', colorHex);
-    this.winnerBanner.dataset.visible = 'true';
+    // First frame after a fresh winner is declared: start the VFX + announcer
+    // and schedule the rematch. Only the host actually drives the transition;
+    // every client schedules a fallback timer that cancels itself when
+    // leaveRoom / cleanup fires.
+    if (this.lastWinnerId !== winnerId) {
+      this.lastWinnerId = winnerId;
+      this.gameEndStartTimeMs = performance.now();
+      this.ensureGameEndAsset();
+      this.playAnnouncerGameSound();
+      this.schedulePostMatchReturnToLobby();
+    }
+
+    if (this.gameEndOverlay && this.gameEndPlayer) {
+      const desiredW = this.gameEndBanner.offsetWidth;
+      const desiredH = this.gameEndBanner.offsetHeight;
+      if (this.gameEndBanner.width !== desiredW) this.gameEndBanner.width = desiredW;
+      if (this.gameEndBanner.height !== desiredH) this.gameEndBanner.height = desiredH;
+      this.gameEndBanner.dataset.visible = 'true';
+      const elapsedSeconds = (performance.now() - this.gameEndStartTimeMs) / 1000;
+      this.gameEndPlayer.setProgress(elapsedSeconds, GAME_SEQUENCE_VFX_FPS, GAME_SEQUENCE_VFX_FRAME_OFFSET);
+      this.gameEndOverlay.update();
+    }
   }
 
-  private updateRoundStartBanner(label: string | null): void {
-    if (label === null) {
-      this.roundStartBanner.dataset.visible = 'false';
+  private ensureGameEndAsset(): void {
+    if (this.gameEndAsset || this.gameEndLoading) return;
+    this.gameEndLoading = true;
+    void this.vfxCache
+      .acquire(GAME_SEQUENCE_PACK)
+      .then((asset) => {
+        if (!this.gameEndLoading) return;
+        this.gameEndAsset = asset;
+        this.gameEndPlayer = new VFXPlayer(asset, { fps: GAME_SEQUENCE_VFX_FPS });
+        this.gameEndOverlay = new VFXCanvasOverlay(this.gameEndPlayer, this.gameEndBanner);
+        // If a winner was already declared while we were still loading, restart
+        // the playback clock so the freshly-loaded clip plays from frame 0
+        // instead of jumping to the already-elapsed (clamped, faded-out) tail.
+        if (this.lastWinnerId !== null) {
+          this.gameEndStartTimeMs = performance.now();
+        }
+      })
+      .finally(() => {
+        this.gameEndLoading = false;
+      });
+  }
+
+  private disposeGameEndAsset(): void {
+    if (this.gameEndOverlay) {
+      this.gameEndOverlay.dispose();
+      this.gameEndOverlay = null;
+    }
+    this.gameEndPlayer = null;
+    if (this.gameEndAsset || this.gameEndLoading) {
+      this.vfxCache.release(GAME_SEQUENCE_PACK.id);
+      this.gameEndAsset = null;
+      this.gameEndLoading = false;
+    }
+  }
+
+  private playAnnouncerGameSound(): void {
+    if (this.gameEndAudio) {
+      this.gameEndAudio.pause();
+      this.gameEndAudio = null;
+    }
+    const audio = new Audio(ANNOUNCER_GAME_SOUND_URL);
+    audio.volume = this.effectiveSfxVolume;
+    this.gameEndAudio = audio;
+    void audio.play().catch((err) => {
+      console.warn('Announcer game sound could not play:', err);
+    });
+  }
+
+  private hideGameEndBanner(): void {
+    // Only hide the canvas and stop the announcer audio. The asset stays
+    // resident (preloaded in setRoomState) so it's ready for the next match;
+    // it's disposed in leaveRoom. Disposing here would release the preload on
+    // the first non-winner frame of play.
+    this.gameEndBanner.dataset.visible = 'false';
+    if (this.gameEndAudio) {
+      this.gameEndAudio.pause();
+      this.gameEndAudio = null;
+    }
+  }
+
+  private schedulePostMatchReturnToLobby(): void {
+    if (this.postMatchTimerId !== null) {
+      return;
+    }
+    this.postMatchTimerId = window.setTimeout(() => {
+      this.postMatchTimerId = null;
+      void this.handlePostMatchReturnToLobby();
+    }, POST_MATCH_DELAY_MS);
+  }
+
+  private clearPostMatchTimer(): void {
+    if (this.postMatchTimerId !== null) {
+      window.clearTimeout(this.postMatchTimerId);
+      this.postMatchTimerId = null;
+    }
+  }
+
+  private async handlePostMatchReturnToLobby(): Promise<void> {
+    // Only the host drives the rematch; guests wait for the `lobby_rematch`
+    // signaling message. If the host disconnected during the delay, guests
+    // will fall through to the existing HOST_LEFT handling instead.
+    if (!this.session?.isHost || !this.signaling || !this.roomId) {
+      return;
+    }
+    if (this.session.state !== SessionState.Playing) {
+      return;
+    }
+    if (this.lastWinnerId === null) {
       return;
     }
 
-    this.roundStartBanner.textContent = label;
+    // Generate a fresh room id client-side (matches rollback-netcode's own
+    // generateRoomId idiom) and announce it to peers BEFORE we tear down the
+    // current room — the old signaling membership is what routes the message.
+    const newRoomId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().slice(0, 8)
+        : Math.random().toString(36).slice(2, 10);
+
+    this.signaling.send({
+      type: 'lobby_rematch',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      newRoomId,
+      hostPeerId: this.peerId,
+    });
+
+    // Snapshot the local player's character pick so it survives the
+    // cleanupNetworking() pass that handleHostRoom triggers. Other peers
+    // re-broadcast their own selections as they rejoin.
+    const localSelection = this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
+    const localCharacter = this.lobbyCharacterByPeer.get(this.peerId) ?? null;
+    const previousMapSelection = this.lobbyMapSelectionId;
+    const previousGameMode = this.gameMode;
+    const previousStocks = this.startingStocks;
+
+    this.hideGameEndBanner();
+    this.setStatus('Returning to lobby for a rematch...');
+
+    // Give the lobby_rematch a beat to flush over the old signaling socket
+    // before we tear the socket down inside handleHostRoom.
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+    await this.handleHostRoom(newRoomId);
+
+    // Re-apply the locally remembered selections / settings. Other peers will
+    // broadcast their own choices as they rejoin via the standard peer_joined
+    // path. setLocalDisplayName / setGameMode / setLobbyMap each guard against
+    // no-op changes so calling them with the same value is cheap.
+    this.lobbyMapSelectionId = previousMapSelection;
+    this.lobbyMapSelect.value = previousMapSelection;
+    this.startingStocks = previousStocks;
+    this.lobbyStockCountSelect.value = String(previousStocks);
+    this.game?.setStartingStocks(previousStocks);
+    this.setGameMode(previousGameMode, { broadcast: true });
+    if (this.session?.isHost) {
+      this.signaling?.send({
+        type: 'lobby_map_select',
+        roomId: this.roomId ?? '',
+        peerId: this.peerId,
+        mapId: previousMapSelection,
+      });
+    }
+    if (isLobbyCharacterSelection(localSelection)) {
+      this.lobbySelectionByPeer.set(this.peerId, localSelection);
+      if (localCharacter && isCharacterId(localCharacter)) {
+        this.lobbyCharacterByPeer.set(this.peerId, localCharacter);
+        this.game?.setCharacterSelection(this.peerId, localCharacter);
+      }
+      this.broadcastLocalCharacterSelection();
+    }
+    this.updateUiState();
+  }
+
+  private async handlePendingRematchJoin(): Promise<void> {
+    const pending = this.pendingRematchJoin;
+    if (!pending) {
+      return;
+    }
+    this.pendingRematchJoin = null;
+
+    // Snapshot local selection / preferences so they survive the teardown
+    // inside handleJoinRoom → prepareNetworking → cleanupNetworking.
+    const localSelection = this.lobbySelectionByPeer.get(this.peerId) ?? RANDOM_CHARACTER_SELECTION;
+    const localCharacter = this.lobbyCharacterByPeer.get(this.peerId) ?? null;
+
+    this.hideGameEndBanner();
+    this.setStatus('Returning to lobby for a rematch...');
+
+    // Seed mainMenu's room/host inputs so handleJoinRoom picks them up, then
+    // give the host a moment to re-host before we attempt the join. We retry
+    // a few times in case the host's new room isn't registered yet.
+    this.mainMenu.setRoomId(pending.newRoomId);
+    this.mainMenu.setHostPeerId(pending.hostPeerId);
+
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 750 : 500));
+      await this.handleJoinRoom();
+      if (this.isInRoom() && this.roomId === pending.newRoomId) {
+        break;
+      }
+    }
+
+    if (!this.isInRoom() || this.roomId !== pending.newRoomId) {
+      this.setStatus('Could not rejoin the rematch lobby.', 'error');
+      return;
+    }
+
+    if (isLobbyCharacterSelection(localSelection)) {
+      this.lobbySelectionByPeer.set(this.peerId, localSelection);
+      if (localCharacter && isCharacterId(localCharacter)) {
+        this.lobbyCharacterByPeer.set(this.peerId, localCharacter);
+        this.game?.setCharacterSelection(this.peerId, localCharacter);
+      }
+      this.broadcastLocalCharacterSelection();
+    }
+    this.updateUiState();
+  }
+
+  private updateRoundStartBanner(ticksRemaining: number | null): void {
+    if (ticksRemaining === null) {
+      this.roundStartBanner.dataset.visible = 'false';
+      if (this.countdownWasActive) {
+        this.countdownWasActive = false;
+        this.disposeCountdownAsset();
+        // Preload again for the next round if we're still in a room.
+        if (this.isInRoom()) this.ensureCountdownAsset();
+      }
+      return;
+    }
+
+    this.countdownWasActive = true;
+    if (!this.countdownOverlay) {
+      // First frame of countdown; load on demand if not already preloaded.
+      this.ensureCountdownAsset();
+      return;
+    }
+
+    // Only resize when the CSS-driven size actually changes — assigning to
+    // canvas.width/height clears the bitmap, so doing it every frame would
+    // flicker on render frames where the VFX frame index didn't advance.
+    const desiredW = this.roundStartBanner.offsetWidth;
+    const desiredH = this.roundStartBanner.offsetHeight;
+    if (this.roundStartBanner.width !== desiredW) this.roundStartBanner.width = desiredW;
+    if (this.roundStartBanner.height !== desiredH) this.roundStartBanner.height = desiredH;
     this.roundStartBanner.dataset.visible = 'true';
+    const elapsedSeconds = (ROUND_START_COUNTDOWN_TOTAL_TICKS - ticksRemaining) / TICK_RATE;
+    this.countdownPlayer!.setProgress(elapsedSeconds, COUNTDOWN_VFX_FPS, COUNTDOWN_VFX_FRAME_OFFSET);
+    this.countdownOverlay.update();
+  }
+
+  private ensureCountdownAsset(): void {
+    if (this.countdownAsset || this.countdownLoading) return;
+    this.countdownLoading = true;
+    void this.vfxCache
+      .acquire(COUNTDOWN_PACK)
+      .then((asset) => {
+        // If we were released before the load resolved (e.g. player left room),
+        // bail out — assetCache.release() already disposed.
+        if (!this.countdownLoading) return;
+        this.countdownAsset = asset;
+        this.countdownPlayer = new VFXPlayer(asset, { fps: COUNTDOWN_VFX_FPS });
+        this.countdownOverlay = new VFXCanvasOverlay(this.countdownPlayer, this.roundStartBanner);
+      })
+      .finally(() => {
+        this.countdownLoading = false;
+      });
+  }
+
+  private disposeCountdownAsset(): void {
+    if (this.countdownOverlay) {
+      this.countdownOverlay.dispose();
+      this.countdownOverlay = null;
+    }
+    this.countdownPlayer = null;
+    if (this.countdownAsset || this.countdownLoading) {
+      this.vfxCache.release(COUNTDOWN_PACK.id);
+      this.countdownAsset = null;
+      this.countdownLoading = false;
+    }
   }
 
   private truncatePeerId(peerId: string): string {
@@ -1935,10 +3374,66 @@ export class MultiplayerApp {
     if (!this.canHostStartGame() || !this.session || !this.roomId) {
       return;
     }
+
+    // Host resolves every 'random' character selection and (if applicable) a
+    // random map pick. Broadcast the resolved choices so every client agrees
+    // before the rollback session starts.
+    const resolvedCharacters = this.resolveRandomCharacters();
+    const resolvedMapId = this.resolveRandomMap();
+
+    if (this.signaling) {
+      this.signaling.send({
+        type: 'lobby_random_resolved',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        mapId: resolvedMapId,
+        characters: resolvedCharacters,
+      });
+    }
+    this.applyResolvedSelections(resolvedMapId, resolvedCharacters);
+
     this.applyLobbyCharactersToGame();
+    this.configureSplitScreenAndInitializePlayers();
     this.session.start();
     this.setStatus(`Match started in room ${this.roomId}.`);
     this.updateUiState();
+  }
+
+  private configureSplitScreenAndInitializePlayers(): void {
+    if (!this.session || !this.game) return;
+    const sessionPeerIds = Array.from(this.session.players.keys()) as string[];
+    const splitScreenPeers = sessionPeerIds.filter(
+      (peerId) => (this.localPlayerCountByPeer.get(peerId) ?? 1) === 2,
+    );
+    this.game.setSplitScreenPeers(splitScreenPeers);
+    const expandedIds = this.game.expandPlayerIds(sessionPeerIds);
+    expandedIds.sort();
+    this.game.initializePlayers(expandedIds);
+  }
+
+  private resolveRandomCharacters(): Record<string, string> {
+    const resolved: Record<string, string> = {};
+    for (const playerId of this.allVirtualPlayerIdsSorted()) {
+      const selection = this.lobbySelectionByPeer.get(playerId) ?? RANDOM_CHARACTER_SELECTION;
+      if (selection === RANDOM_CHARACTER_SELECTION) {
+        const pick = CHARACTER_IDS[Math.floor(Math.random() * CHARACTER_IDS.length)];
+        resolved[playerId] = pick;
+      } else {
+        resolved[playerId] = selection;
+      }
+    }
+    return resolved;
+  }
+
+  private resolveRandomMap(): string {
+    if (this.lobbyMapSelectionId !== RANDOM_MAP_SELECTION) {
+      return this.lobbyMapSelectionId;
+    }
+    if (this.availableMaps.length === 0) {
+      return this.selectedMapId;
+    }
+    const pick = this.availableMaps[Math.floor(Math.random() * this.availableMaps.length)];
+    return pick.id;
   }
 
   private shouldShowHostStartControl(): boolean {
@@ -1954,12 +3449,25 @@ export class MultiplayerApp {
       return false;
     }
 
+    // Sum virtual players across all peers — split-screen peers count as 2.
+    if (this.totalVirtualPlayerCount() > MAX_PLAYERS) {
+      return false;
+    }
+
     // Allow host to start immediately when alone in lobby.
     if (this.lobbyMembers.size <= 1) {
       return true;
     }
 
     return this.areAllLobbyPlayersReady();
+  }
+
+  private totalVirtualPlayerCount(): number {
+    let total = 0;
+    for (const peerId of this.lobbyMembers) {
+      total += this.localPlayerCountByPeer.get(peerId) ?? 1;
+    }
+    return total;
   }
 
   private seedLobbyMembers(): void {
@@ -1982,8 +3490,14 @@ export class MultiplayerApp {
     if (!this.roomId || !this.signaling || !this.isInRoom() || this.session?.state !== SessionState.Lobby) {
       return;
     }
+    // Defensive: the button is also disabled in updateUiState() until assets
+    // finish loading, but guard here too so a stray call can't ready-up early.
+    if (!this.assetsReady) {
+      return;
+    }
     const nextReady = !this.isLocalReadyInLobby();
     this.lobbyReadyByPeer.set(this.peerId, nextReady);
+    this.debugLog('LOBBY', `Local player is ${nextReady ? 'ready' : 'not ready'}`);
     this.signaling.send({
       type: 'lobby_ready',
       roomId: this.roomId,
@@ -2015,28 +3529,69 @@ export class MultiplayerApp {
       return;
     }
 
-    const ids = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    this.lobbyPlayersList.innerHTML = ids
-      .map((playerId) => {
-        const ready = this.lobbyReadyByPeer.get(playerId) === true;
-        const isHost = playerId === this.hostPeerId;
-        const isLocal = playerId === this.peerId;
-        const role = isHost ? 'Host' : 'Player';
-        const characterId =
+    // Expand split-screen peers into virtual players so each tile maps 1:1 to
+    // an in-game PlayerCharacter.
+    const virtualIds = this.allVirtualPlayerIdsSorted();
+
+    const slots: Array<string | null> = Array.from({ length: MAX_PLAYERS }, (_, i) =>
+      virtualIds[i] ?? null,
+    );
+
+    this.lobbyPlayersList.innerHTML = slots
+      .map((playerId, index) => {
+        const slotNumber = index + 1;
+        if (!playerId) {
+          return `
+            <article class="lobby-player-tile lobby-player-tile--empty" data-slot="${slotNumber}">
+              <span class="lobby-player-tile__slot">Player ${slotNumber}</span>
+              <span class="lobby-player-tile__portrait lobby-player-tile__portrait--empty">—</span>
+              <span class="lobby-player-tile__character">Waiting…</span>
+              <span class="lobby-player-tile__name">&nbsp;</span>
+            </article>
+          `;
+        }
+        const isSecondary = playerId.endsWith('#2');
+        const ownerPeerId = isSecondary ? playerId.slice(0, -2) : playerId;
+        const ready = this.lobbyReadyByPeer.get(ownerPeerId) === true;
+        const isLocal = this.isLocalPlayerId(playerId);
+        const colorHex = this.peerColorHex(playerId, virtualIds);
+        const selection = this.lobbySelectionByPeer.get(playerId) ?? RANDOM_CHARACTER_SELECTION;
+        const isRandom = selection === RANDOM_CHARACTER_SELECTION;
+        const concreteCharacter =
           this.lobbyCharacterByPeer.get(playerId) ??
-          defaultCharacterForPlayer(playerId, ids);
-        const characterName = CHARACTER_DISPLAY_NAMES[characterId];
+          defaultCharacterForPlayer(playerId, virtualIds);
+        const characterLabel = isRandom
+          ? 'Random'
+          : CHARACTER_DISPLAY_NAMES[concreteCharacter];
+        const portrait = isRandom
+          ? `<span class="lobby-player-tile__random">?</span>`
+          : `<img src="${getCharacterHeadshotUrl(concreteCharacter)}" alt="${CHARACTER_DISPLAY_NAMES[concreteCharacter]} headshot" />`;
+        const baseName =
+          this.lobbyNameByPeer.get(ownerPeerId)?.trim() || this.truncatePeerId(ownerPeerId);
+        const displayName = isSecondary ? `${baseName} (P2)` : baseName;
         return `
-          <article class="lobby-player-card" data-ready="${ready ? 'true' : 'false'}">
-            <div class="lobby-player-meta">
-              <strong>${this.truncatePeerId(playerId)}${isLocal ? ' (You)' : ''}</strong>
-              <span>${role} · ${characterName}</span>
-            </div>
-            <span class="lobby-player-ready">${ready ? 'Ready' : 'Not Ready'}</span>
+          <article
+            class="lobby-player-tile${isLocal ? ' lobby-player-tile--local' : ''}"
+            data-slot="${slotNumber}"
+            data-ready="${ready ? 'true' : 'false'}"
+            style="--player-color: ${colorHex}"
+          >
+            <span class="lobby-player-tile__slot">Player ${slotNumber}</span>
+            <span class="lobby-player-tile__portrait">${portrait}</span>
+            <span class="lobby-player-tile__character">${characterLabel}</span>
+            <span class="lobby-player-tile__name">${displayName}${isLocal ? ' (You)' : ''}</span>
+            <span class="lobby-player-tile__ready" data-ready="${ready ? 'true' : 'false'}" aria-label="${ready ? 'Ready' : 'Not ready'}"></span>
           </article>
         `;
       })
       .join('');
+  }
+
+  private peerColorHex(peerId: string, sortedIds: string[]): string {
+    const index = sortedIds.indexOf(peerId);
+    const palette = PLAYER_COLOR_PALETTE;
+    const colorInt = palette[((index >= 0 ? index : 0) % palette.length + palette.length) % palette.length];
+    return `#${colorInt.toString(16).padStart(6, '0')}`;
   }
 
   private renderCharacterPicker(): void {
@@ -2045,12 +3600,55 @@ export class MultiplayerApp {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    const localSelection = this.getLocalCharacterSelection(sortedMembers);
+    // In split-screen, the picker can edit P1 or P2 — surface a small toggle
+    // so the user can switch which slot the next click applies to.
+    const splitScreenActive = this.isSplitScreenActive();
+    if (!splitScreenActive) {
+      this.characterPickerSlot = 'primary';
+    }
 
-    this.lobbyCharacterGrid.innerHTML = CHARACTER_IDS.map((characterId) => {
+    const localSelection = this.getLocalCharacterSelection();
+
+    const slotHeader = splitScreenActive
+      ? `
+        <div class="lobby-character-slot-toggle">
+          <button
+            type="button"
+            class="lobby-character-slot-button${
+              this.characterPickerSlot === 'primary' ? ' lobby-character-slot-button--active' : ''
+            }"
+            data-slot-toggle="primary"
+            aria-pressed="${this.characterPickerSlot === 'primary' ? 'true' : 'false'}"
+          >Editing: P1</button>
+          <button
+            type="button"
+            class="lobby-character-slot-button${
+              this.characterPickerSlot === 'secondary' ? ' lobby-character-slot-button--active' : ''
+            }"
+            data-slot-toggle="secondary"
+            aria-pressed="${this.characterPickerSlot === 'secondary' ? 'true' : 'false'}"
+          >Editing: P2</button>
+        </div>
+      `
+      : '';
+
+    const randomTile = `
+      <button
+        type="button"
+        class="lobby-character-option lobby-character-option--random${
+          localSelection === RANDOM_CHARACTER_SELECTION ? ' lobby-character-option--selected' : ''
+        }"
+        data-character-id="${RANDOM_CHARACTER_SELECTION}"
+        aria-pressed="${localSelection === RANDOM_CHARACTER_SELECTION ? 'true' : 'false'}"
+      >
+        <span class="lobby-character-random-glyph">?</span>
+        <span class="lobby-character-name">Random</span>
+      </button>
+    `;
+
+    const characterTiles = CHARACTER_IDS.map((characterId) => {
       const isSelected = localSelection === characterId;
-      const previewUrl = getCharacterPreviewUrl(characterId);
+      const previewUrl = getCharacterHeadshotUrl(characterId);
 
       return `
         <button
@@ -2059,29 +3657,54 @@ export class MultiplayerApp {
           data-character-id="${characterId}"
           aria-pressed="${isSelected ? 'true' : 'false'}"
         >
-          <img src="${previewUrl}" alt="${CHARACTER_DISPLAY_NAMES[characterId]} idle sprite" />
+          <img src="${previewUrl}" alt="${CHARACTER_DISPLAY_NAMES[characterId]} headshot" />
           <span class="lobby-character-name">${CHARACTER_DISPLAY_NAMES[characterId]}</span>
         </button>
       `;
     }).join('');
+
+    this.lobbyCharacterGrid.innerHTML = slotHeader + randomTile + characterTiles;
   }
 
-  private getLocalCharacterSelection(sortedMembers: string[]): CharacterId {
-    return (
-      this.lobbyCharacterByPeer.get(this.peerId) ??
-      defaultCharacterForPlayer(this.peerId, sortedMembers)
-    );
+  private activeLocalVirtualPlayerId(): string {
+    return this.characterPickerSlot === 'secondary' && this.localSecondaryPlayerId
+      ? this.localSecondaryPlayerId
+      : this.peerId;
+  }
+
+  private getLocalCharacterSelection(): LobbyCharacterSelection {
+    return this.lobbySelectionByPeer.get(this.activeLocalVirtualPlayerId()) ?? RANDOM_CHARACTER_SELECTION;
   }
 
   private assignDefaultCharacterIfMissing(playerId: string): void {
+    if (!this.lobbySelectionByPeer.has(playerId)) {
+      // First time we've seen this peer in the lobby. Default everyone to
+      // Random; the host resolves randoms into concrete characters when the
+      // match starts.
+      this.lobbySelectionByPeer.set(playerId, RANDOM_CHARACTER_SELECTION);
+    }
     if (this.lobbyCharacterByPeer.has(playerId)) {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    const defaultCharacter = defaultCharacterForPlayer(playerId, sortedMembers);
+    // Even when the selection is `random`, we still need *some* concrete
+    // CharacterId staged in the game so things like preview rendering can
+    // proceed. The host overrides this with the resolved pick on start.
+    const sortedVirtuals = this.allVirtualPlayerIdsSorted();
+    const defaultCharacter = defaultCharacterForPlayer(playerId, sortedVirtuals);
     this.lobbyCharacterByPeer.set(playerId, defaultCharacter);
     this.game?.setCharacterSelection(playerId, defaultCharacter);
+  }
+
+  private allVirtualPlayerIdsSorted(): string[] {
+    const ids: string[] = [];
+    for (const peerId of this.lobbyMembers) {
+      ids.push(peerId);
+      if ((this.localPlayerCountByPeer.get(peerId) ?? 1) === 2) {
+        ids.push(`${peerId}#2`);
+      }
+    }
+    return ids.sort((a, b) => a.localeCompare(b));
   }
 
   private ensureLocalCharacterSelection(): void {
@@ -2089,38 +3712,118 @@ export class MultiplayerApp {
       return;
     }
 
-    if (!this.lobbyCharacterByPeer.has(this.peerId)) {
+    if (!this.lobbySelectionByPeer.has(this.peerId)) {
       this.assignDefaultCharacterIfMissing(this.peerId);
       this.broadcastLocalCharacterSelection();
     }
   }
 
-  private selectLocalCharacter(characterId: CharacterId): void {
+  private selectLocalCharacter(selection: LobbyCharacterSelection): void {
     if (!this.roomId || !this.signaling || !this.isInRoom() || this.session?.state !== SessionState.Lobby) {
       return;
     }
+    const targetId = this.activeLocalVirtualPlayerId();
+    const previousSelection = this.lobbySelectionByPeer.get(targetId);
+    if (previousSelection === selection) {
+      // Re-clicking the same tile must not retrigger the announcer SFX.
+      return;
+    }
 
-    this.lobbyCharacterByPeer.set(this.peerId, characterId);
-    this.game?.setCharacterSelection(this.peerId, characterId);
-    this.broadcastLocalCharacterSelection();
+    this.lobbySelectionByPeer.set(targetId, selection);
+    if (selection !== RANDOM_CHARACTER_SELECTION) {
+      this.lobbyCharacterByPeer.set(targetId, selection);
+      this.game?.setCharacterSelection(targetId, selection);
+      this.playAnnouncerForCharacter(selection);
+    } else {
+      this.stopAnnouncer();
+    }
+    this.broadcastLocalCharacterSelection(targetId);
     this.updateUiState();
   }
 
-  private broadcastLocalCharacterSelection(): void {
+  private playAnnouncerForCharacter(characterId: CharacterId): void {
+    const url = getAnnouncerUrl(characterId);
+    if (!url) {
+      return;
+    }
+    // Cut off the previously-playing announcer regardless of which character
+    // it belonged to. The duplicate-character guard sits in selectLocalCharacter
+    // — by the time we get here we know the selection actually changed.
+    this.stopAnnouncer();
+    const audio = new Audio(url);
+    audio.volume = Math.max(0, Math.min(1, this.effectiveSfxVolume));
+    this.currentAnnouncerAudio = audio;
+    audio.addEventListener('ended', () => {
+      if (this.currentAnnouncerAudio === audio) {
+        this.currentAnnouncerAudio = null;
+      }
+    });
+    void audio.play().catch(() => {
+      // Autoplay or asset failures shouldn't break selection — just drop the SFX.
+      if (this.currentAnnouncerAudio === audio) {
+        this.currentAnnouncerAudio = null;
+      }
+    });
+  }
+
+  private stopAnnouncer(): void {
+    if (this.currentAnnouncerAudio) {
+      this.currentAnnouncerAudio.pause();
+      this.currentAnnouncerAudio.currentTime = 0;
+      this.currentAnnouncerAudio = null;
+    }
+  }
+
+  private broadcastLocalCharacterSelection(virtualPlayerId?: string): void {
     if (!this.roomId || !this.signaling) {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    const characterId = this.getLocalCharacterSelection(sortedMembers);
-    this.lobbyCharacterByPeer.set(this.peerId, characterId);
-    this.game?.setCharacterSelection(this.peerId, characterId);
+    // Without an explicit target, broadcast every local virtual id so a newly
+    // joined peer can fetch our state. Otherwise broadcast just the one slot.
+    const targets: string[] = virtualPlayerId
+      ? [virtualPlayerId]
+      : this.localSecondaryPlayerId
+        ? [this.peerId, this.localSecondaryPlayerId]
+        : [this.peerId];
 
+    for (const target of targets) {
+      const selection = this.lobbySelectionByPeer.get(target) ?? RANDOM_CHARACTER_SELECTION;
+      if (selection !== RANDOM_CHARACTER_SELECTION) {
+        this.lobbyCharacterByPeer.set(target, selection);
+        this.game?.setCharacterSelection(target, selection);
+      }
+      this.signaling.send({
+        type: 'lobby_character_select',
+        roomId: this.roomId,
+        peerId: this.peerId,
+        virtualPlayerId: target === this.peerId ? undefined : target,
+        characterId: selection,
+      });
+    }
+  }
+
+  private broadcastLocalSplitScreenState(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
     this.signaling.send({
-      type: 'lobby_character_select',
+      type: 'lobby_split_screen',
       roomId: this.roomId,
       peerId: this.peerId,
-      characterId,
+      localPlayerCount: this.splitScreenEnabled ? 2 : 1,
+    });
+  }
+
+  private broadcastLocalReadyState(): void {
+    if (!this.roomId || !this.signaling) {
+      return;
+    }
+    this.signaling.send({
+      type: 'lobby_ready',
+      roomId: this.roomId,
+      peerId: this.peerId,
+      ready: this.isLocalReadyInLobby(),
     });
   }
 
@@ -2129,14 +3832,87 @@ export class MultiplayerApp {
       return;
     }
 
-    const sortedMembers = Array.from(this.lobbyMembers).sort((a, b) => a.localeCompare(b));
-    for (const playerId of sortedMembers) {
+    const virtualIds = this.allVirtualPlayerIdsSorted();
+    for (const playerId of virtualIds) {
       if (!this.lobbyCharacterByPeer.has(playerId)) {
         this.assignDefaultCharacterIfMissing(playerId);
       }
     }
 
     this.game.applyCharacterSelections(this.lobbyCharacterByPeer);
+    this.renderer.preloadCharacterTextures(Array.from(this.lobbyCharacterByPeer.values()));
+  }
+
+  // Download and decode everything a match needs up front, reporting progress
+  // for the lobby loading bar. Idempotent: safe to call repeatedly — it no-ops
+  // while in flight or once complete, and re-enables itself after a failure so
+  // a later lobby entry can retry.
+  private async preloadGameplayAssets(): Promise<void> {
+    if (this.assetsReady || this.assetPreloadStarted) {
+      return;
+    }
+    this.assetPreloadStarted = true;
+
+    // Character/weapon sprites are small (~1.2 MB total). Warm all of them up
+    // front regardless of selection; the heavy VFX packs drive the progress
+    // bar, so this stays fire-and-forget.
+    this.renderer.preloadCharacterTextures(Array.from(CHARACTER_IDS));
+
+    // The 3-2-1 countdown and game-sequence VFX packs (~100 MB) are normally
+    // fetched/decoded on demand at round start, which stalls the match on a
+    // slow remote connection. Acquire them now and hold the refs for the whole
+    // session so the round-start acquire() resolves from cache instantly.
+    this.preloadedVfxPackIds = [COUNTDOWN_PACK.id, GAME_SEQUENCE_PACK.id];
+    const tasks: Promise<unknown>[] = [
+      this.vfxCache.acquire(COUNTDOWN_PACK),
+      this.vfxCache.acquire(GAME_SEQUENCE_PACK),
+    ];
+    // Ring-out is registered permanent in the constructor; fold it into the
+    // progress total so the bar only fills once everything is truly resident.
+    const ringOut = this.vfxCache.getPermanent(RING_OUT_PACK.id);
+    if (ringOut) {
+      tasks.push(ringOut);
+    }
+
+    const total = tasks.length;
+    let loaded = 0;
+    this.setAssetLoadProgress(0);
+    for (const task of tasks) {
+      void task
+        .then(() => {
+          loaded += 1;
+          this.setAssetLoadProgress(loaded / total);
+        })
+        .catch(() => {
+          /* aggregate failure handled by the Promise.all below */
+        });
+    }
+
+    try {
+      await Promise.all(tasks);
+      this.assetsReady = true;
+      this.setAssetLoadProgress(1);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setStatus(`Asset preload failed: ${msg}`, 'error');
+      this.debugLog('ASSET', `Preload failed: ${msg}`, 'error');
+      // Drop the held refs so a retry re-acquires fresh entries, and re-arm.
+      for (const id of this.preloadedVfxPackIds) {
+        this.vfxCache.release(id);
+      }
+      this.preloadedVfxPackIds = [];
+      this.assetPreloadStarted = false;
+    }
+    this.updateUiState();
+  }
+
+  private setAssetLoadProgress(fraction: number): void {
+    this.assetLoadProgress = Math.max(0, Math.min(1, fraction));
+    const pct = Math.round(this.assetLoadProgress * 100);
+    this.lobbyLoadingBar.style.width = `${pct}%`;
+    this.lobbyLoadingLabel.textContent = this.assetsReady
+      ? 'Assets ready'
+      : `Loading assets… ${pct}%`;
   }
 
 }

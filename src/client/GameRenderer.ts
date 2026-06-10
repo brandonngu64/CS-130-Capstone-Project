@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import type { VFXAssetCache } from './vfx/assetCache';
+import { VFXMeshPool, VFXMeshInstance } from './vfx/vfxMesh';
+import { RING_OUT_PACK } from './vfx/packs';
+import { DustParticleSystem } from './vfx/DustParticleSystem';
 import {
   CHARACTER_SPRITE_PIXEL_HEIGHT,
   getCharacterSpriteUrl,
@@ -20,7 +24,15 @@ import {
   getEthernetWhipBottomInset,
   WEAPON_SPRITE_NAMES,
 } from './CharacterSprites';
-import { PLAYER_HALF_HEIGHT, PLAYER_HALF_WIDTH, RESPAWN_FLASH_TICKS } from './constants';
+import {
+  type CharacterId,
+  PLAYER_HALF_HEIGHT,
+  PLAYER_HALF_WIDTH,
+  RESPAWN_FLASH_TICKS,
+  SHIELD_MAX_HP,
+  DUST_SCUFF_MIN_SPEED,
+  DUST_SCUFF_EMIT_INTERVAL_TICKS,
+} from './constants';
 import {
   K_createDroppedItemMesh,
   K_createProjectileMesh,
@@ -30,8 +42,33 @@ import {
 import { GUN_COLOR, ItemKind, WEAPON_DEFINITIONS, WEAPON_SPRITE_CONFIG } from './items';
 import type { RenderState } from './RollbackPhysicsGame';
 import type { MapTileInstance, TiledMapDefinition, UvRect } from './tiledMap';
+import {
+  classifyBackgroundAsset,
+  getMapBackground,
+  resolveBackgroundUrl,
+  type MapBackgroundConfig,
+} from './mapBackgrounds';
 
-const CAMERA_MARGIN = 1.5;
+interface ParallaxBackground {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  texture: THREE.Texture;
+  video?: HTMLVideoElement;
+  config: MapBackgroundConfig;
+}
+
+
+const ACTION_CAMERA_MARGIN = 4.5;
+const ACTION_CAMERA_FOLLOW_LERP = 0.12;
+const ACTION_CAMERA_ZOOM_OUT_LERP = 0.22;
+const ACTION_CAMERA_ZOOM_IN_LERP = 0.04;
+const ACTION_CAMERA_INNER_BAND_TILES = 5;
+// Fraction of viewport width the lobby stage preview should occupy.
+const LOBBY_PREVIEW_WIDTH_FRACTION = 1 / 3;
+// Distance (as fraction of viewport width) to shift the camera so the map
+// appears centered in the right third of the viewport. The middle of the right
+// third sits at 5/6 across, i.e. +1/3 from screen center.
+const LOBBY_PREVIEW_OFFSET_FRACTION = 1 / 3;
 
 function usesKyleGenericHeldMesh(kind: ItemKind): boolean {
   return kind === ItemKind.Gun;
@@ -85,6 +122,9 @@ const WHIP_ITEM_Y_OFFSET = -0.28;
 const BULLET_W = 0.3;
 const BULLET_H = 0.16;
 const BULLET_D = 0.16;
+
+// Constant world-space ring thickness regardless of shield size.
+const SHIELD_RIM_WORLD_WIDTH = 0.07;
 
 // Whip art: handle near bottom-left of texture (facing-right unmirrored art).
 const WHIP_HANDLE_TEXTURE_X = -0.35;
@@ -221,7 +261,13 @@ export class GameRenderer {
   private readonly materialCache = new Map<string, CachedTileMaterial>();
   private readonly spriteTextureCache = new Map<string, CachedSpriteTexture>();
   private readonly backdropMesh: THREE.Mesh;
+  private parallaxBackground: ParallaxBackground | null = null;
   private readonly mapBounds: TiledMapDefinition['bounds'];
+  private readonly actionCameraMargin: number;
+  private readonly actionCameraFollowLerp: number;
+  private readonly actionCameraZoomInLerp: number;
+  private readonly actionCameraZoomOutLerp: number;
+  private readonly actionCameraInnerBandTiles: number;
   private readonly baseViewHeight: number;
   private baseViewWidth = 0;
   private readonly freeCameraTarget = new THREE.Vector2();
@@ -235,13 +281,41 @@ export class GameRenderer {
   private readonly kyleBulletMeshes = new Map<number, THREE.Mesh>();
   private readonly weaponMeshes = new Map<string, THREE.Mesh>();
   private readonly laserSightMeshes = new Map<string, THREE.Line>();
+  private readonly vfxCache: VFXAssetCache;
+  private vfxRingOutPool: VFXMeshPool | null = null;
+  private readonly playerVFX = new Map<string, VFXMeshInstance>();
+  private readonly prevRespawning = new Map<string, boolean>();
+  private readonly prevEliminated = new Map<string, boolean>();
+  private readonly prevVelocity = new Map<string, { vx: number; vy: number }>();
+  private dust: DustParticleSystem | null = null;
+  private readonly prevGrounded = new Map<string, boolean>();
+  private readonly prevScuffEmitTick = new Map<string, number>();
+  private readonly shieldMeshes = new Map<string, { fill: THREE.Mesh; rim: THREE.Mesh }>();
+  private readonly localIndicatorMeshes = new Map<string, THREE.Mesh>();
+  private localIndicatorGeometry: THREE.BufferGeometry | null = null;
+
+  // Reused per-frame scratch sets to avoid allocating fresh Set objects on
+  // every render() — runs at 60+ Hz so the GC pressure adds up.
+  private readonly activePlayerIdsScratch = new Set<string>();
+  private readonly activeAttackIdsScratch = new Set<string>();
+  private readonly activeItemIdsScratch = new Set<number>();
+  private readonly activeBulletIdsScratch = new Set<number>();
   private cameraLockTarget: THREE.Vector2 | null = null;
+  private countdownCameraTargetId: string | null = null;
+  private lobbyPreviewMode = false;
   private readonly resizeObserver: ResizeObserver;
 
-  constructor(container: HTMLElement, map: TiledMapDefinition) {
+  constructor(container: HTMLElement, map: TiledMapDefinition, vfxCache: VFXAssetCache) {
     this.container = container;
     this.mapBounds = map.bounds;
+    const ac = map.actionCamera;
+    this.actionCameraMargin = ac?.margin ?? ACTION_CAMERA_MARGIN;
+    this.actionCameraFollowLerp = ac?.followLerp ?? ACTION_CAMERA_FOLLOW_LERP;
+    this.actionCameraZoomInLerp = ac?.zoomInLerp ?? ACTION_CAMERA_ZOOM_IN_LERP;
+    this.actionCameraZoomOutLerp = ac?.zoomOutLerp ?? ACTION_CAMERA_ZOOM_OUT_LERP;
+    this.actionCameraInnerBandTiles = ac?.innerBandTiles ?? ACTION_CAMERA_INNER_BAND_TILES;
     this.baseViewHeight = this.computeBaseViewHeight(map.bounds.height);
+    this.vfxCache = vfxCache;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x131924);
@@ -267,11 +341,31 @@ export class GameRenderer {
     });
     this.resizeObserver.observe(this.container);
     this.resize();
+
+    // Ring-out atlases are registered permanent at app boot in MultiplayerApp;
+    // here we wait for the resolved asset, then stand up a pool of 3 meshes.
+    this.dust = new DustParticleSystem(this.scene);
+
+    void this.vfxCache.registerPermanent(RING_OUT_PACK).then((asset) => {
+      // 16 world units tall ≈ the dramatic scale the previous random formula
+      // averaged to. Now deterministic.
+      const RING_OUT_WORLD_HEIGHT = PLAYER_HALF_HEIGHT * 2 * (Math.random() * 4 + 10);
+      this.vfxRingOutPool = new VFXMeshPool(asset, 3, RING_OUT_WORLD_HEIGHT);
+    });
   }
 
-  render(state: RenderState, localPlayerId: string): void {
+  render(
+    state: RenderState,
+    localPlayerId: string,
+    vfxDeltaSeconds = 0,
+    secondaryLocalPlayerId: string | null = null,
+  ): void {
     // --- Players ---
-    const activeIds = new Set(state.players.map((player: RenderState['players'][number]) => player.id));
+    const activeIds = this.activePlayerIdsScratch;
+    activeIds.clear();
+    for (const player of state.players) {
+      activeIds.add(player.id);
+    }
 
     for (const player of state.players) {
       let playerSprite = this.playerMeshes.get(player.id);
@@ -296,7 +390,7 @@ export class GameRenderer {
       );
 
       const cachedSprite = this.getCachedSpriteTexture(player.characterId, frame);
-      if (playerSprite.lastFrameKey !== frameKey) {
+      if (playerSprite.lastFrameKey !== frameKey && cachedSprite.texture.image) {
         const previousMaterial = playerSprite.mesh.material as THREE.MeshBasicMaterial;
         previousMaterial.dispose();
         playerSprite.mesh.material = this.createPlayerSpriteMaterial(cachedSprite.texture);
@@ -313,12 +407,14 @@ export class GameRenderer {
 
       const material = playerSprite.mesh.material as THREE.MeshBasicMaterial;
 
-      if (player.respawnFlashTicksRemaining > 0) {
+      if (player.eliminated) {
+        material.opacity = 0;
+      } else if (player.respawning) {
+        material.opacity = 0;
+      } else if (player.respawnFlashTicksRemaining > 0) {
         const flashStep = Math.max(1, Math.floor(RESPAWN_FLASH_TICKS / 24));
         const flashVisible = Math.floor(player.respawnFlashTicksRemaining / flashStep) % 2 === 0;
         material.opacity = flashVisible ? 1 : 0.22;
-      } else if (player.respawning) {
-        material.opacity = 0.18;
       } else {
         material.opacity = 1;
       }
@@ -326,6 +422,248 @@ export class GameRenderer {
       const isTransparent = material.opacity < 1;
       material.transparent = isTransparent;
       material.depthWrite = !isTransparent;
+
+      // --- Local-player indicator triangle (only shown above the client's own character) ---
+      const isLocalPlayer =
+        player.id === localPlayerId || player.id === secondaryLocalPlayerId;
+      if (isLocalPlayer && !player.eliminated && !player.respawning) {
+        const existing = this.localIndicatorMeshes.get(player.id);
+        const indicator = existing ?? this.createLocalIndicatorMesh(player.color);
+        if (!existing) {
+          this.scene.add(indicator);
+          this.localIndicatorMeshes.set(player.id, indicator);
+        }
+        const indicatorMat = indicator.material as THREE.MeshBasicMaterial;
+        if (indicatorMat.color.getHex() !== player.color) {
+          indicatorMat.color.setHex(player.color);
+        }
+        const bob = Math.sin(state.animTick * 0.15) * 0.08;
+        indicator.position.set(
+          player.x,
+          player.y + PLAYER_HALF_HEIGHT + 0.3 + bob,
+          0.4,
+        );
+        indicator.visible = true;
+      } else {
+        const stale = this.localIndicatorMeshes.get(player.id);
+        if (stale) {
+          stale.visible = false;
+        }
+      }
+    }
+
+    for (const [id, indicator] of this.localIndicatorMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(indicator);
+        (indicator.material as THREE.MeshBasicMaterial).dispose();
+        this.localIndicatorMeshes.delete(id);
+      }
+    }
+
+    // --- Shield bubbles ---
+    for (const player of state.players) {
+      let sg = this.shieldMeshes.get(player.id);
+      if (!sg) {
+        const fillGeo = new THREE.CircleGeometry(1, 48);
+        const fillMat = new THREE.MeshBasicMaterial({
+          color: player.color,
+          transparent: true,
+          opacity: 0.50,
+          depthWrite: false,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+        });
+        const rimGeo = new THREE.RingGeometry(1.00, 1.08, 48);
+        const rimMat = new THREE.MeshBasicMaterial({
+          color: 0xFFFFFF, //new THREE.Color(player.color).lerp(_SHIELD_RIM_WHITE, SHIELD_RIM_LERP_T)
+          transparent: true,
+          opacity: 1,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+        });
+        sg = { fill: new THREE.Mesh(fillGeo, fillMat), rim: new THREE.Mesh(rimGeo, rimMat) };
+        this.scene.add(sg.fill);
+        this.scene.add(sg.rim);
+        this.shieldMeshes.set(player.id, sg);
+      }
+
+      const showShield = player.shieldActive && !player.eliminated && !player.respawning;
+      sg.fill.visible = showShield;
+      sg.rim.visible = showShield;
+      if (showShield) {
+        const hpFraction = Math.max(0, player.shieldHp / SHIELD_MAX_HP);
+        const radius = PLAYER_HALF_HEIGHT * (0.10 + 1.10 * hpFraction);
+        sg.fill.position.set(player.x, player.y, 0.4);
+        sg.fill.scale.set(radius, radius, 1);
+        // Rebuild rim with constant world-space thickness so it doesn't thin out as shield shrinks.
+        sg.rim.geometry.dispose();
+        sg.rim.geometry = new THREE.RingGeometry(
+          Math.max(0.01, radius - SHIELD_RIM_WORLD_WIDTH / 2),
+          radius + SHIELD_RIM_WORLD_WIDTH / 2,
+          48,
+        );
+        sg.rim.position.set(player.x, player.y, 0.42);
+        sg.rim.scale.set(1, 1, 1);
+        (sg.fill.material as THREE.MeshBasicMaterial).color.setHex(player.color);
+      }
+    }
+    for (const [id, sg] of this.shieldMeshes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(sg.fill);
+        this.scene.remove(sg.rim);
+        sg.fill.geometry.dispose();
+        sg.rim.geometry.dispose();
+        (sg.fill.material as THREE.MeshBasicMaterial).dispose();
+        (sg.rim.material as THREE.MeshBasicMaterial).dispose();
+        this.shieldMeshes.delete(id);
+      }
+    }
+
+    // --- Ring-out VFX ---
+    const stageCenterX = (this.mapBounds.minX + this.mapBounds.maxX) / 2;
+    const stageCenterY = (this.mapBounds.minY + this.mapBounds.maxY) / 2;
+
+    for (const player of state.players) {
+      const wasRespawning = this.prevRespawning.get(player.id) ?? false;
+      const wasEliminated = this.prevEliminated.get(player.id) ?? false;
+
+      const isStageOut =
+        player.x < this.mapBounds.minX ||
+        player.x > this.mapBounds.maxX ||
+        player.y < this.mapBounds.minY ||
+        player.y > this.mapBounds.maxY;
+
+      const justRingOut =
+        (player.respawning && !wasRespawning && isStageOut) ||
+        (player.eliminated && !wasEliminated && isStageOut);
+
+      if (justRingOut && this.vfxRingOutPool) {
+        const vfx = this.vfxRingOutPool.spawn(this.scene);
+        if (vfx) {
+          // Tint the effect toward this player's color (soft-light blend).
+          vfx.setTint(player.color, 4);
+
+          // 1. Calculate direction vector pointing BACK to the stage center
+          const dx = stageCenterX - player.x;
+          const dy = stageCenterY - player.y;
+          
+          // Calculate rotation angle facing the stage
+          const baseAngle = Math.atan2(dy, dx);
+
+          // 2. Raycast to find the map boundary intersection point
+          let intersectionT = 1.0; // t represents progress along the line (0 = player, 1 = stage center)
+
+          // Check Left Wall (x = minX)
+          if (dx !== 0) {
+            const t = (this.mapBounds.minX - player.x) / dx;
+            if (t >= 0 && t <= 1) {
+              const y = player.y + t * dy;
+              if (y >= this.mapBounds.minY && y <= this.mapBounds.maxY) {
+                intersectionT = t;
+              }
+            }
+          }
+          // Check Right Wall (x = maxX)
+          if (dx !== 0 && intersectionT === 1.0) {
+            const t = (this.mapBounds.maxX - player.x) / dx;
+            if (t >= 0 && t <= 1) {
+              const y = player.y + t * dy;
+              if (y >= this.mapBounds.minY && y <= this.mapBounds.maxY) {
+                intersectionT = t;
+              }
+            }
+          }
+          // Check Bottom Wall (y = minY)
+          if (dy !== 0 && intersectionT === 1.0) {
+            const t = (this.mapBounds.minY - player.y) / dy;
+            if (t >= 0 && t <= 1) {
+              const x = player.x + t * dx;
+              if (x >= this.mapBounds.minX && x <= this.mapBounds.maxX) {
+                intersectionT = t;
+              }
+            }
+          }
+          // Check Top Wall (y = maxY)
+          if (dy !== 0 && intersectionT === 1.0) {
+            const t = (this.mapBounds.maxY - player.y) / dy;
+            if (t >= 0 && t <= 1) {
+              const x = player.x + t * dx;
+              if (x >= this.mapBounds.minX && x <= this.mapBounds.maxX) {
+                intersectionT = t;
+              }
+            }
+          }
+
+          // Calculate the exact coordinate where the ray enters map bounds
+          const intersectX = player.x + intersectionT * dx;
+          const intersectY = player.y + intersectionT * dy;
+
+          // 3. Find the midway point between the player's ringout point and the boundary hit
+          //const midX = (player.x + intersectX) / 2;
+          //const midY = (player.y + intersectY) / 2;
+
+          // 4. Apply transformations to the VFX mesh
+          vfx.mesh.position.set(intersectX, intersectY, 0.5); 
+          vfx.mesh.rotation.z = baseAngle; // Orient the beam pointing back into the arena
+          
+          this.playerVFX.set(player.id, vfx);
+        }
+      }
+
+      const vfx = this.playerVFX.get(player.id);
+      if (vfx) {
+        vfx.player.advance(vfxDeltaSeconds);
+        vfx.update();
+        if (vfx.isDone() && this.vfxRingOutPool) {
+          this.vfxRingOutPool.release(this.scene, vfx);
+          this.playerVFX.delete(player.id);
+        }
+      }
+
+      this.prevRespawning.set(player.id, player.respawning);
+      this.prevEliminated.set(player.id, player.eliminated);
+      this.prevVelocity.set(player.id, { vx: player.vx, vy: player.vy });
+
+      // --- Dust VFX ---
+      if (this.dust && !player.eliminated && !player.respawning) {
+        const wasGrounded = this.prevGrounded.get(player.id) ?? true;
+        const wasAirborne = !wasGrounded;
+
+        // Landing ring: fired once on airborne → grounded.
+        if (wasAirborne && player.grounded) {
+          const prev = this.prevVelocity.get(player.id);
+          const impactVy = prev?.vy ?? player.vy;
+          this.dust.spawnLandingRing(player.x, player.y - PLAYER_HALF_HEIGHT, impactVy);
+        }
+
+        // Scuff: while grounded and moving fast enough, emit at intervals.
+        if (player.grounded && Math.abs(player.vx) > DUST_SCUFF_MIN_SPEED) {
+          const last = this.prevScuffEmitTick.get(player.id) ?? -9999;
+          if (state.animTick - last >= DUST_SCUFF_EMIT_INTERVAL_TICKS) {
+            this.dust.spawnScuff(player.x, player.y - PLAYER_HALF_HEIGHT, player.facing);
+            this.prevScuffEmitTick.set(player.id, state.animTick);
+          }
+        }
+
+        this.prevGrounded.set(player.id, player.grounded);
+      }
+    }
+
+    this.dust?.update(vfxDeltaSeconds);
+
+    // Cleanup VFX for players who left the match
+    for (const [id, vfx] of this.playerVFX) {
+      if (!activeIds.has(id)) {
+        if (this.vfxRingOutPool) this.vfxRingOutPool.release(this.scene, vfx);
+        this.playerVFX.delete(id);
+        this.prevRespawning.delete(id);
+        this.prevEliminated.delete(id);
+        this.prevVelocity.delete(id);
+        this.prevGrounded.delete(id);
+        this.prevScuffEmitTick.delete(id);
+      }
     }
 
     for (const player of state.players) {
@@ -536,7 +874,11 @@ export class GameRenderer {
     }
 
     // --- Attacks ---
-    const activeAttackIds = new Set(state.attacks.map((attack: RenderState['attacks'][number]) => attack.id));
+    const activeAttackIds = this.activeAttackIdsScratch;
+    activeAttackIds.clear();
+    for (const attack of state.attacks) {
+      activeAttackIds.add(attack.id);
+    }
 
     for (const attack of state.attacks) {
       const variant = resolvePunchSpriteVariant(attack.characterId);
@@ -549,15 +891,14 @@ export class GameRenderer {
         this.attackMeshes.set(attack.id, attackSprite);
       }
 
-      if (attackSprite.lastFrameKey !== frameKey) {
-        const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+      const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+      if (attackSprite.lastFrameKey !== frameKey && cachedTex.texture.image) {
         const prev = attackSprite.mesh.material as THREE.MeshBasicMaterial;
         prev.dispose();
         attackSprite.mesh.material = this.createPlayerSpriteMaterial(cachedTex.texture);
         attackSprite.lastFrameKey = frameKey;
       }
 
-      const cachedTex = this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
       const aspect = this.resolveSpriteAspectRatio(cachedTex);
       const displayHeight = attack.displayHeight * PUNCH_SPRITE_HEIGHT_RATIO;
       const displayWidth = displayHeight * aspect;
@@ -593,14 +934,28 @@ export class GameRenderer {
     }
 
     // --- Items ---
-    const activeItemIds = new Set(state.items.map((item: RenderState['items'][number]) => item.id));
+    const activeItemIds = this.activeItemIdsScratch;
+    activeItemIds.clear();
+    for (const item of state.items) {
+      activeItemIds.add(item.id);
+    }
 
     for (const item of state.items) {
       let mesh = this.itemMeshes.get(item.id);
+      if (mesh && mesh.userData.itemKind !== item.kind) {
+        // Slot cycled to a new weapon kind; old mesh has the wrong
+        // geometry/material type for the new sprite. Rebuild from scratch.
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+        this.itemMeshes.delete(item.id);
+        mesh = undefined;
+      }
       if (!mesh) {
         mesh = usesKyleGenericProjectileMesh(item.kind)
           ? K_createDroppedItemMesh(item.kind, this.textureLoader)
           : this.createItemMesh(item.kind);
+        mesh.userData.itemKind = item.kind;
         this.scene.add(mesh);
         this.itemMeshes.set(item.id, mesh);
       }
@@ -676,7 +1031,11 @@ export class GameRenderer {
     }
 
     // --- Bullets ---
-    const activeBulletIds = new Set(state.bullets.map((bullet: RenderState['bullets'][number]) => bullet.id));
+    const activeBulletIds = this.activeBulletIdsScratch;
+    activeBulletIds.clear();
+    for (const bullet of state.bullets) {
+      activeBulletIds.add(bullet.id);
+    }
 
     for (const bullet of state.bullets) {
       if (usesKyleGenericProjectileMesh(bullet.kind)) {
@@ -791,6 +1150,24 @@ export class GameRenderer {
     this.renderer.render(this.scene, this.camera);
   }
 
+  setCountdownCameraTarget(playerId: string | null): void {
+    this.countdownCameraTargetId = playerId;
+  }
+
+  setLobbyPreviewMode(enabled: boolean): void {
+    this.lobbyPreviewMode = enabled;
+  }
+
+  private computeLobbyPreviewZoom(): number {
+    // Fit the stage (with a small margin) into the right-third area of the
+    // viewport so it appears smaller and shifted regardless of map size.
+    const fitW = Math.max(this.mapBounds.width + 2, 8);
+    const fitH = Math.max(this.mapBounds.height + 2, 6);
+    const previewWidth = this.baseViewWidth * LOBBY_PREVIEW_WIDTH_FRACTION;
+    const zoom = Math.min(previewWidth / fitW, this.baseViewHeight / fitH);
+    return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  }
+
   setCameraMode(mode: CameraMode): void {
     if (this.cameraMode === mode) {
       return;
@@ -854,6 +1231,19 @@ export class GameRenderer {
     this.backdropMesh.geometry.dispose();
     (this.backdropMesh.material as THREE.MeshBasicMaterial).dispose();
 
+    if (this.parallaxBackground) {
+      this.scene.remove(this.parallaxBackground.mesh);
+      this.parallaxBackground.mesh.geometry.dispose();
+      this.parallaxBackground.material.dispose();
+      this.parallaxBackground.texture.dispose();
+      if (this.parallaxBackground.video) {
+        this.parallaxBackground.video.pause();
+        this.parallaxBackground.video.removeAttribute('src');
+        this.parallaxBackground.video.load();
+      }
+      this.parallaxBackground = null;
+    }
+
     for (const mesh of this.mapMeshes) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -914,8 +1304,46 @@ export class GameRenderer {
     }
     this.laserSightMeshes.clear();
 
+    for (const [, sg] of this.shieldMeshes) {
+      this.scene.remove(sg.fill);
+      this.scene.remove(sg.rim);
+      sg.fill.geometry.dispose();
+      sg.rim.geometry.dispose();
+      (sg.fill.material as THREE.MeshBasicMaterial).dispose();
+      (sg.rim.material as THREE.MeshBasicMaterial).dispose();
+    }
+    this.shieldMeshes.clear();
+
+    for (const [, vfx] of this.playerVFX) {
+      this.scene.remove(vfx.mesh);
+    }
+    this.playerVFX.clear();
+    this.vfxRingOutPool?.disposeAll();
+    this.vfxRingOutPool = null;
+
+    this.dust?.dispose();
+    this.dust = null;
+    this.prevGrounded.clear();
+    this.prevScuffEmitTick.clear();
+
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
+  }
+
+  preloadCharacterTextures(characterIds: CharacterId[]): void {
+    const characterFrames = [
+      'idle_l', 'idle_r',
+      'walk_l1', 'walk_l2', 'walk_r1', 'walk_r2',
+      'hold_l', 'hold_r',
+    ];
+    for (const characterId of characterIds) {
+      for (const frame of characterFrames) {
+        this.getCachedSpriteTexture(characterId, frame);
+      }
+    }
+    for (const variant of ['var1', 'var2']) {
+      this.getWeaponSpriteTexture(PUNCH_WEAPON_NAME, variant);
+    }
   }
 
   private setupLighting(): void {
@@ -937,7 +1365,131 @@ export class GameRenderer {
     const backdrop = new THREE.Mesh(geometry, material);
     backdrop.position.set(0, 0, -2);
     this.scene.add(backdrop);
+
+    const bgConfig = getMapBackground(map.id);
+    if (bgConfig) {
+      void this.loadParallaxBackground(map, bgConfig);
+    }
+
     return backdrop;
+  }
+
+  private async loadParallaxBackground(
+    map: TiledMapDefinition,
+    config: MapBackgroundConfig,
+  ): Promise<void> {
+    const url = resolveBackgroundUrl(config.asset);
+    if (!url) {
+      console.warn(`[mapBackgrounds] Asset not found in src/assets/map_bgs: ${config.asset}`);
+      return;
+    }
+
+    const kind = classifyBackgroundAsset(config.asset);
+    if (!kind) {
+      console.warn(`[mapBackgrounds] Unsupported asset extension: ${config.asset}`);
+      return;
+    }
+
+    let texture: THREE.Texture;
+    let video: HTMLVideoElement | undefined;
+    let sourceWidth = 0;
+    let sourceHeight = 0;
+
+    if (kind === 'video') {
+      video = document.createElement('video');
+      video.src = url;
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      video.crossOrigin = 'anonymous';
+      // Begin playback; some browsers require an explicit play() call.
+      try {
+        await video.play();
+      } catch (err) {
+        // Autoplay may be blocked until user interaction; texture still updates once playing.
+        console.warn('[mapBackgrounds] video.play() rejected, will retry on canplay', err);
+      }
+      await new Promise<void>((resolve) => {
+        if (video!.readyState >= 2) {
+          resolve();
+        } else {
+          video!.addEventListener('canplay', () => resolve(), { once: true });
+        }
+      });
+      texture = new THREE.VideoTexture(video);
+      // VideoTextures upload every frame; the GL-rebinding onUpdate hook used
+      // for static tiles causes flicker here, so configure minimally.
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      sourceWidth = video.videoWidth;
+      sourceHeight = video.videoHeight;
+    } else {
+      texture = await this.textureLoader.loadAsync(url);
+      this.configurePixelTexture(texture);
+      const img = texture.image as { width?: number; height?: number } | undefined;
+      sourceWidth = img?.width ?? 0;
+      sourceHeight = img?.height ?? 0;
+    }
+
+    const tint = config.tint ?? 0xffffff;
+    const opacity = config.opacity ?? 1;
+    const scale = config.scale ?? 1;
+
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      color: tint,
+      opacity: 0,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    // Cover the map bounds while preserving the asset's native aspect ratio.
+    let planeWidth = map.bounds.width * scale;
+    let planeHeight = map.bounds.height * scale;
+    if (sourceWidth > 0 && sourceHeight > 0) {
+      const assetAspect = sourceWidth / sourceHeight;
+      const mapAspect = map.bounds.width / map.bounds.height;
+      if (assetAspect > mapAspect) {
+        // Asset wider than map: match height, extend width.
+        planeHeight = map.bounds.height * scale;
+        planeWidth = planeHeight * assetAspect;
+      } else {
+        // Asset taller than map: match width, extend height.
+        planeWidth = map.bounds.width * scale;
+        planeHeight = planeWidth / assetAspect;
+      }
+    }
+    const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(0, 0, -config.depth);
+    mesh.renderOrder = -1000;
+    this.scene.add(mesh);
+
+    // Hide the solid color backdrop so it doesn't poke through at shallow depths.
+    this.backdropMesh.visible = false;
+
+    this.parallaxBackground = { mesh, material, texture, video, config };
+
+    // Fade in over ~250 ms to mask the pop-in.
+    const fadeStart = performance.now();
+    const targetOpacity = opacity;
+    const fade = () => {
+      if (!this.parallaxBackground || this.parallaxBackground.material !== material) {
+        return;
+      }
+      const t = Math.min(1, (performance.now() - fadeStart) / 250);
+      material.opacity = targetOpacity * t;
+      if (t < 1) {
+        requestAnimationFrame(fade);
+      }
+    };
+    requestAnimationFrame(fade);
   }
 
   private setupMapMeshes(map: TiledMapDefinition): void {
@@ -1038,13 +1590,25 @@ export class GameRenderer {
     const target = this.getCameraTarget(state, localPlayerId);
     const targetZoom = this.getTargetZoom(state);
 
-    const zoomLerp = this.cameraMode === 'action' ? 0.12 : 0.16;
+    // Asymmetric zoom lerp: snap out fast to keep every player in frame,
+    // ease in slowly so the view doesn't whip after a knockout/respawn.
+    let zoomLerp: number;
+    if (this.cameraMode === 'action') {
+      const zoomingOut = targetZoom < this.camera.zoom;
+      zoomLerp = zoomingOut ? this.actionCameraZoomOutLerp : this.actionCameraZoomInLerp;
+    } else {
+      zoomLerp = 0.16;
+    }
 
-    if (this.cameraMode === 'follow') {
+    if (this.cameraMode === 'follow' && !this.countdownCameraTargetId) {
       this.camera.position.x = target.x;
       this.camera.position.y = target.y;
+    } else if (this.countdownCameraTargetId) {
+      // Smooth pan while sequencing through countdown spawn targets.
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, target.x, 0.12);
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, target.y, 0.12);
     } else {
-      const followLerp = this.cameraMode === 'action' ? 0.22 : 0.28;
+      const followLerp = this.cameraMode === 'action' ? this.actionCameraFollowLerp : 0.28;
       this.camera.position.x = THREE.MathUtils.lerp(
         this.camera.position.x,
         target.x,
@@ -1062,9 +1626,30 @@ export class GameRenderer {
       this.snapCameraToPixelGrid();
     }
     this.camera.updateProjectionMatrix();
+
+    if (this.parallaxBackground) {
+      const bgZ = this.parallaxBackground.config.depth;
+      // Camera sits at z = 12 looking down -z. Orthographic parallax factor
+      // (1 - 12/(12+bgZ)) translates the bg in world space so it drifts more
+      // slowly than the foreground in screen space.
+      const offset = bgZ / (12 + bgZ);
+      this.parallaxBackground.mesh.position.x = this.camera.position.x * offset;
+      this.parallaxBackground.mesh.position.y = this.camera.position.y * offset;
+    }
   }
 
   private getCameraTarget(state: RenderState, localPlayerId: string): THREE.Vector2 {
+    if (this.lobbyPreviewMode) {
+      const cx = (this.mapBounds.minX + this.mapBounds.maxX) * 0.5;
+      const cy = (this.mapBounds.minY + this.mapBounds.maxY) * 0.5;
+      // Shift the camera left so the map renders centered in the right third of
+      // the viewport (lobby UI occupies the left/middle columns).
+      const zoom = this.computeLobbyPreviewZoom();
+      const screenWidthInWorld = this.baseViewWidth / zoom;
+      const offsetX = screenWidthInWorld * LOBBY_PREVIEW_OFFSET_FRACTION;
+      return this.cameraTarget.set(cx - offsetX, cy);
+    }
+
     if (this.cameraLockTarget) {
       return this.cameraTarget.set(this.cameraLockTarget.x, this.cameraLockTarget.y);
     }
@@ -1075,6 +1660,15 @@ export class GameRenderer {
 
     if (state.players.length === 0) {
       return this.cameraTarget.set(0, 0);
+    }
+
+    if (this.countdownCameraTargetId) {
+      const target = state.players.find(
+        (player: RenderState['players'][number]) => player.id === this.countdownCameraTargetId,
+      );
+      if (target) {
+        return this.cameraTarget.set(target.x, target.y);
+      }
     }
 
     if (this.cameraMode === 'follow') {
@@ -1091,10 +1685,27 @@ export class GameRenderer {
       return this.cameraTarget.set(0, 0);
     }
 
-    return this.cameraTarget.set(bounds.centerX, bounds.centerY);
+    // Clamp action-camera position to the map so the view never scrolls into
+    // empty space past the stage edges. Zoom is what handles "fit everyone".
+    const clampedX = THREE.MathUtils.clamp(
+      bounds.centerX,
+      this.mapBounds.minX,
+      this.mapBounds.maxX,
+    );
+    const clampedY = THREE.MathUtils.clamp(
+      bounds.centerY,
+      this.mapBounds.minY,
+      this.mapBounds.maxY,
+    );
+
+    return this.cameraTarget.set(clampedX, clampedY);
   }
 
   private getTargetZoom(state: RenderState): number {
+    if (this.lobbyPreviewMode) {
+      return this.computeLobbyPreviewZoom();
+    }
+
     if (this.cameraMode === 'free') {
       return this.freeCameraZoom;
     }
@@ -1108,8 +1719,8 @@ export class GameRenderer {
       return 1;
     }
 
-    const fitWidth = Math.max(bounds.width + CAMERA_MARGIN * 2, 6);
-    const fitHeight = Math.max(bounds.height + CAMERA_MARGIN * 2, 4);
+    const fitWidth = Math.max(bounds.width + this.actionCameraMargin * 2, 6);
+    const fitHeight = Math.max(bounds.height + this.actionCameraMargin * 2, 4);
     const zoom = Math.min(
       this.baseViewWidth / fitWidth,
       this.baseViewHeight / fitHeight,
@@ -1119,7 +1730,9 @@ export class GameRenderer {
       return 1;
     }
 
-    return THREE.MathUtils.clamp(zoom, 0.75, 2.5);
+    // No lower clamp on action zoom: as long as players are within map bounds,
+    // the frame may grow as wide as it needs to in order to keep them visible.
+    return Math.min(zoom, 2.5);
   }
 
   private getPlayerBounds(
@@ -1129,16 +1742,63 @@ export class GameRenderer {
       return null;
     }
 
+    // In action mode keep eliminated/respawning players in frame through the
+    // full respawn cycle so death VFX stays visible. In follow mode drop them
+    // so the framing snaps to the surviving local player.
+    const source =
+      this.cameraMode === 'action'
+        ? players
+        : (() => {
+            const alive = players.filter((p) => !p.eliminated && !p.respawning);
+            return alive.length > 0 ? alive : players;
+          })();
+
     let minX = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
 
-    for (const player of players) {
-      minX = Math.min(minX, player.x - player.width * 0.5);
-      maxX = Math.max(maxX, player.x + player.width * 0.5);
-      minY = Math.min(minY, player.y - player.height * 0.5);
-      maxY = Math.max(maxY, player.y + player.height * 0.5);
+    const clampedPositions: { x: number; y: number }[] = [];
+    for (const player of source) {
+      // Project each player into the map bounds for framing. A player past the
+      // edge is treated as if they were standing on the nearest edge — this
+      // keeps the camera from chasing off-map positions while still letting
+      // zoom grow to fit on-map players.
+      const px = THREE.MathUtils.clamp(player.x, this.mapBounds.minX, this.mapBounds.maxX);
+      const py = THREE.MathUtils.clamp(player.y, this.mapBounds.minY, this.mapBounds.maxY);
+      clampedPositions.push({ x: px, y: py });
+      minX = Math.min(minX, px - player.width * 0.5);
+      maxX = Math.max(maxX, px + player.width * 0.5);
+      minY = Math.min(minY, py - player.height * 0.5);
+      maxY = Math.max(maxY, py + player.height * 0.5);
+    }
+
+    // Phantom stage anchor: in action mode, if every player sits within the
+    // outer edge band (outside the inner stage box), add a point on the inner
+    // box perimeter so the camera keeps the stage on screen during mid-air
+    // edge fights.
+    if (this.cameraMode === 'action' && clampedPositions.length > 0) {
+      const band = this.actionCameraInnerBandTiles;
+      const innerMinX = this.mapBounds.minX + band;
+      const innerMaxX = this.mapBounds.maxX - band;
+      const innerMinY = this.mapBounds.minY + band;
+      const innerMaxY = this.mapBounds.maxY - band;
+      if (innerMaxX > innerMinX && innerMaxY > innerMinY) {
+        const allOutside = clampedPositions.every(
+          (p) =>
+            p.x < innerMinX || p.x > innerMaxX || p.y < innerMinY || p.y > innerMaxY,
+        );
+        if (allOutside) {
+          const cx = (minX + maxX) * 0.5;
+          const cy = (minY + maxY) * 0.5;
+          const nx = THREE.MathUtils.clamp(cx, innerMinX, innerMaxX);
+          const ny = THREE.MathUtils.clamp(cy, innerMinY, innerMaxY);
+          minX = Math.min(minX, nx);
+          maxX = Math.max(maxX, nx);
+          minY = Math.min(minY, ny);
+          maxY = Math.max(maxY, ny);
+        }
+      }
     }
 
     return {
@@ -1160,7 +1820,7 @@ export class GameRenderer {
   }
 
   private computeBaseViewHeight(mapHeight: number): number {
-    return Math.min(Math.max(mapHeight * 0.65, 8), 10);
+    return Math.min(Math.max(mapHeight * 0.75, 8), 10);
   }
 
   private snapCameraToPixelGrid(): void {
@@ -1185,6 +1845,29 @@ export class GameRenderer {
       this.camera.position.y =
         Math.round(this.camera.position.y / worldUnitsPerPixelY) * worldUnitsPerPixelY;
     }
+  }
+
+  private createLocalIndicatorMesh(color: number): THREE.Mesh {
+    if (!this.localIndicatorGeometry) {
+      // Downward-pointing triangle: apex at bottom (0, -h/2), base across the top.
+      const halfW = 0.32;
+      const halfH = 0.12;
+      const geom = new THREE.BufferGeometry();
+      const verts = new Float32Array([
+        -halfW,  halfH, 0,
+         halfW,  halfH, 0,
+            0, -halfH, 0,
+      ]);
+      geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+      geom.setIndex([0, 1, 2]);
+      this.localIndicatorGeometry = geom;
+    }
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+    });
+    return new THREE.Mesh(this.localIndicatorGeometry, material);
   }
 
   private createPlayerSpriteMesh(): PlayerSpriteMesh {

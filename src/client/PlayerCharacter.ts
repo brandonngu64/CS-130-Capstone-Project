@@ -1,7 +1,12 @@
 import type { RigidBody } from '@dimforge/rapier2d-compat';
 import { AttackKind } from './attacks';
 import type { CharacterId } from './constants';
-import { DEFAULT_CHARACTER_ID } from './constants';
+import {
+  AIR_DODGES_PER_AIRTIME,
+  DEFAULT_CHARACTER_ID,
+  SHIELD_MAX_HP,
+  SMASH_DEFAULT_WEIGHT,
+} from './constants';
 import { ItemKind, whipHitboxActive } from './items';
 import type { WeaponDefinition } from './items';
 import { PLAYER_MAX_HEALTH } from './constants';
@@ -16,6 +21,15 @@ type ActiveWeaponAttack = {
   ticksRemaining: number;
 };
 
+export enum MoveState {
+  Idle = 0,
+  InitialDash = 1,
+  DashTurnLock = 2,
+  Run = 3,
+  Skid = 4,
+  Airborne = 5,
+}
+
 export class PlayerCharacter {
   public readonly id: string;
   public readonly body: RigidBody;
@@ -28,14 +42,48 @@ export class PlayerCharacter {
   public activeAttack: ActiveAttack | null;
   public activeWeaponAttack: ActiveWeaponAttack | null;
   public weaponCooldownTicks: number;
-  public dashTicksRemaining: number;
-  public dashCooldownTicks: number;
+  public punchCooldownTicks: number;
+  public dodgeTicksRemaining: number;
+  public dodgeCooldownTicks: number;
   public heldItem: ItemKind | null;
   public heldItemExpiryTick: number;
   public gunFireCooldownTicks: number;
   public reloadPending: boolean;
   public reloadPendingOnKill: boolean;
   public knockbackTicksRemaining: number;
+  public launchRecoveryTicksRemaining: number;
+
+  // Stage-out KO state: nonzero means the player is vulnerable to inner-blast ring out.
+  public koableTicksRemaining: number;
+
+  // Air dodges remaining in this airtime. Reset to AIR_DODGES_PER_AIRTIME on grounding.
+  public airDodgesRemaining: number;
+
+  // Smash-style ground movement state machine
+  public moveState: MoveState;
+  public moveStateTicks: number;
+  public moveDirection: number; // -1 | 0 | 1
+  public dashInputCooldownTicks: number;
+
+  // Double jump
+  public doubleJumpAvailable: boolean;
+
+  // Shield
+  public shieldHp: number;
+  public shieldActive: boolean;
+  public shieldBlockedSinceRaise: boolean;
+  public shieldBrokenLockoutTicks: number;
+  public shieldReleaseCooldownTicks: number;
+
+  // Smash-mode damage accumulator (0..SMASH_MAX_DAMAGE_PCT+). Unused in Classic.
+  public damagePct: number;
+  // SSB-formula weight. Uniform across characters for now.
+  public weight: number;
+  // True while the player has been launched lethally and is rocketing offstage.
+  // While set, inputs are ignored and the collider eventually noclips through stage geometry.
+  public inLethalLaunch: boolean;
+  // Ticks elapsed since entering inLethalLaunch (used for the noclip delay).
+  public lethalLaunchTicks: number;
 
   constructor(
     id: string,
@@ -55,14 +103,33 @@ export class PlayerCharacter {
     this.activeAttack = null;
     this.activeWeaponAttack = null;
     this.weaponCooldownTicks = 0;
-    this.dashTicksRemaining = 0;
-    this.dashCooldownTicks = 0;
+    this.punchCooldownTicks = 0;
+    this.dodgeTicksRemaining = 0;
+    this.dodgeCooldownTicks = 0;
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
     this.gunFireCooldownTicks = 0;
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
     this.knockbackTicksRemaining = 0;
+    this.launchRecoveryTicksRemaining = 0;
+    this.koableTicksRemaining = 0;
+    this.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
+
+    this.moveState = MoveState.Idle;
+    this.moveStateTicks = 0;
+    this.moveDirection = 0;
+    this.dashInputCooldownTicks = 0;
+    this.doubleJumpAvailable = true;
+    this.shieldHp = SHIELD_MAX_HP;
+    this.shieldActive = false;
+    this.shieldBlockedSinceRaise = false;
+    this.shieldBrokenLockoutTicks = 0;
+    this.shieldReleaseCooldownTicks = 0;
+    this.damagePct = 0;
+    this.weight = SMASH_DEFAULT_WEIGHT;
+    this.inLethalLaunch = false;
+    this.lethalLaunchTicks = 0;
   }
 
   takeDamage(amount: number): number {
@@ -89,12 +156,20 @@ export class PlayerCharacter {
     return this.activeAttack !== null;
   }
 
-  isDashing(): boolean {
-    return this.dashTicksRemaining > 0;
+  isDodging(): boolean {
+    return this.dodgeTicksRemaining > 0;
   }
 
-  canDash(): boolean {
-    return this.dashCooldownTicks === 0 && this.dashTicksRemaining === 0;
+  canDodge(): boolean {
+    return this.dodgeCooldownTicks === 0 && this.dodgeTicksRemaining === 0;
+  }
+
+  isShieldActive(): boolean {
+    return this.shieldActive && this.shieldHp > 0;
+  }
+
+  isInvincible(): boolean {
+    return this.isDodging() || this.isShieldActive();
   }
 
   hasItem(): boolean {
@@ -109,7 +184,7 @@ export class PlayerCharacter {
   }
 
   canPunch(): boolean {
-    return this.heldItem === null;
+    return this.heldItem === null && this.punchCooldownTicks === 0;
   }
 
   canUseWeapon(): boolean {
@@ -144,13 +219,31 @@ export class PlayerCharacter {
     this.activeAttack = null;
     this.activeWeaponAttack = null;
     this.weaponCooldownTicks = 0;
-    this.dashTicksRemaining = 0;
-    this.dashCooldownTicks = 0;
+    this.punchCooldownTicks = 0;
+    this.dodgeTicksRemaining = 0;
+    this.dodgeCooldownTicks = 0;
     this.heldItem = null;
     this.heldItemExpiryTick = 0;
     this.gunFireCooldownTicks = 0;
     this.reloadPending = false;
     this.reloadPendingOnKill = false;
     this.knockbackTicksRemaining = 0;
+    this.launchRecoveryTicksRemaining = 0;
+    this.koableTicksRemaining = 0;
+    this.airDodgesRemaining = AIR_DODGES_PER_AIRTIME;
+
+    this.moveState = MoveState.Idle;
+    this.moveStateTicks = 0;
+    this.moveDirection = 0;
+    this.dashInputCooldownTicks = 0;
+    this.doubleJumpAvailable = true;
+    this.shieldHp = SHIELD_MAX_HP;
+    this.shieldActive = false;
+    this.shieldBlockedSinceRaise = false;
+    this.shieldBrokenLockoutTicks = 0;
+    this.shieldReleaseCooldownTicks = 0;
+    this.damagePct = 0;
+    this.inLethalLaunch = false;
+    this.lethalLaunchTicks = 0;
   }
 }

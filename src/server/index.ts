@@ -47,7 +47,46 @@ type ClientMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
+    }
+  | {
+      type: 'lobby_game_mode_select';
+      roomId: string;
+      peerId: string;
+      gameMode: string;
+    }
+  | {
+      type: 'lobby_name_change';
+      roomId: string;
+      peerId: string;
+      name: string;
+    }
+  | {
+      type: 'lobby_map_select';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+    }
+  | {
+      type: 'lobby_random_resolved';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+      characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 type ServerMessage =
@@ -94,7 +133,46 @@ type ServerMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
+    }
+  | {
+      type: 'lobby_game_mode_select';
+      roomId: string;
+      peerId: string;
+      gameMode: string;
+    }
+  | {
+      type: 'lobby_name_change';
+      roomId: string;
+      peerId: string;
+      name: string;
+    }
+  | {
+      type: 'lobby_map_select';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+    }
+  | {
+      type: 'lobby_random_resolved';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+      characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 type Room = {
@@ -105,6 +183,7 @@ type Room = {
   members: Set<string>;
   sockets: Map<string, WebSocket>;
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
+  broadcastedLeave: Set<string>;
 };
 
 const rooms = new Map<string, Room>();
@@ -116,7 +195,7 @@ const host = process.env.HOST ?? '0.0.0.0';
 const staticRoot = path.resolve(process.cwd(), 'dist');
 const websocketPath = '/ws';
 const roomDisconnectGraceMs = Number(
-  process.env.ROOM_DISCONNECT_GRACE_MS ?? '15000',
+  process.env.ROOM_DISCONNECT_GRACE_MS ?? '7000',
 );
 
 const httpServer = createServer((request, response) => {
@@ -203,6 +282,24 @@ websocketServer.on('connection', (socket) => {
       case 'lobby_character_select':
         relayLobbyCharacterSelect(socket, message);
         break;
+      case 'lobby_game_mode_select':
+        relayLobbyGameModeSelect(socket, message);
+        break;
+      case 'lobby_name_change':
+        relayLobbyNameChange(socket, message);
+        break;
+      case 'lobby_map_select':
+        relayLobbyMapSelect(socket, message);
+        break;
+      case 'lobby_random_resolved':
+        relayLobbyRandomResolved(socket, message);
+        break;
+      case 'lobby_rematch':
+        relayLobbyRematch(socket, message);
+        break;
+      case 'lobby_split_screen':
+        relayLobbySplitScreen(socket, message);
+        break;
       default:
         break;
     }
@@ -274,16 +371,28 @@ async function serveStaticRequest(
       return true;
     }
 
-    await sendFile(assetPath, response);
+    await sendFile(assetPath, response, cacheControlForPath(pathname));
     return true;
   }
 
   if (await fileExists(indexPath)) {
-    await sendFile(indexPath, response);
+    await sendFile(indexPath, response, 'no-cache');
     return true;
   }
 
   return false;
+}
+
+// Vite emits content-hashed asset filenames under /assets/ (e.g.
+// 321GoSequence-0-C8pXkvDk.png), so those bytes are immutable and can be cached
+// by the browser indefinitely. Everything else (notably index.html) must be
+// revalidated so a new deploy — which points index.html at new hashed URLs — is
+// picked up immediately.
+function cacheControlForPath(pathname: string): string {
+  if (pathname.startsWith('/assets/')) {
+    return 'public, max-age=31536000, immutable';
+  }
+  return 'no-cache';
 }
 
 function resolveStaticPath(pathname: string): string | null {
@@ -310,12 +419,17 @@ async function fileExists(filePath: string): Promise<boolean> {
 async function sendFile(
   filePath: string,
   response: ServerResponse,
+  cacheControl?: string,
 ): Promise<void> {
   const body = await readFile(filePath);
-  response.writeHead(200, {
+  const headers: Record<string, string | number> = {
     'content-type': contentTypeForPath(filePath),
     'content-length': body.length,
-  });
+  };
+  if (cacheControl) {
+    headers['cache-control'] = cacheControl;
+  }
+  response.writeHead(200, headers);
   response.end(body);
 }
 
@@ -406,6 +520,7 @@ function hostRoom(
     members: new Set([message.peerId]),
     sockets: new Map([[message.peerId, socket]]),
     disconnectTimers: new Map(),
+    broadcastedLeave: new Set(),
   };
 
   rooms.set(message.roomId, room);
@@ -474,6 +589,7 @@ function joinRoom(
   room.members.add(message.peerId);
   room.sockets.set(message.peerId, socket);
   clearDisconnectTimer(room, message.peerId);
+  room.broadcastedLeave.delete(message.peerId);
   peerToRoom.set(message.peerId, room.roomId);
   socketToPeer.set(socket, message.peerId);
 
@@ -672,7 +788,224 @@ function relayLobbyCharacterSelect(
     type: 'lobby_character_select',
     roomId: message.roomId,
     peerId: message.peerId,
+    virtualPlayerId: message.virtualPlayerId,
     characterId: message.characterId,
+  });
+}
+
+function relayLobbyGameModeSelect(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_game_mode_select' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update game mode for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room) {
+    send(socket, {
+      type: 'room_error',
+      code: 'ROOM_NOT_FOUND',
+      message: 'Cannot update game mode: room does not exist',
+    });
+    return;
+  }
+
+  if (!room.members.has(message.peerId)) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_IN_ROOM',
+      message: 'Cannot update game mode while outside this room',
+    });
+    return;
+  }
+
+  // Only the host is allowed to set the game mode for the room.
+  if (message.peerId !== room.hostPeerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_HOST',
+      message: 'Only the host can change the game mode',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_game_mode_select',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    gameMode: message.gameMode,
+  });
+}
+
+function relayLobbyNameChange(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_name_change' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update name for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_name_change',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    name: message.name,
+  });
+}
+
+function relayLobbyMapSelect(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_map_select' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update map for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  if (message.peerId !== room.hostPeerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_HOST',
+      message: 'Only the host can change the map',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_map_select',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    mapId: message.mapId,
+  });
+}
+
+function relayLobbyRandomResolved(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_random_resolved' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot resolve randoms for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  if (message.peerId !== room.hostPeerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_HOST',
+      message: 'Only the host can resolve random selections',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_random_resolved',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    mapId: message.mapId,
+    characters: message.characters,
+  });
+}
+
+function relayLobbyRematch(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_rematch' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot trigger rematch for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  if (message.peerId !== room.hostPeerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'NOT_HOST',
+      message: 'Only the host can trigger a rematch',
+    });
+    return;
+  }
+
+  broadcastToRoom(room, {
+    type: 'lobby_rematch',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    newRoomId: message.newRoomId,
+    hostPeerId: message.hostPeerId,
+  });
+}
+
+function relayLobbySplitScreen(
+  socket: WebSocket,
+  message: Extract<ClientMessage, { type: 'lobby_split_screen' }>,
+): void {
+  const socketPeerId = socketToPeer.get(socket);
+  if (!socketPeerId || socketPeerId !== message.peerId) {
+    send(socket, {
+      type: 'room_error',
+      code: 'PEER_MISMATCH',
+      message: 'Cannot update split-screen state for a different peer',
+    });
+    return;
+  }
+
+  const room = rooms.get(message.roomId);
+  if (!room || !room.members.has(message.peerId)) {
+    return;
+  }
+
+  const clamped = Math.max(1, Math.min(2, Math.floor(message.localPlayerCount)));
+  broadcastToRoom(room, {
+    type: 'lobby_split_screen',
+    roomId: message.roomId,
+    peerId: message.peerId,
+    localPlayerCount: clamped,
   });
 }
 
@@ -754,11 +1087,10 @@ function finalizeDisconnect(roomId: string, peerId: string): void {
     return;
   }
 
-  broadcastToRoom(room, {
-    type: 'peer_left',
-    roomId,
-    peerId,
-  });
+  if (!room.broadcastedLeave.has(peerId)) {
+    broadcastToRoom(room, { type: 'peer_left', roomId, peerId });
+  }
+  room.broadcastedLeave.delete(peerId);
 
   console.log(`Peer disconnected after grace period ${roomId}: ${peerId}`);
 }
@@ -807,6 +1139,9 @@ function onSocketClosed(socket: WebSocket): void {
 
   if (peerId === room.hostPeerId) {
     room.hostConnected = false;
+  } else if (!room.broadcastedLeave.has(peerId)) {
+    room.broadcastedLeave.add(peerId);
+    broadcastToRoom(room, { type: 'peer_left', roomId, peerId });
   }
 
   scheduleDisconnect(roomId, peerId);

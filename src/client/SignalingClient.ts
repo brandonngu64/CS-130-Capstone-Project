@@ -34,7 +34,46 @@ export type ClientToServerMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
+    }
+  | {
+      type: 'lobby_game_mode_select';
+      roomId: string;
+      peerId: string;
+      gameMode: string;
+    }
+  | {
+      type: 'lobby_name_change';
+      roomId: string;
+      peerId: string;
+      name: string;
+    }
+  | {
+      type: 'lobby_map_select';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+    }
+  | {
+      type: 'lobby_random_resolved';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+      characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 export type ServerToClientMessage =
@@ -81,7 +120,46 @@ export type ServerToClientMessage =
       type: 'lobby_character_select';
       roomId: string;
       peerId: string;
+      virtualPlayerId?: string;
       characterId: string;
+    }
+  | {
+      type: 'lobby_game_mode_select';
+      roomId: string;
+      peerId: string;
+      gameMode: string;
+    }
+  | {
+      type: 'lobby_name_change';
+      roomId: string;
+      peerId: string;
+      name: string;
+    }
+  | {
+      type: 'lobby_map_select';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+    }
+  | {
+      type: 'lobby_random_resolved';
+      roomId: string;
+      peerId: string;
+      mapId: string;
+      characters: Record<string, string>;
+    }
+  | {
+      type: 'lobby_rematch';
+      roomId: string;
+      peerId: string;
+      newRoomId: string;
+      hostPeerId: string;
+    }
+  | {
+      type: 'lobby_split_screen';
+      roomId: string;
+      peerId: string;
+      localPlayerCount: number;
     };
 
 export class SignalingClient {

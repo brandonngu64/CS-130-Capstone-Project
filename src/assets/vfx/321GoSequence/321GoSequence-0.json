@@ -1,0 +1,77 @@
+{"frames": {
+
+"Ultimate GO Matte227.png":
+{
+	"frame": {"x":1,"y":1,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte228.png":
+{
+	"frame": {"x":1923,"y":1,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte229.png":
+{
+	"frame": {"x":1,"y":1083,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte230.png":
+{
+	"frame": {"x":1923,"y":1083,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte231.png":
+{
+	"frame": {"x":1,"y":2165,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte232.png":
+{
+	"frame": {"x":1923,"y":2165,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte236.png":
+{
+	"frame": {"x":1,"y":3247,"w":1920,"h":804},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":43,"w":1920,"h":804},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte237.png":
+{
+	"frame": {"x":1923,"y":3247,"w":1920,"h":804},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":43,"w":1920,"h":804},
+	"sourceSize": {"w":1920,"h":1080}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "321GoSequence-0.png",
+	"format": "RGBA8888",
+	"size": {"w":3844,"h":4052},
+	"scale": "1",
+	"related_multi_packs": [ "321GoSequence-1.json", "321GoSequence-2.json", "321GoSequence-3.json", "321GoSequence-4.json", "321GoSequence-5.json", "321GoSequence-6.json", "321GoSequence-7.json", "321GoSequence-8.json", "321GoSequence-9.json" ],
+	"smartupdate": "$TexturePacker:SmartUpdate:990f4619bf234bf7ea2dd323f2710491:ba3a5707d99334afc01ec34ce90e153d:33191cfa5e8513cf183934ce9c06c1ed$"
+}
+}

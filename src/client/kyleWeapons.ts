@@ -11,6 +11,8 @@ import {
   GUN_FIRE_COOLDOWN_TICKS,
   PEN_CROSSBOW_BOLT_SPEED,
   PEN_CROSSBOW_FIRE_COOLDOWN_TICKS,
+  SMASH_DEFAULT_BASE_KNOCKBACK,
+  SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
 } from './constants';
 import { ItemKind } from './items';
 
@@ -41,6 +43,11 @@ export interface K_Weapon {
 
   readonly laserSight: boolean;
   readonly cookable: boolean;
+
+  /** Smash-mode "b" term in the SSB knockback formula. */
+  readonly baseKnockback?: number;
+  /** Smash-mode launch angle, in degrees, measured from the +X axis. */
+  readonly launchAngleDeg?: number;
 }
 
 export const GunWeapon: K_Weapon = {
@@ -59,11 +66,14 @@ export const GunWeapon: K_Weapon = {
 
   laserSight: false,
   cookable: false,
+
+  baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK,
+  launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
 };
 
 export const PenCrossbow: K_Weapon = {
   kind: ItemKind.PenCrossbow,
-  damage: 100,
+  damage: 80,
   ammo: 1,
   fireRate: PEN_CROSSBOW_FIRE_COOLDOWN_TICKS,
 
@@ -77,6 +87,9 @@ export const PenCrossbow: K_Weapon = {
 
   laserSight: true,
   cookable: false,
+
+  baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK,
+  launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
 };
 
 export const WEAPON_DEFINITIONS: Readonly<Partial<Record<ItemKind, K_Weapon>>> = {

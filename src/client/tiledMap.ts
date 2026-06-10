@@ -90,7 +90,6 @@ export interface TileMetadata {
   collision: TileCollision;
   renderVisible: boolean;
   specialRole: TileSpecialRole;
-  tintColor: number | null;
   uv: UvRect;
   visible: boolean;
   zLayerPos: number;
@@ -154,7 +153,33 @@ export interface MapBounds {
   width: number;
 }
 
+export interface BlastZoneOffsets {
+  up: number;
+  down: number;
+  side: number;
+}
+
+export function expandMapBounds(bounds: MapBounds, offsets: BlastZoneOffsets): MapBounds {
+  return {
+    minX: bounds.minX - offsets.side,
+    maxX: bounds.maxX + offsets.side,
+    minY: bounds.minY - offsets.down,
+    maxY: bounds.maxY + offsets.up,
+    width: bounds.width + offsets.side * 2,
+    height: bounds.height + offsets.up + offsets.down,
+  };
+}
+
+export interface ActionCameraOverrides {
+  margin?: number;
+  followLerp?: number;
+  zoomInLerp?: number;
+  zoomOutLerp?: number;
+  innerBandTiles?: number;
+}
+
 export interface TiledMapDefinition {
+  actionCamera?: ActionCameraOverrides;
   bounds: MapBounds;
   colliders: {
     platforms: MapColliderRect[];
@@ -323,14 +348,12 @@ function buildTileMetadata(tileset: ResolvedTileset, localId: number): TileMetad
     typeof properties.special_role === 'string' ? properties.special_role : null;
   const zLayerPos = typeof properties.z_layer_pos === 'number' ? properties.z_layer_pos : 0;
   const collision = visible ? parseCollisionValue(properties.collision) : 0;
-  const tintColor = parseColorValue(properties.tintcolor);
 
   return {
     collision,
     renderVisible:
       visible && specialRole !== 'player_spawn' && specialRole !== 'item_spawn',
     specialRole,
-    tintColor,
     uv: createUvRect(tileset, localId),
     visible,
     zLayerPos,
@@ -623,7 +646,7 @@ function buildLayerInstances(
           tileX,
           tileY,
           tilesetId: tileRecord.tileset.id,
-          tintColor: resolvedTile.tintColor ?? tintColor,
+          tintColor,
           uv: resolvedTile.uv,
           x: worldX,
           y: worldY,

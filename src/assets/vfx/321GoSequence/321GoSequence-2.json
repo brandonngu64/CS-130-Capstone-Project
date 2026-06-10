@@ -1,0 +1,109 @@
+{"frames": {
+
+"Ultimate GO Matte044.png":
+{
+	"frame": {"x":3626,"y":3957,"w":250,"h":132},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":832,"y":234,"w":250,"h":132},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte103.png":
+{
+	"frame": {"x":3368,"y":3957,"w":256,"h":80},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":827,"y":298,"w":256,"h":80},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte239.png":
+{
+	"frame": {"x":1,"y":3247,"w":1920,"h":708},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":56,"w":1920,"h":708},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte240.png":
+{
+	"frame": {"x":1923,"y":3247,"w":1920,"h":708},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":0,"y":56,"w":1920,"h":708},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte281.png":
+{
+	"frame": {"x":1,"y":1,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte282.png":
+{
+	"frame": {"x":1,"y":1083,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte283.png":
+{
+	"frame": {"x":1,"y":2165,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte284.png":
+{
+	"frame": {"x":1923,"y":1,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte285.png":
+{
+	"frame": {"x":1923,"y":1083,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte286.png":
+{
+	"frame": {"x":1923,"y":2165,"w":1920,"h":1080},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":1920,"h":1080},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte322.png":
+{
+	"frame": {"x":1688,"y":3957,"w":1678,"h":134},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":7,"y":752,"w":1678,"h":134},
+	"sourceSize": {"w":1920,"h":1080}
+},
+"Ultimate GO Matte323.png":
+{
+	"frame": {"x":1,"y":3957,"w":1685,"h":133},
+	"rotated": false,
+	"trimmed": true,
+	"spriteSourceSize": {"x":4,"y":751,"w":1685,"h":133},
+	"sourceSize": {"w":1920,"h":1080}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "321GoSequence-2.png",
+	"format": "RGBA8888",
+	"size": {"w":3877,"h":4092},
+	"scale": "1",
+	"related_multi_packs": [ "321GoSequence-0.json", "321GoSequence-1.json", "321GoSequence-3.json", "321GoSequence-4.json", "321GoSequence-5.json", "321GoSequence-6.json", "321GoSequence-7.json", "321GoSequence-8.json", "321GoSequence-9.json" ],
+	"smartupdate": "$TexturePacker:SmartUpdate:990f4619bf234bf7ea2dd323f2710491:ba3a5707d99334afc01ec34ce90e153d:33191cfa5e8513cf183934ce9c06c1ed$"
+}
+}
