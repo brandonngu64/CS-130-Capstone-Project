@@ -16,6 +16,10 @@ export class VFXMeshInstance {
   private readonly worldPerPx: number;
   private lastFrameIndex = -1;
   private lastAtlasIndex = -1;
+  // Soft-light tint uniforms, injected via onBeforeCompile. Default strength 0
+  // = no-op (renders identically to the raw sequence until setTint() is called).
+  private readonly uTintColor = { value: new THREE.Color(0xffffff) };
+  private readonly uTintStrength = { value: 0 };
 
   constructor(player: VFXPlayer, worldHeight: number) {
     this.player = player;
@@ -42,6 +46,30 @@ export class VFXMeshInstance {
       toneMapped: false,
       side: THREE.DoubleSide,
     });
+    // Soft-light tint toward a player color, blended by strength. Preserves the
+    // sequence's bright cores (they stay near-white) and only nudges midtones —
+    // single-pass, no extra mesh. Shader source is identical across instances,
+    // so the program is shared; only the per-instance uniform values differ.
+    this.material.onBeforeCompile = (shader) => {
+      shader.uniforms.uTintColor = this.uTintColor;
+      shader.uniforms.uTintStrength = this.uTintStrength;
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nuniform vec3 uTintColor;\nuniform float uTintStrength;'
+        )
+        .replace(
+          '#include <map_fragment>',
+          `#include <map_fragment>
+          {
+            vec3 base = diffuseColor.rgb;
+            vec3 blend = uTintColor;
+            // Pegtop soft-light: keeps highlights bright, colors the midtones.
+            vec3 soft = (1.0 - 2.0 * blend) * base * base + 2.0 * blend * base;
+            diffuseColor.rgb = mix(base, soft, uTintStrength);
+          }`
+        );
+    };
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
 
@@ -111,6 +139,13 @@ export class VFXMeshInstance {
       uv[6] = u0; uv[7] = v1;
     }
     this.uvAttr.needsUpdate = true;
+  }
+
+  // Tint this effect toward a player color using a soft-light blend.
+  // strength 0 = raw sequence, ~0.5 = subtle player hue, 1 = strongest.
+  setTint(colorHex: number, strength = 0.5): void {
+    this.uTintColor.value.setHex(colorHex);
+    this.uTintStrength.value = strength;
   }
 
   reset(): void {
