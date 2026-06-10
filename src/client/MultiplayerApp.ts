@@ -1533,6 +1533,7 @@ export class MultiplayerApp {
     this.clearCameraInput();
     this.setCameraMode('follow');
     this.disposeCountdownAsset();
+    this.disposeGameEndAsset();
     this.countdownWasActive = false;
 
     const currentUrl = new URL(window.location.href);
@@ -2263,6 +2264,10 @@ export class MultiplayerApp {
 
     // Preload the 3-2-1 countdown VFX so it's resident before the round starts.
     this.ensureCountdownAsset();
+    // Preload the GAME! end-sequence VFX (~31 MB) so it's resident before the
+    // match ends — otherwise the network load races the 1.67s clip on AWS and
+    // the sequence is already "over" by the time it can render.
+    this.ensureGameEndAsset();
 
     this.mainMenu.setRoomId(roomId);
     this.mainMenu.setHostPeerId(hostPeerId);
@@ -3068,6 +3073,12 @@ export class MultiplayerApp {
         this.gameEndAsset = asset;
         this.gameEndPlayer = new VFXPlayer(asset, { fps: GAME_SEQUENCE_VFX_FPS });
         this.gameEndOverlay = new VFXCanvasOverlay(this.gameEndPlayer, this.gameEndBanner);
+        // If a winner was already declared while we were still loading, restart
+        // the playback clock so the freshly-loaded clip plays from frame 0
+        // instead of jumping to the already-elapsed (clamped, faded-out) tail.
+        if (this.lastWinnerId !== null) {
+          this.gameEndStartTimeMs = performance.now();
+        }
       })
       .finally(() => {
         this.gameEndLoading = false;
@@ -3101,12 +3112,15 @@ export class MultiplayerApp {
   }
 
   private hideGameEndBanner(): void {
+    // Only hide the canvas and stop the announcer audio. The asset stays
+    // resident (preloaded in setRoomState) so it's ready for the next match;
+    // it's disposed in leaveRoom. Disposing here would release the preload on
+    // the first non-winner frame of play.
     this.gameEndBanner.dataset.visible = 'false';
     if (this.gameEndAudio) {
       this.gameEndAudio.pause();
       this.gameEndAudio = null;
     }
-    this.disposeGameEndAsset();
   }
 
   private schedulePostMatchReturnToLobby(): void {

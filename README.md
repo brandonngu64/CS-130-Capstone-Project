@@ -138,6 +138,18 @@ Serve the game over HTTPS so the client automatically upgrades signaling to
 > **No-IP free tier:** hostnames must be confirmed (via email) about every 30
 > days. The DUC keeps your IP current but does not bypass that confirmation.
 
+### Teardown / cleanup
+To reverse the whole deployment in one step:
+- `bash setupScripts/cleanup.sh`
+  - Stops & disables the `cs130-game` and `noip-duc` services (unlinks the
+    dynamic DNS updates), removes the nginx reverse-proxy site and stops nginx,
+    and kills anything still listening on ports `3000`, `80`, `443`, `5173`, `4173`.
+  - Prints what it will do and asks to confirm; pass `--yes` to skip the prompt.
+  - Keeps system packages, the Let's Encrypt certificate, and your No-IP
+    credentials on disk so re-running the setup scripts is fast (and avoids
+    Let's Encrypt rate limits). The No-IP *hostname* itself lives in your No-IP
+    account — delete it there for a full DNS unlink.
+
 
 
 
