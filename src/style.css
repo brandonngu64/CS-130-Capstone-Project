@@ -901,6 +901,50 @@ h2 {
   font-size: 0.96rem;
 }
 
+#mainMenuView[data-visible='false'],
+#mainMenuBrowseView[data-visible='false'] {
+  display: none;
+}
+
+.browse-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 12px 0;
+  padding: 4px;
+}
+
+.browse-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(50, 81, 98, 0.18);
+}
+
+.browse-row-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.browse-row-info span {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.browse-row button {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+}
+
 .overlay-advanced {
   text-align: left;
   border-radius: 12px;

@@ -984,11 +984,22 @@ export class MultiplayerApp {
     });
 
     this.mainMenu = new MainMenu(this.viewport, {
-      onHost: () => {
-        void this.handleHostRoom();
+      onHostPublic: () => {
+        void this.handleHostRoom(undefined, { isPublic: true });
+      },
+      onHostPrivate: () => {
+        void this.handleHostRoom(undefined, { isPublic: false });
       },
       onJoin: () => {
         void this.handleJoinRoom();
+      },
+      onJoinPublicRoom: (roomId: string) => {
+        this.mainMenu.setRoomId(roomId);
+        this.mainMenu.setHostPeerId('');
+        void this.handleJoinRoom();
+      },
+      onBrowsePublic: () => {
+        this.requestPublicRoomsList();
       },
       onCopyShareUrl: () => {
         void this.copyShareLink();
@@ -1372,7 +1383,10 @@ export class MultiplayerApp {
     }
   }
 
-  private async handleHostRoom(preferredRoomId?: string): Promise<void> {
+  private async handleHostRoom(
+    preferredRoomId?: string,
+    options?: { isPublic?: boolean },
+  ): Promise<void> {
     if (this.connecting) {
       return;
     }
@@ -1412,6 +1426,8 @@ export class MultiplayerApp {
         roomId,
         peerId: this.peerId,
         maxPlayers: MAX_PLAYERS,
+        isPublic: options?.isPublic === true,
+        lobbyName: this.localDisplayName,
       });
 
       const response = await responsePromise;
@@ -1447,6 +1463,24 @@ export class MultiplayerApp {
       this.connecting = false;
       this.updateUiState();
     }
+  }
+
+  private requestPublicRoomsList(): void {
+    if (this.signaling) {
+      this.signaling.send({ type: 'list_public_rooms' });
+      return;
+    }
+    void this.prepareNetworking()
+      .then(() => {
+        this.signaling?.send({ type: 'list_public_rooms' });
+      })
+      .catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        this.mainMenu.setBrowseStatus(
+          `Unable to load public games: ${msg}`,
+          'error',
+        );
+      });
   }
 
   private async handleJoinRoom(): Promise<void> {
@@ -2200,6 +2234,13 @@ export class MultiplayerApp {
         // clients agree on character/map before the rollback session starts.
         if (!this.session?.isHost) {
           this.applyResolvedSelections(message.mapId, message.characters);
+          // Adopt the host's authoritative split-screen roster if present so
+          // every peer initializes the same virtual-player layout. Falls back
+          // to the guest's own localPlayerCountByPeer for older hosts that
+          // don't include the snapshot.
+          if (message.splitScreenPeers) {
+            this.adoptSplitScreenRoster(message.splitScreenPeers);
+          }
           // Mirror handleStartGame()'s pre-start sequence so split-screen
           // peers expand into their secondary virtual players before the
           // rollback session ticks — otherwise ${peerId}#2 is never created
@@ -2247,6 +2288,10 @@ export class MultiplayerApp {
         if (message.code === 'HOST_LEFT' || message.code === 'ROOM_NOT_FOUND') {
           this.cleanupNetworking();
         }
+        break;
+
+      case 'public_rooms_list':
+        this.mainMenu.setPublicRooms(message.rooms);
         break;
 
       default:
@@ -3381,26 +3426,61 @@ export class MultiplayerApp {
     const resolvedCharacters = this.resolveRandomCharacters();
     const resolvedMapId = this.resolveRandomMap();
 
+    // Host-authoritative split-screen roster. Guests will overwrite their own
+    // localPlayerCountByPeer with this snapshot so every peer initializes the
+    // rollback session with the same virtual-player layout, even if a
+    // lobby_split_screen message was in flight or arrived out of order.
+    const splitScreenPeers = Array.from(this.lobbyMembers).filter(
+      (peerId) => (this.localPlayerCountByPeer.get(peerId) ?? 1) === 2,
+    );
+
     if (this.signaling) {
+      // Refresh our own split-screen state in the room ordering immediately
+      // before the resolved broadcast so any peer that just connected sees it.
+      this.broadcastLocalSplitScreenState();
       this.signaling.send({
         type: 'lobby_random_resolved',
         roomId: this.roomId,
         peerId: this.peerId,
         mapId: resolvedMapId,
         characters: resolvedCharacters,
+        splitScreenPeers,
       });
     }
     this.applyResolvedSelections(resolvedMapId, resolvedCharacters);
+    this.adoptSplitScreenRoster(splitScreenPeers);
 
     this.applyLobbyCharactersToGame();
-    this.configureSplitScreenAndInitializePlayers();
+    if (!this.configureSplitScreenAndInitializePlayers()) {
+      this.setStatus(
+        'Failed to start match: virtual player count exceeded room capacity.',
+        'error',
+      );
+      return;
+    }
     this.session.start();
     this.setStatus(`Match started in room ${this.roomId}.`);
     this.updateUiState();
   }
 
-  private configureSplitScreenAndInitializePlayers(): void {
-    if (!this.session || !this.game) return;
+  // Overwrites localPlayerCountByPeer to match the supplied roster and prunes
+  // any stale `${peerId}#2` lobby entries for peers that aren't split-screen.
+  // Called on every peer (host and guests) right before the rollback session
+  // initializes player entities.
+  private adoptSplitScreenRoster(splitScreenPeers: string[]): void {
+    const splitSet = new Set(splitScreenPeers);
+    for (const peerId of this.lobbyMembers) {
+      this.localPlayerCountByPeer.set(peerId, splitSet.has(peerId) ? 2 : 1);
+      if (!splitSet.has(peerId)) {
+        const secondaryId = `${peerId}#2`;
+        this.lobbyCharacterByPeer.delete(secondaryId);
+        this.lobbySelectionByPeer.delete(secondaryId);
+      }
+    }
+  }
+
+  private configureSplitScreenAndInitializePlayers(): boolean {
+    if (!this.session || !this.game) return false;
     const sessionPeerIds = Array.from(this.session.players.keys()) as string[];
     const splitScreenPeers = sessionPeerIds.filter(
       (peerId) => (this.localPlayerCountByPeer.get(peerId) ?? 1) === 2,
@@ -3408,7 +3488,18 @@ export class MultiplayerApp {
     this.game.setSplitScreenPeers(splitScreenPeers);
     const expandedIds = this.game.expandPlayerIds(sessionPeerIds);
     expandedIds.sort();
+    this.debugLog(
+      'LOBBY',
+      `Initializing players: peers=[${sessionPeerIds.join(',')}] splitScreen=[${splitScreenPeers.join(',')}] virtual=${expandedIds.length}`,
+    );
+    if (expandedIds.length > MAX_PLAYERS) {
+      console.error(
+        `[LOBBY] Refusing to start: ${expandedIds.length} virtual players exceeds MAX_PLAYERS=${MAX_PLAYERS}. ids=${expandedIds.join(',')}`,
+      );
+      return false;
+    }
     this.game.initializePlayers(expandedIds);
+    return true;
   }
 
   private resolveRandomCharacters(): Record<string, string> {

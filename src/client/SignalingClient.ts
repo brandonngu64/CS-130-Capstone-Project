@@ -6,6 +6,8 @@ export type ClientToServerMessage =
       roomId: string;
       peerId: string;
       maxPlayers: number;
+      isPublic?: boolean;
+      lobbyName?: string;
     }
   | {
       type: 'join_room';
@@ -16,6 +18,9 @@ export type ClientToServerMessage =
       type: 'leave_room';
       roomId: string;
       peerId: string;
+    }
+  | {
+      type: 'list_public_rooms';
     }
   | {
       type: 'signal';
@@ -61,6 +66,7 @@ export type ClientToServerMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+      splitScreenPeers?: string[];
     }
   | {
       type: 'lobby_rematch';
@@ -147,6 +153,7 @@ export type ServerToClientMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+      splitScreenPeers?: string[];
     }
   | {
       type: 'lobby_rematch';
@@ -160,7 +167,20 @@ export type ServerToClientMessage =
       roomId: string;
       peerId: string;
       localPlayerCount: number;
+    }
+  | {
+      type: 'public_rooms_list';
+      rooms: PublicRoomSummary[];
     };
+
+export type PublicRoomSummary = {
+  roomId: string;
+  hostName: string;
+  playerCount: number;
+  maxPlayers: number;
+  gameMode: string;
+  mapId: string;
+};
 
 export class SignalingClient {
   private socket: WebSocket | null = null;
