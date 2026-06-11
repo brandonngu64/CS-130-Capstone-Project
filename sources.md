@@ -53,6 +53,8 @@
   - Ring Out Sound Effect
     - General Sounds/se_common_hp_lastattack.wav
     - Super Smash Bros. Ultimate by Nintendo
+  - Falco Dash Sound Effect
+    - Super Smash Bros. Ultimate by Nintendo
 
 ### VFX
 
@@ -69,7 +71,7 @@
 - Rapier 2D for JS: https://github.com/dimforge/rapier
 - Rollback Netcode for up to 4 Players: https://github.com/someusername6/rollback-netcode
 
-### Other Tech
+### Other Stuff
 
 - Tiled Map Editor: https://www.mapeditor.org
 - TexturePacker: https://www.codeandweb.com/texturepacker/documentation/user-interface-overview

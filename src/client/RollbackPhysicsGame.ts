@@ -64,6 +64,7 @@ import {
   characterIdToIndex,
 } from './constants';
 import { defaultCharacterForPlayer } from './CharacterSprites';
+import { DASH_SFX_URL, playReverbSound } from './MenuSounds';
 import { GameStateManager } from './GameStateManager';
 import { AttackKind, getAttackDefinition, getEquippedAttack } from './attacks';
 import type { AttackDefinition } from './attacks';
@@ -1384,6 +1385,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
     }
 
     // 4. Attack branches (gun, melee weapon, default punch).
+    let attackConsumedThisTick = false;
     if (
       attackPressed &&
       record.gunFireCooldownTicks === 0 &&
@@ -1392,6 +1394,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
       const weapon = K_getWeaponDefinition(record.heldItem!);
       this.fireBullet(record, weapon);
       record.gunFireCooldownTicks = Math.max(1, Math.round(weapon.fireRate));
+      attackConsumedThisTick = true;
       if (weapon.ammo <= 1) {
         record.dropItem();
       } else if (weapon.reloadOnHit || weapon.reloadOnKill) {
@@ -1413,6 +1416,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
             ticksRemaining: def.durationTicks ?? 0,
           };
           record.weaponCooldownTicks = def.cooldownTicks;
+          attackConsumedThisTick = true;
           if (heldKind === ItemKind.EthernetWhip) {
             const whipSound = new Audio(WHIP_SOUND_URL);
             whipSound.volume = 0.5 * this.sfxVolume;
@@ -1423,11 +1427,17 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         } else if (def?.kind === 'projectile') {
           this.fireProjectileWeapon(record, def, heldKind!);
           record.weaponCooldownTicks = def.cooldownTicks;
+          attackConsumedThisTick = true;
         }
       }
     }
 
-    if (attackPressed && record.activeAttack === null && record.canPunch()) {
+    if (
+      attackPressed &&
+      !attackConsumedThisTick &&
+      record.activeAttack === null &&
+      record.canPunch()
+    ) {
       const definition = getEquippedAttack(record.equippedWeapon);
       record.activeAttack = {
         kind: definition.kind,
@@ -1457,6 +1467,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
         record.dodgeTicksRemaining = DODGE_DURATION_TICKS;
         record.dodgeCooldownTicks = DODGE_COOLDOWN_TICKS;
         body.setLinvel({ x: record.facing * DODGE_SPEED, y: velocity.y }, true);
+        playReverbSound(DASH_SFX_URL, 0.6 * this.sfxVolume);
         this.previousInputFlags.set(id, inputFlags);
         return;
       }
@@ -1470,6 +1481,7 @@ export class RollbackPhysicsGame implements Game<Uint8Array> {
           { x: ndx * AIR_DODGE_SPEED, y: ndy * AIR_DODGE_SPEED },
           true,
         );
+        playReverbSound(DASH_SFX_URL, 0.6 * this.sfxVolume);
         this.previousInputFlags.set(id, inputFlags);
         return;
       }
