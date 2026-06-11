@@ -984,11 +984,22 @@ export class MultiplayerApp {
     });
 
     this.mainMenu = new MainMenu(this.viewport, {
-      onHost: () => {
-        void this.handleHostRoom();
+      onHostPublic: () => {
+        void this.handleHostRoom(undefined, { isPublic: true });
+      },
+      onHostPrivate: () => {
+        void this.handleHostRoom(undefined, { isPublic: false });
       },
       onJoin: () => {
         void this.handleJoinRoom();
+      },
+      onJoinPublicRoom: (roomId: string) => {
+        this.mainMenu.setRoomId(roomId);
+        this.mainMenu.setHostPeerId('');
+        void this.handleJoinRoom();
+      },
+      onBrowsePublic: () => {
+        this.requestPublicRoomsList();
       },
       onCopyShareUrl: () => {
         void this.copyShareLink();
@@ -1372,7 +1383,10 @@ export class MultiplayerApp {
     }
   }
 
-  private async handleHostRoom(preferredRoomId?: string): Promise<void> {
+  private async handleHostRoom(
+    preferredRoomId?: string,
+    options?: { isPublic?: boolean },
+  ): Promise<void> {
     if (this.connecting) {
       return;
     }
@@ -1412,6 +1426,8 @@ export class MultiplayerApp {
         roomId,
         peerId: this.peerId,
         maxPlayers: MAX_PLAYERS,
+        isPublic: options?.isPublic === true,
+        lobbyName: this.localDisplayName,
       });
 
       const response = await responsePromise;
@@ -1447,6 +1463,24 @@ export class MultiplayerApp {
       this.connecting = false;
       this.updateUiState();
     }
+  }
+
+  private requestPublicRoomsList(): void {
+    if (this.signaling) {
+      this.signaling.send({ type: 'list_public_rooms' });
+      return;
+    }
+    void this.prepareNetworking()
+      .then(() => {
+        this.signaling?.send({ type: 'list_public_rooms' });
+      })
+      .catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        this.mainMenu.setBrowseStatus(
+          `Unable to load public games: ${msg}`,
+          'error',
+        );
+      });
   }
 
   private async handleJoinRoom(): Promise<void> {
@@ -2247,6 +2281,10 @@ export class MultiplayerApp {
         if (message.code === 'HOST_LEFT' || message.code === 'ROOM_NOT_FOUND') {
           this.cleanupNetworking();
         }
+        break;
+
+      case 'public_rooms_list':
+        this.mainMenu.setPublicRooms(message.rooms);
         break;
 
       default:

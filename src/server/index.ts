@@ -19,6 +19,8 @@ type ClientMessage =
       roomId: string;
       peerId: string;
       maxPlayers: number;
+      isPublic?: boolean;
+      lobbyName?: string;
     }
   | {
       type: 'join_room';
@@ -29,6 +31,9 @@ type ClientMessage =
       type: 'leave_room';
       roomId: string;
       peerId: string;
+    }
+  | {
+      type: 'list_public_rooms';
     }
   | {
       type: 'signal';
@@ -173,13 +178,30 @@ type ServerMessage =
       roomId: string;
       peerId: string;
       localPlayerCount: number;
+    }
+  | {
+      type: 'public_rooms_list';
+      rooms: PublicRoomSummary[];
     };
+
+type PublicRoomSummary = {
+  roomId: string;
+  hostName: string;
+  playerCount: number;
+  maxPlayers: number;
+  gameMode: string;
+  mapId: string;
+};
 
 type Room = {
   roomId: string;
   hostPeerId: string;
   maxPlayers: number;
   hostConnected: boolean;
+  isPublic: boolean;
+  hostName: string;
+  gameMode: string;
+  mapId: string;
   members: Set<string>;
   sockets: Map<string, WebSocket>;
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -189,6 +211,10 @@ type Room = {
 const rooms = new Map<string, Room>();
 const peerToRoom = new Map<string, string>();
 const socketToPeer = new Map<WebSocket, string>();
+const hostedRoomByPeer = new Map<string, string>();
+const hostCooldownUntil = new Map<string, number>();
+const hostCooldownTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const HOST_COOLDOWN_MS = 20_000;
 
 const port = Number(process.env.SIGNALING_PORT ?? process.env.PORT ?? '3000');
 const host = process.env.HOST ?? '0.0.0.0';
@@ -299,6 +325,9 @@ websocketServer.on('connection', (socket) => {
         break;
       case 'lobby_split_screen':
         relayLobbySplitScreen(socket, message);
+        break;
+      case 'list_public_rooms':
+        sendPublicRoomsList(socket);
         break;
       default:
         break;
@@ -480,6 +509,8 @@ function hostRoom(
   }
 
   const normalizedMax = Math.max(2, Math.min(message.maxPlayers, 4));
+  const isPublic = message.isPublic === true;
+  const hostName = sanitizeHostName(message.lobbyName);
 
   const existingRoom = rooms.get(message.roomId);
   if (existingRoom && existingRoom.hostPeerId !== message.peerId) {
@@ -489,6 +520,33 @@ function hostRoom(
       message: 'Room ID is already in use',
     });
     return;
+  }
+
+  // Enforce one-hosted-room-per-peer and the post-disconnect cooldown.
+  // Reattach to the same room is always allowed.
+  const isReattach = !!existingRoom && existingRoom.hostPeerId === message.peerId;
+  if (!isReattach) {
+    const otherHosted = hostedRoomByPeer.get(message.peerId);
+    if (otherHosted && otherHosted !== message.roomId && rooms.has(otherHosted)) {
+      send(socket, {
+        type: 'room_error',
+        code: 'ALREADY_HOSTING',
+        message: 'You are already hosting a room',
+      });
+      return;
+    }
+
+    const cooldownUntil = hostCooldownUntil.get(message.peerId) ?? 0;
+    const remainingMs = cooldownUntil - Date.now();
+    if (remainingMs > 0) {
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      send(socket, {
+        type: 'room_error',
+        code: 'HOST_COOLDOWN',
+        message: `Wait ${remainingSec}s before hosting another room`,
+      });
+      return;
+    }
   }
 
   if (existingRoom && existingRoom.hostPeerId === message.peerId) {
@@ -517,6 +575,10 @@ function hostRoom(
     hostPeerId: message.peerId,
     maxPlayers: normalizedMax,
     hostConnected: true,
+    isPublic,
+    hostName,
+    gameMode: '',
+    mapId: '',
     members: new Set([message.peerId]),
     sockets: new Map([[message.peerId, socket]]),
     disconnectTimers: new Map(),
@@ -526,6 +588,8 @@ function hostRoom(
   rooms.set(message.roomId, room);
   peerToRoom.set(message.peerId, message.roomId);
   socketToPeer.set(socket, message.peerId);
+  hostedRoomByPeer.set(message.peerId, message.roomId);
+  clearHostCooldown(message.peerId);
 
   send(socket, {
     type: 'room_hosted',
@@ -534,7 +598,9 @@ function hostRoom(
     members: Array.from(room.members),
   });
 
-  console.log(`Room hosted: ${room.roomId} by ${room.hostPeerId}`);
+  console.log(
+    `Room hosted: ${room.roomId} by ${room.hostPeerId} (public=${isPublic})`,
+  );
 }
 
 function joinRoom(
@@ -637,6 +703,9 @@ function leaveRoom(peerId: string, roomId: string): void {
 
   if (room.members.size === 0) {
     rooms.delete(roomId);
+    if (peerId === room.hostPeerId) {
+      releaseHost(peerId);
+    }
     console.log(`Room closed: ${roomId}`);
     return;
   }
@@ -653,6 +722,7 @@ function leaveRoom(peerId: string, roomId: string): void {
       socketToPeer.delete(remainingSocket);
     }
     rooms.delete(roomId);
+    releaseHost(peerId);
     console.log(`Room closed because host left: ${roomId}`);
     return;
   }
@@ -836,6 +906,7 @@ function relayLobbyGameModeSelect(
     return;
   }
 
+  room.gameMode = message.gameMode;
   broadcastToRoom(room, {
     type: 'lobby_game_mode_select',
     roomId: message.roomId,
@@ -861,6 +932,10 @@ function relayLobbyNameChange(
   const room = rooms.get(message.roomId);
   if (!room || !room.members.has(message.peerId)) {
     return;
+  }
+
+  if (message.peerId === room.hostPeerId) {
+    room.hostName = sanitizeHostName(message.name);
   }
 
   broadcastToRoom(room, {
@@ -899,6 +974,7 @@ function relayLobbyMapSelect(
     return;
   }
 
+  room.mapId = message.mapId;
   broadcastToRoom(room, {
     type: 'lobby_map_select',
     roomId: message.roomId,
@@ -1068,6 +1144,7 @@ function finalizeDisconnect(roomId: string, peerId: string): void {
 
     if (room.members.size === 0) {
       rooms.delete(roomId);
+      releaseHost(peerId);
       console.log(`Room closed because host disconnected: ${roomId}`);
       return;
     }
@@ -1083,6 +1160,7 @@ function finalizeDisconnect(roomId: string, peerId: string): void {
     }
 
     rooms.delete(roomId);
+    releaseHost(peerId);
     console.log(`Room closed because host disconnected: ${roomId}`);
     return;
   }
@@ -1162,4 +1240,54 @@ function parseClientMessage(rawData: RawData): ClientMessage | null {
 
 function isValidIdentifier(value: string): boolean {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function sanitizeHostName(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.replace(/[\r\n\t]/g, ' ').trim().slice(0, 24);
+}
+
+function releaseHost(peerId: string): void {
+  hostedRoomByPeer.delete(peerId);
+  const until = Date.now() + HOST_COOLDOWN_MS;
+  hostCooldownUntil.set(peerId, until);
+  clearHostCooldownTimer(peerId);
+  const timeoutId = setTimeout(() => {
+    hostCooldownUntil.delete(peerId);
+    hostCooldownTimers.delete(peerId);
+  }, HOST_COOLDOWN_MS);
+  hostCooldownTimers.set(peerId, timeoutId);
+}
+
+function clearHostCooldown(peerId: string): void {
+  hostCooldownUntil.delete(peerId);
+  clearHostCooldownTimer(peerId);
+}
+
+function clearHostCooldownTimer(peerId: string): void {
+  const existing = hostCooldownTimers.get(peerId);
+  if (existing) {
+    clearTimeout(existing);
+    hostCooldownTimers.delete(peerId);
+  }
+}
+
+function sendPublicRoomsList(socket: WebSocket): void {
+  const summaries: PublicRoomSummary[] = [];
+  for (const room of rooms.values()) {
+    if (!room.isPublic) continue;
+    if (!room.hostConnected) continue;
+    if (room.members.size >= room.maxPlayers) continue;
+    summaries.push({
+      roomId: room.roomId,
+      hostName: room.hostName,
+      playerCount: room.members.size,
+      maxPlayers: room.maxPlayers,
+      gameMode: room.gameMode,
+      mapId: room.mapId,
+    });
+  }
+  send(socket, { type: 'public_rooms_list', rooms: summaries });
 }
