@@ -79,6 +79,7 @@ type ClientMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+      splitScreenPeers?: string[];
     }
   | {
       type: 'lobby_rematch';
@@ -165,6 +166,7 @@ type ServerMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+      splitScreenPeers?: string[];
     }
   | {
       type: 'lobby_rematch';
@@ -1017,6 +1019,7 @@ function relayLobbyRandomResolved(
     peerId: message.peerId,
     mapId: message.mapId,
     characters: message.characters,
+    splitScreenPeers: message.splitScreenPeers,
   });
 }
 

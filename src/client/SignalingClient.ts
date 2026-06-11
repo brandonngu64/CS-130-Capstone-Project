@@ -66,6 +66,7 @@ export type ClientToServerMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+      splitScreenPeers?: string[];
     }
   | {
       type: 'lobby_rematch';
@@ -152,6 +153,7 @@ export type ServerToClientMessage =
       peerId: string;
       mapId: string;
       characters: Record<string, string>;
+      splitScreenPeers?: string[];
     }
   | {
       type: 'lobby_rematch';
