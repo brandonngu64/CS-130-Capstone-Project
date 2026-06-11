@@ -24,6 +24,10 @@ const ERROR_SELECT_URL = new URL(
   '../assets/sounds/menu/error_select.wav',
   import.meta.url,
 ).href;
+export const DASH_SFX_URL = new URL(
+  '../assets/sounds/sfx/dash_sfx.wav',
+  import.meta.url,
+).href;
 
 const MENU_SELECTOR = '.overlay-backdrop, .lobby-overlay';
 const START_GAME_BUTTON_ID = 'startGameButton';
@@ -38,6 +42,7 @@ const SOUND_URLS = [
   NORMAL_SELECT_URL,
   START_GAME_URL,
   ERROR_SELECT_URL,
+  DASH_SFX_URL,
 ];
 
 // Kick off byte fetches at module load — no AudioContext / user gesture needed.
@@ -154,6 +159,10 @@ function playSound(url: string, volume: number): void {
   source.connect(g.dryGain);
   source.connect(g.convolver);
   source.start(0);
+}
+
+export function playReverbSound(url: string, volume: number): void {
+  playSound(url, volume);
 }
 
 function closestMenuButton(target: EventTarget | null): HTMLButtonElement | null {

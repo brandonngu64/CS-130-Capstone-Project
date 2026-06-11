@@ -39,6 +39,8 @@ export interface WeaponDefinition {
   projectileSpawnOffsetX?: number;
   projectileSpawnOffsetY?: number;
   projectilePiercePlayers?: boolean;
+  /** If true, projectile weapon fires while attack button is held (paced by cooldownTicks). */
+  autoFire?: boolean;
   /** Smash-mode "b" term in the SSB knockback formula. */
   baseKnockback?: number;
   /** Smash-mode launch angle, in degrees, measured from the +X axis. */
@@ -75,7 +77,7 @@ export const WEAPON_SPRITE_CONFIG: Partial<Record<ItemKind, WeaponSpriteConfig>>
 export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
   [ItemKind.EthernetWhip]: {
     kind: 'melee',
-    damage: 30,
+    damage: 34,
     cooldownTicks: 18,
     hitboxHalfWidth: 1.8,
     hitboxHalfHeight: 0.2,
@@ -98,6 +100,7 @@ export const WEAPON_DEFINITIONS: Partial<Record<ItemKind, WeaponDefinition>> = {
     projectileLifetimeTicks: 90,
     baseKnockback: SMASH_DEFAULT_BASE_KNOCKBACK + 30,
     launchAngleDeg: SMASH_DEFAULT_LAUNCH_ANGLE_DEG,
+    autoFire: true,
   },
   [ItemKind.BinaryBeam]: {
     kind: 'projectile',
