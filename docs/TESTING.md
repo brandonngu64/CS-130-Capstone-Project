@@ -221,10 +221,3 @@ Edge cases and error handling covered: duplicate player initialization, unknown 
 | `disconnect closes the socket and prevents future sends` | Open socket, call `disconnect`, then send | The socket is closed and no message is sent afterward. |
 
 Edge cases and error handling covered: connection error rejection, reconnect cleanup, close-handler unsubscribe, malformed inbound JSON, missing message type, non-string message payloads, message-handler unsubscribe, send-before-open, send while disconnected, and send after disconnect.
-
-## Planned Suite Breakdown
-
-The remaining suites can be added as separate commits so the final report is easy to explain:
-
-1. Rollback physics gameplay suite: validate movement, jumping, dashing, projectile lifetime, hit detection, respawn timing, and blast-zone deaths using deterministic frame advancement.
-2. Signaling server suite: validate room creation, joins, duplicate player IDs, broadcasts, disconnect cleanup, and malformed message handling.
