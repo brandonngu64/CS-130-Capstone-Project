@@ -17,7 +17,8 @@ const emptyInput: InputState = {
   jump: false,
   duck: false,
   punch: false,
-  dash: false,
+  dodge: false,
+  shield: false,
 };
 
 describe('input bit packing', () => {
@@ -31,7 +32,8 @@ describe('input bit packing', () => {
     ['jump', InputBits.Jump],
     ['duck', InputBits.Duck],
     ['punch', InputBits.Punch],
-    ['dash', InputBits.Dash],
+    ['dodge', InputBits.Dodge],
+    ['shield', InputBits.Shield],
   ] as const)('sets only the %s bit when that control is pressed', (control, expectedBit) => {
     expect(decodeInputBits(encodeInput({ ...emptyInput, [control]: true }))).toBe(expectedBit);
   });
@@ -43,7 +45,8 @@ describe('input bit packing', () => {
       jump: false,
       duck: true,
       punch: true,
-      dash: false,
+      dodge: false,
+      shield: false,
     });
 
     expect(decodeInputBits(encoded)).toBe(
@@ -58,11 +61,20 @@ describe('input bit packing', () => {
       jump: true,
       duck: true,
       punch: true,
-      dash: true,
+      dodge: true,
+      shield: true,
     });
 
     expect(encoded).toHaveLength(1);
-    expect(decodeInputBits(encoded)).toBe(63);
+    expect(decodeInputBits(encoded)).toBe(
+      InputBits.Left |
+        InputBits.Right |
+        InputBits.Jump |
+        InputBits.Duck |
+        InputBits.Punch |
+        InputBits.Dodge |
+        InputBits.Shield,
+    );
   });
 
   it('treats missing or empty rollback input as neutral input', () => {
